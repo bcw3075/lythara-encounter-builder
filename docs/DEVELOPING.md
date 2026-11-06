@@ -51,15 +51,15 @@ All flags use the module id as their scope: a made-up scope throws.
 ## The numbers
 - **XP is PF2e's `calculateXP`.** Before placing, levels come from `adjustedLevel`; after placing, from the real tokens. If the rating changes the report says so.
 - **Party level is never taken silently from the Party actor,** which reports a level no member has. `suggestedLevel` is the sheets' most common level, and the window shows the sheets and asks.
-- **Treasure:** the brief's list first; otherwise Treasure by Encounter (GM Core, https://2e.aonprd.com/Rules.aspx?ID=2738) with Treasure by Level's totals (https://2e.aonprd.com/Rules.aspx?ID=2656). Trivial has no column, so it places none. `chooseTreasure` keeps it sensible: nothing for animals and other things with `NO_CARRY` traits, a cache for a lair. Items are common, within a level of the party's: potions, elixirs, talismans and oils from the equipment pack; a lair's goods come from KCTG Trade Goods when active.
+- **Treasure:** the brief's list first; otherwise Treasure by Encounter (GM Core, https://2e.aonprd.com/Rules.aspx?ID=2738) with Treasure by Level's totals (https://2e.aonprd.com/Rules.aspx?ID=2656). Trivial has no column, so it places none. `chooseTreasure` keeps it sensible: nothing for animals and other things with `NO_CARRY` traits, a cache for a lair. Items are common, within a level of the party's: healing potions and elixirs, and talismans, from the equipment pack; a lair's goods come from KCTG Trade Goods when active.
 - **`chooseTreasure` doesn't pick permanent items.** The rule borrows their value from other encounters, so those are the GM's or the brief's to place.
 
 ## Placing documents
 - `prepare` creates nothing. `place` clears the old build first.
 - **Tokens are unlinked and the imported actors are copies.** One world actor per creature and adjustment per build, in the "Encounter Builder" folder, never a compendium original. Adjustments use `applyAdjustment` on the copy. Items and coins go on the token's own actor, so each creature carries its own. Conditions for asleep use the token's actor too.
-- **A cache** is a loot actor with a core-hidden token. It has OBSERVER for all so players can open it once revealed. Visioner's per-token Stealth DC isn't set by the builder yet.
+- **A cache** is a loot actor with a core-hidden token. PF2e sets loot actors to LIMITED for all whatever is asked for, which is enough for a player to open it once revealed. Visioner's per-token Stealth DC isn't set by the builder yet.
 - **The journal** has no ownership by default. GM truth goes in `section.secret`. Tactics is a page of its own because monster turns will read it each turn, so editing it mid-fight changes the fight. With no brief text it holds only the maths and creature list: it makes up no story.
-- **Map notes** only where the brief asks, each with its own page. A clue players may find has LIMITED on its page.
+- **Map notes** only where the brief asks, each with its own page. A clue players may find has LIMITED on its page, so the note shows when their token sees it. Core won't open a journal the player can't see (tested 14.370), and LIMITED on the journal itself would list it in their sidebar, so an `activateNote` hook shows the page in a small window instead.
 - **Foundry's redraw rule:** never create placeables while a client redraws (see Survey Sheet's DEVELOPING.md). `canvasSettled` waits for `canvasReady` when the GM's canvas is on that scene and a draw just happened.
 - **Survey Sheet's redraw** removes only its own `enc` documents, and its Extend shifts everything else, so builder documents move with the map.
 

@@ -101,7 +101,7 @@ export async function setManualTreasure(level, gp) { gmOnly(); const l = foundry
 let itemIndex = null;
 async function treasureCandidates() {
   if (itemIndex) return itemIndex;
-  const fields = ["system.level.value", "system.price.value", "system.traits.rarity", "system.category"], row = e => ({ uuid: e.uuid, name: e.name, level: e.system?.level?.value ?? 0, gp: toGp(e.system?.price?.value), rarity: e.system?.traits?.rarity ?? "common", category: e.system?.category ?? "" });
+  const fields = ["system.level.value", "system.price.value", "system.traits.rarity", "system.traits.value", "system.category"], row = e => ({ uuid: e.uuid, name: e.name, level: e.system?.level?.value ?? 0, gp: toGp(e.system?.price?.value), rarity: e.system?.traits?.rarity ?? "common", category: e.system?.category ?? "", healing: !!e.system?.traits?.value?.includes("healing") });
   const eq = await game.packs.get("pf2e.equipment-srd")?.getIndex({ fields }), goods = game.modules.get("kctg-2e")?.active ? await game.packs.get("kctg-2e.kctg-2e")?.getIndex({ fields }) : null;
   return itemIndex = { items: eq ? [...eq].filter(e => e.type === "consumable").map(row) : [], goods: [...(goods ?? eq ?? [])].filter(e => e.type === "treasure").map(row) };
 }
@@ -183,7 +183,7 @@ export async function place(prep) {
   /* treasure on who carries it, or in a cache */
   const lootText = []; let cache = null;
   if (treasure.lines.some(l => l.to === "cache")) { const at = cacheSquare(prep, planTaken(prep)) ?? [0, 0], folder = actorFolder;
-    const loot = await Actor.create({ name: "Cache", type: "loot", folder: folder.id, ownership: { default: CONST.DOCUMENT_OWNERSHIP_LEVELS.OBSERVER }, flags: flag });
+    const loot = await Actor.create({ name: "Cache", type: "loot", folder: folder.id, flags: flag });
     const t = (await loot.getTokenDocument({ x: ox + at[0] * px, y: oy + at[1] * px })).toObject(); Object.assign(t, { x: ox + at[0] * px, y: oy + at[1] * px, hidden: true, actorLink: true }); foundry.utils.setProperty(t, `flags.${ID}`, { built: buildId, cache: true });
     [cache] = await scene.createEmbeddedDocuments("Token", [t]); }
   for (const l of treasure.lines) { const tok = l.to === "cache" ? cache : byKey.get(l.to), who = l.to === "cache" ? "in the cache" : `on ${tok?.name}`; if (!tok) continue; const actor = tok.actor;

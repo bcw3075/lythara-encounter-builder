@@ -28,7 +28,8 @@ export const claimDiffers = (claimed, xp) => claimed !== null && claimed !== und
 export const partySizeNote = size => size === 4 ? "" : `Party size is ${size}, not 4. For other sizes PF2e adds 15 XP per PC to the Low budget and Archives of Nethys lists 20. These numbers are PF2e's.`;
 
 const hashf = (a, b) => { let h = (a * 374761393 + b * 668265263) | 0; h = (h ^ (h >>> 13)) * 1274126177 | 0; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
-const CONSUMABLE = new Set(["potion", "elixir", "talisman", "oil"]);   /* not "other": it holds blank runestones and the like */
+/* what someone would carry into a fight: healing, or a talisman. Not the rest of the consumables, which hold blank runestones and novelty elixirs */
+const carried = x => x.category === "talisman" || ((x.category === "potion" || x.category === "elixir") && x.healing);
 /** What a table-rolled treasure holds. Nothing random where it should make sense: a creature that carries nothing gets nothing,
     a lair keeps a cache. candidates: { items:[{uuid,name,level,gp,rarity,category}], goods:[...] }. Picks are seeded. */
 export function chooseTreasure({ gp, level, carriers, lair, candidates, seed = 1 }) {
@@ -38,7 +39,7 @@ export function chooseTreasure({ gp, level, carriers, lair, candidates, seed = 1
   const to = k => lair ? "cache" : carriers[k % carriers.length];
   let left = gp, n = 0;
   const fit = (x, cap) => x.rarity === "common" && x.gp > 0 && x.gp <= cap;
-  const inBand = x => x.level >= Math.max(0, level - 1) && x.level <= level + 1 && CONSUMABLE.has(x.category);
+  const inBand = x => x.level >= Math.max(0, level - 1) && x.level <= level + 1 && carried(x);
   const take = (list, cap, tag) => { const ok = list.filter(x => fit(x, cap)).sort((a, b) => a.uuid < b.uuid ? -1 : 1); if (!ok.length) return false; const x = ok[Math.floor(hashf(seed, tag) * ok.length)];
     out.lines.push({ kind: "item", uuid: x.uuid, name: x.name, gp: x.gp, qty: 1, to: to(n++) }); left -= x.gp; return true; };
   take((candidates?.items ?? []).filter(inBand), gp * .5, 1);
