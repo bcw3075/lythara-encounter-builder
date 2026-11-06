@@ -103,7 +103,7 @@ async function treasureCandidates() {
   if (itemIndex) return itemIndex;
   const fields = ["system.level.value", "system.price.value", "system.traits.rarity", "system.traits.value", "system.category"], row = e => ({ uuid: e.uuid, name: e.name, level: e.system?.level?.value ?? 0, gp: toGp(e.system?.price?.value), rarity: e.system?.traits?.rarity ?? "common", category: e.system?.category ?? "", healing: !!e.system?.traits?.value?.includes("healing") });
   const eq = await game.packs.get("pf2e.equipment-srd")?.getIndex({ fields }), goods = game.modules.get("kctg-2e")?.active ? await game.packs.get("kctg-2e.kctg-2e")?.getIndex({ fields }) : null;
-  return itemIndex = { items: eq ? [...eq].filter(e => e.type === "consumable").map(row) : [], goods: [...(goods ?? eq ?? [])].filter(e => e.type === "treasure").map(row) };
+  return itemIndex = { items: eq ? [...eq].filter(e => e.type === "consumable").map(row) : [], goods: [...(goods ?? []), ...(eq ?? [])].filter(e => e.type === "treasure" && ["gem", "art-object"].includes(e.system?.category)).map(row) };   /* gems and art, not trade goods: no chickens in a cache */
 }
 async function listedTreasure(brief, carriers) {
   const lines = [];
@@ -120,8 +120,10 @@ async function listedTreasure(brief, carriers) {
 
 /* ---------- planning a build (nothing is created) ---------- */
 /** Everything a build will do. Nothing is written until place(). */
-export async function prepare(scene, rawBrief, { seed = null, except = new Set() } = {}) {
+export async function prepare(scene, rawBrief, { seed = null, except = null } = {}) {
   gmOnly();
+  /* placing replaces this map's build, so what it placed isn't in the way and its treasure doesn't count against the new one */
+  const old = scene.getFlag(ID, "build"); except ??= new Set(old ? scene.tokens.filter(t => t.getFlag(ID, "built") === old.id).map(t => t.id) : []);
   const brief = cleanBrief(rawBrief); if (!brief.creatures.length) throw new Error("The brief has no creatures.");
   const info = await resolveCreatures(brief), { read, why, model, px, ox, oy } = await readMap(scene, { except });
   const level = brief.partyLevel ?? suggestedLevel(); brief.partyLevel = level;
@@ -134,7 +136,7 @@ export async function prepare(scene, rawBrief, { seed = null, except = new Set()
   const carriers = brief.creatures.flatMap((c, g) => info.get(c.uuid).carries ? plan.placed.filter(p => p.group === g).map(p => p.key) : []);
   const treasure = brief.treasureMode === "none" ? { lines: [], value: 0, note: "No treasure asked for." } : brief.treasureMode === "list" ? await listedTreasure(brief, carriers)
     : chooseTreasure({ gp: treasureFor(level, threat.rating), level, carriers, lair: brief.mood === "lair", candidates: await treasureCandidates(), seed: s });
-  const line = ledgerFor(level); if (treasure.value > line.left) warnings.push(`This treasure (${treasure.value} gp) goes over what's left for level ${level}: ${Math.max(0, line.left)} of ${levelTotal(level)} gp.`);
+  const line = ledgerFor(level), refund = old && ledger().builds?.[old.id]?.level === level ? ledger().builds[old.id].gp : 0, left = line.left + refund; if (treasure.value > left) warnings.push(`This treasure (${treasure.value} gp) goes over what's left for level ${level}: ${Math.max(0, left)} of ${levelTotal(level)} gp.`);
   return { scene, brief, info, read, model, px, ox, oy, level, threat, plan, treasure, warnings, seed: s };
 }
 /* where a cache goes: its anchor if the brief or the map has one */
@@ -196,10 +198,10 @@ export async function place(prep) {
   if (cache) setup.push("A hidden cache. Reveal the token when they find it.");
   const folder = await folderFor("JournalEntry"), entry = await JournalEntry.create({ name: brief.name || `Encounter: ${scene.name}`, folder: folder.id, ownership: { default: CONST.DOCUMENT_OWNERSHIP_LEVELS.NONE }, flags: flag,
     pages: journalPages(brief, { threat, setup, treasure: lootText, treasureNote: treasure.note }).map((p, i) => ({ name: p.name, type: "text", sort: (i + 1) * 100000, text: { content: p.content, format: CONST.JOURNAL_ENTRY_PAGE_FORMATS.HTML } })) });
-  /* map notes only where the brief asks; a clue players may find needs LIMITED on its own page */
+  /* map notes only where the brief asks; a clue players may find needs OBSERVER on its own page (DEVELOPING.md) */
   const noteData = [], warnings = [];
   for (const n of brief.notes) { const a = n.at ? null : prep.model.anchors.find(x => x.kind === n.anchor), at = n.at ?? a?.at; if (!at) { warnings.push(`Note "${n.title}": no ${n.anchor} on this map.`); continue; }
-    const [page] = await entry.createEmbeddedDocuments("JournalEntryPage", [{ name: n.title, type: "text", sort: 900000 + noteData.length, ownership: { default: n.player ? CONST.DOCUMENT_OWNERSHIP_LEVELS.LIMITED : CONST.DOCUMENT_OWNERSHIP_LEVELS.INHERIT }, text: { content: `<p>${esc(n.text)}</p>`, format: CONST.JOURNAL_ENTRY_PAGE_FORMATS.HTML } }]);
+    const [page] = await entry.createEmbeddedDocuments("JournalEntryPage", [{ name: n.title, type: "text", sort: 900000 + noteData.length, ownership: { default: n.player ? CONST.DOCUMENT_OWNERSHIP_LEVELS.OBSERVER : CONST.DOCUMENT_OWNERSHIP_LEVELS.INHERIT }, text: { content: `<p>${esc(n.text)}</p>`, format: CONST.JOURNAL_ENTRY_PAGE_FORMATS.HTML } }]);
     noteData.push({ x: ox + (at[0] + .5) * px, y: oy + (at[1] + .5) * px, entryId: entry.id, pageId: page.id, text: n.title, iconSize: 40, texture: { src: "icons/svg/book.svg" }, flags: flag }); }
   if (noteData.length) await scene.createEmbeddedDocuments("Note", noteData);
   /* records */
