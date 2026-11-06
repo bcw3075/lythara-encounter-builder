@@ -87,7 +87,7 @@ All flags use the module id as their scope: a made-up scope throws.
 - **A reload:** on the runner's `ready`, a request still `running` becomes `stopped` with a note, and Do it carries on from the record. A `go` or a plan left waiting is picked up.
 
 ## Hooks must return nothing
-Core fires `canvasReady` with `Hooks.call`, where a handler returning `false` stops every later handler, from every module. 0.1.0 to 0.2.4 had `c => markReady(id)`, and `Set#delete` returns false for an id it doesn't hold, so on every client the other 21 modules' `canvasReady` handlers never ran. Every hook here has a block body, and `unit.mjs` fails if one doesn't.
+Core fires `canvasReady` with `Hooks.call`, where a handler returning `false` stops every later handler, from every module. 0.1.0 to 0.2.4 had `c => markReady(id)`, and `Set#delete` returns false for an id it doesn't hold, so on every client the 20 `canvasReady` handlers registered after it never ran. Every hook here has a block body, and `unit.mjs` fails if one doesn't.
 
 ## Tests
 - **Local:** see `tools/test/README.md`.
