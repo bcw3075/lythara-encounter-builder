@@ -1,10 +1,13 @@
 /* Hooks, settings, the left-bar group and the API. The work is in builder.mjs (Foundry) and the pure files. */
 import { ID, build, clear, findCreatures, markDrawn, markReady, nextToParty, place, prepare, readMap, submitBrief, summary } from "./builder.mjs";
 import { BuildApp, askClear, askReplace } from "./ui/build.mjs";
+import { TurnsApp } from "./ui/turns.mjs";
+import { currentRequest, doIt, hold, judge, onCreateMessage, onPreCreateMessage, onStartTurn, playMyself, submitPlan } from "./fight.mjs";
 
-const CONTROL = "encounters", apps = new Map();
+const CONTROL = "encounters", apps = new Map(); let turnsApp = null;
 Hooks.once("init", () => {
   game.settings.register(ID, "partySize", { name: "Party size for balance", hint: "How many PCs threat is worked out for. The campaign's rules say how many; PF2e's Low budget differs from the published one away from 4.", scope: "world", config: true, type: Number, default: 4 });
+  game.settings.register(ID, "applyMonsterDamage", { name: "Apply monster damage automatically", hint: "A monster's hit changes HP at once, with PF2e's undo card. Off: damage is rolled and you apply it from the card.", scope: "world", config: true, type: Boolean, default: false });
   game.settings.register(ID, "treasure", { scope: "world", config: false, type: Object, default: { manual: {}, builds: {} } });
 });
 function openBuild() { const scene = canvas.scene; if (!scene) return; apps.get(scene.id)?.close?.(); const app = new BuildApp(scene); apps.set(scene.id, app); app.render(true); }
@@ -16,6 +19,7 @@ Hooks.on("getSceneControlButtons", controls => {
       select: { name: "select", title: "Select tokens", icon: "fa-solid fa-expand", order: 1 },
       build: { name: "build", title: "Build Encounter on this map", icon: "fa-solid fa-dragon", button: true, order: 2, onChange: () => openBuild() },
       replace: { name: "replace", title: "Re-place the build around the party", icon: "fa-solid fa-people-arrows", button: true, order: 3, onChange: guard(askReplace) },
+      turns: { name: "turns", title: "Monster Turns", icon: "fa-solid fa-list-check", button: true, order: 3.5, onChange: () => { turnsApp ??= new TurnsApp(); turnsApp.render(true); } },
       journal: { name: "journal", title: "Open this build's journal", icon: "fa-solid fa-book-open", button: true, order: 4, onChange: () => { const id = canvas.scene?.getFlag(ID, "build")?.entry; const e = id && game.journal.get(id); if (e) e.sheet.render(true); else ui.notifications.info("This map has no build."); } },
       clear: { name: "clear", title: "Clear this build", icon: "fa-solid fa-trash", button: true, order: 5, onChange: guard(askClear) }
     } };
@@ -34,6 +38,12 @@ Hooks.on("activateNote", note => {
   foundry.applications.ux.TextEditor.implementation.enrichHTML(page.text.content, { secrets: false, relativeTo: page }).then(content => foundry.applications.api.DialogV2.prompt({ window: { title: page.name }, position: { width: 420 }, content, ok: { label: "Close" }, rejectClose: false }));
   return false;
 });
+/* the fight */
+Hooks.on("pf2e.startTurn", (combatant, combat) => { onStartTurn(combatant, combat).catch(e => console.error(`${ID} | turn`, e)); });
+Hooks.on("preCreateChatMessage", message => onPreCreateMessage(message));
+Hooks.on("createChatMessage", message => onCreateMessage(message));
+Hooks.on("updateCombat", (combat, change) => { if (turnsApp?.rendered && (foundry.utils.hasProperty(change, `flags.${ID}`) || "turn" in change || "round" in change)) turnsApp.render();
+  if (game.users.activeGM?.id !== game.user.id) return; const r = currentRequest(combat); if (r?.state === "submitted") judge(combat, r.id).catch(e => console.error(`${ID} | plan`, e)); });
 Hooks.once("ready", () => {
-  game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty };
+  game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty, fight: { current: currentRequest, submitPlan, doIt, hold, playMyself } };
 });

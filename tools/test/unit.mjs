@@ -6,6 +6,7 @@ import { adjustedLevel, chooseTreasure, claimDiffers, coinsOf, ledgerLine, level
 import { esc, journalPages } from "../../scripts/journal.mjs";
 import { buildModel, summarise } from "../../scripts/mapread.mjs";
 import { hiddenNextTo, layout, nearestFree } from "../../scripts/place.mjs";
+import { checkPlan, damageOptions, describeStep, nextAction } from "../../scripts/turn.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
 
@@ -30,6 +31,17 @@ check("expand", expandCreatures(br, () => ({ n: 2 })).length === 30 && expandCre
 const jb = cleanBrief({ beat: "b", why: "<script>", creatures: [{ name: "Wolf", tactics: "Bite @Check[perception|dc:15]" }], journal: { truth: "secret truth", locals: "they say", learn: "you find" } }), pages = journalPages(jb, { threat: { rating: "moderate", xp: 80, size: 4, level: 1 }, setup: ["Wolf: beast"], treasure: ["5 gp"] }), byName = n => pages.find(p => p.name === n)?.content ?? "";
 check("escaped", !byName("Overview").includes("<script>") && byName("Overview").includes("&lt;script&gt;")); check("tactics and check link", byName("Tactics").includes("@Check[perception|dc:15]")); check("truth is secret", /<section class="secret">.*secret truth.*<\/section>/s.test(byName("What can be learned"))); check("locals not secret", !/<section class="secret">[^]*they say[^]*<\/section>/.test(byName("What can be learned")));
 const bare = journalPages(cleanBrief({ creatures: [{ name: "Wolf" }] }), {}); check("no made-up story", bare.length === 3 && !bare.some(p => p.name === "What can be learned") && !/Why here/.test(bare[0].content)); check("esc", esc(`a<"&`) === "a&lt;&quot;&amp;");
+
+/* ---- a turn ---- */
+const tctx = { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 5 }, { id: "bow", name: "Bow", reach: 5, ranged: true, maxRange: 60 }], targets: { E1: { name: "Hero", distance: 5 }, E2: { name: "Far", distance: 70 } } };
+const st = (o) => ({ do: "strike", ...o });
+let pl = checkPlan({ steps: [st({ item: "jaws", target: "E1" }), st({ item: "jaws", target: "E1" }), st({ item: "jaws", target: "E1" })] }, tctx); check("three attacks", pl.ok && pl.steps.map(s => s.variant).join() === "0,1,2");
+check("fourth has no actions", !checkPlan({ steps: [1, 2, 3, 4].map(() => st({ item: "jaws", target: "E1" })) }, tctx).ok); check("out of reach", /out of reach/.test(checkPlan({ steps: [st({ item: "jaws", target: "E2" })] }, tctx).reason)); check("out of range", /out of range/.test(checkPlan({ steps: [st({ item: "bow", target: "E2" })] }, tctx).reason)); check("bow in range", checkPlan({ steps: [st({ item: "bow", target: "E1" })] }, tctx).ok);
+check("unknown target", /doesn't know/.test(checkPlan({ steps: [st({ item: "jaws", target: "E9" })] }, tctx).reason)); check("unknown attack", /no attack/.test(checkPlan({ steps: [st({ item: "claw", target: "E1" })] }, tctx).reason)); check("unknown step", /can't do/.test(checkPlan({ steps: [{ do: "stride" }] }, tctx).reason)); check("no plan", !checkPlan(null, tctx).ok); check("words", describeStep(pl.steps[1]) === "Jaws at Hero, attack 2.");
+const hit = { started: true, attack: { degree: 2 } };
+check("fresh attacks", nextAction({}) === "attack"); check("started, no result: ask, never roll again", nextAction({ started: true }) === "ask"); check("miss ends", nextAction({ started: true, attack: { degree: 1 } }, { apply: true }) === "next"); check("hit rolls", nextAction(hit) === "damage"); check("damage started, no card: ask", nextAction({ ...hit, damageStarted: true }) === "ask");
+const dmg = { ...hit, damageStarted: true, damage: { message: "m" } }; check("apply off stops", nextAction(dmg) === "next"); check("apply on applies", nextAction(dmg, { apply: true }) === "apply"); check("applying unknown: ask, never apply again", nextAction({ ...dmg, applying: true }, { apply: true }) === "ask"); check("applied ends", nextAction({ ...dmg, applying: true, applied: true }, { apply: true }) === "next");
+const dop = damageOptions(["self:level:1", "target:x", "item:y", "self"]); check("options", dop.origin.join() === "origin:level:1,origin" && dop.keep.join() === "item:y");
 
 /* ---- geometry ---- */
 const ring = (x, y, r, sight) => { const pts = [...Array(6)].map((_, k) => [x + Math.cos(k * Math.PI / 3) * r, y + Math.sin(k * Math.PI / 3) * r]); return pts.map((p, k) => ({ ax: p[0], ay: p[1], bx: pts[(k + 1) % 6][0], by: pts[(k + 1) % 6][1], move: true, sight, dir: 1 })); };
