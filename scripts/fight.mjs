@@ -3,7 +3,7 @@
    summarised chat loses nothing. For now it runs Strikes; see claude/encounter-builder-plan.md for the rest of step 2. */
 import { checkPlan, currentOf, damageOptions, latestNote, nextAction } from "./turn.mjs";
 
-const ID = "lythara-encounter-builder", WORKBENCH = "xdy-pf2e-workbench", STEP_MS = 20000, SETTLE_MS = 400, SCENE_MS = 30000, RESUMABLE = ["ready", "running", "held", "stopped"];
+const ID = "lythara-encounter-builder", WORKBENCH = "xdy-pf2e-workbench", TOOLBELT = "pf2e-toolbelt", STEP_MS = 20000, SETTLE_MS = 400, SCENE_MS = 30000, RESUMABLE = ["ready", "running", "held", "stopped"];
 export const runnerName = () => game.settings.get(ID, "runner");
 const runner = () => game.users.getName(runnerName());
 const isRunner = () => game.user.isGM && runner()?.id === game.user.id;
@@ -136,9 +136,11 @@ async function watched(work) {
   catch (e) { for (const a of fresh()) await a.close?.().catch?.(() => {}); throw e; }
   finally { clearInterval(poll); clearTimeout(timer); }
 }
-/* Real targets, on the runner's own account: hers are never touched. Workbench's "Please target" reads them at the attack. Toolbelt's Target Helper
-   row reads them at the damage roll, so they stay on for that only when the GM applies damage from the card. */
+/* Real targets, on the runner's own account: hers are never touched. Workbench's "Please target" and Toolbelt's Target Helper rows both read them. */
 const aimAt = target => target.object?.setTarget(true, { user: game.user, releaseOthers: true, groupSelection: false });
+/* With automatic damage on, a Target Helper row's Damage button can only apply a second time, and its Block comes too late. The row is taken off after the
+   card is made, because Toolbelt fills it in a preCreate hook that runs after this module's. If Toolbelt renames its flag the row simply stays. */
+async function dropRow(message) { if (message.flags?.[TOOLBELT]?.targetHelper) await message.update({ [`flags.${TOOLBELT}.targetHelper`]: foundry.data.operators.ForcedDeletion.create() }).catch(e => console.warn(`${ID} | row`, e)); }
 const stopAiming = () => { if (game.user.targets.size) canvas.tokens?.setTargets?.([], { mode: "replace" }); };
 
 async function runStrike(combat, id, i, step, tok, target) {
@@ -157,10 +159,10 @@ async function runStrike(combat, id, i, step, tok, target) {
         const { message, roll } = await watched(async () => { const card = waitFor("attack-roll"), roll = await strike.variants[step.variant].roll({ event: clickWith("showCheckDialogs"), target: target.object }); return { message: await card, roll }; });
         await record({ attack: { message: message.id, degree: roll?.degreeOfSuccess ?? message.rolls?.[0]?.degreeOfSuccess ?? 0 } });
       } else if (now === "damage") {
-        const degree = get().attack.degree; if (applySetting()) stopAiming(); else aimAt(target);   /* Target Helper's row reads the targets, and its Damage button would only apply a second time */
-        await record({ damageStarted: true });
+        const degree = get().attack.degree; aimAt(target); await record({ damageStarted: true });
         const message = await watched(async () => { const card = waitFor("damage-roll"); await strike[degree === 3 ? "critical" : "damage"]({ event: clickWith("showDamageDialogs"), target: target.object, mapIncreases: step.variant }); return card; });
         await record({ damage: { message: message.id } });
+        if (applySetting()) await dropRow(message);
       } else if (now === "apply") {
         const message = game.messages.get(get().damage.message), roll = message?.rolls?.[0]; if (!roll) return "ask";
         await record({ applying: true });

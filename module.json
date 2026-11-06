@@ -2,7 +2,7 @@
   "id": "lythara-encounter-builder",
   "title": "Lythara Encounter Builder",
   "description": "Reads an encounter map, then places monsters, treasure and GM notes from a brief, and carries out monster Strikes from a plan.",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "compatibility": { "minimum": "14", "verified": "14.370" },
   "authors": [{ "name": "Rhea and Claude" }],
   "url": "https://github.com/bcw3075/lythara-encounter-builder",
