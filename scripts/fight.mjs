@@ -4,6 +4,7 @@
 import { checkPlan, currentOf, damageOptions, latestNote, nextAction, requestBusy, strikeIds } from "./turn.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap } from "./builder.mjs";
+import { MAX_TRIES, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "./brain.mjs";
 
 const ID = "lythara-encounter-builder", WORKBENCH = "xdy-pf2e-workbench", TOOLBELT = "pf2e-toolbelt", VISIONER = "pf2e-visioner", GROUND_RADIUS = 10, STEP_MS = 20000, SETTLE_MS = 400, SCENE_MS = 30000, RESUMABLE = ["ready", "running", "held", "stopped"];
 export const runnerName = () => game.settings.get(ID, "runner");
@@ -138,7 +139,7 @@ async function onTurnChange(combat) {
     const id = foundry.utils.randomID(8), base = { state: "requested", combatantId: combatant.id, tokenId: tok.id, round: combat.round, turn: combat.turn, at: Date.now(), log: {} };
     if (!opened || !tok.object) return await save(combat, id, { ...base, labels: {}, note: cantOpen() });   /* no map, no packet: words instead of silent wrong answers */
     let built; try { built = await buildPacket(combat, tok); } catch (e) { console.error(`${ID} | packet`, e); return await save(combat, id, { ...base, labels: {}, note: `I couldn't work out what ${tok.name} perceives (${e.message}). Play this turn yourself.` }); }
-    const change = { [`requests.${id}`]: { ...base, labels: built.labels, packet: built.packet, note: null } };
+    const change = { [`requests.${id}`]: { ...base, labels: built.labels, packet: built.packet, note: null, tries: 0 }, ...eventChange("turn", id, 0) };
     for (const [k, v] of Object.entries(built.fresh)) change[`labels.${k}`] = v;
     for (const [k, v] of Object.entries(remember(turns(combat).memory?.[tok.id] ?? {}, built.others, combat.round))) change[`memory.${tok.id}.${k}`] = v;
     await saveTurns(combat, change);
@@ -180,14 +181,18 @@ function gather(combat, req) {
   for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && canTarget(o.state)) targets[label] = { name: o.token.name, distance: o.distance, flat: flatDC(o.state) }; }
   return { actions: actionsOf(actor, combat), strikes, targets };
 }
-/** Hand a plan in. Any GM may call this; the runner checks it. */
-export async function submitPlan(combat, requestId, plan) {
+/** Hand a plan in. Any GM may call this; the runner checks it. meta says who made it ({ by: "chat" | "api" | "gm", model, generation, usage }); a plan
+    from an older chat's generation is ignored. The plan is stored as it came and cleaned by the runner, so tries are counted in one place. */
+export async function submitPlan(combat, requestId, plan, meta = {}) {
   const r = request(combat, requestId); if (!r) throw new Error("No such request."); if (r.state !== "requested" && r.state !== "ready") throw new Error(`That turn is ${r.state}.`);
-  await save(combat, requestId, { plan, state: "submitted", verdict: null });
+  const who = cleanMeta(meta); if (stale(brainNow(), who.generation)) return { state: r.state, ignored: true, reason: SUPERSEDED };
+  if (JSON.stringify(plan ?? null).length > PLAN_BYTES) return { state: r.state, reason: "That plan is far too long to be a plan." };
+  await save(combat, requestId, { plan: whole(plan), state: "submitted", verdict: null, by: whole(who) });
   if (isRunner()) await judge(combat, requestId);
-  for (let i = 0; i < 40; i++) { await new Promise(res => setTimeout(res, 250)); const n = request(combat, requestId); if (n.state !== "submitted") return { state: n.state, reason: n.verdict }; }
+  for (let i = 0; i < 40; i++) { await new Promise(res => setTimeout(res, 250)); const n = request(combat, requestId); if (n.state !== "submitted") return answer(n); }
   return { state: "submitted", reason: runnerProblem() ?? `${runnerName()} hasn't answered.` };
 }
+const answer = r => ({ state: r.state, ...(r.state === "ready" ? { steps: r.steps } : { reason: r.verdict, triesLeft: Math.max(0, MAX_TRIES - (r.tries ?? 0)) }) });
 /* the plan is checked once, and a turn runs once: the updateCombat hook and the submitter can both arrive here, and Auto calls doIt straight after */
 const judging = new Set(), running = new Set();
 export async function judge(combat, requestId) {
@@ -196,10 +201,85 @@ export async function judge(combat, requestId) {
 }
 async function judgeNow(combat, requestId) {
   if (!await ensureScene(combat)) { await save(combat, requestId, { state: "requested", verdict: cantOpen() }); return { state: "requested", reason: cantOpen() }; }
-  const r = request(combat, requestId), ctx = gather(combat, r), c = checkPlan(r.plan, ctx); await save(combat, requestId, c.ok ? { state: "ready", steps: c.steps, verdict: null } : { state: "requested", verdict: c.reason });
+  const r = request(combat, requestId), clean = cleanPlan(r.plan);
+  if (!clean.ok) return reject(combat, requestId, clean.reason);
+  const c = checkPlan(clean.plan, gather(combat, r));
+  if (!c.ok) return reject(combat, requestId, c.reason);
+  await save(combat, requestId, { state: "ready", plan: whole(clean.plan), steps: c.steps, verdict: null });
   const tok = combat.scene.tokens.get(r.tokenId);
-  if (c.ok && tok?.getFlag(ID, "auto")) doIt(combat, requestId).catch(e => console.error(e));
-  return c.ok ? { state: "ready", steps: c.steps } : { state: "requested", reason: c.reason };
+  if (tok?.getFlag(ID, "auto")) doIt(combat, requestId).catch(e => console.error(e));
+  return { state: "ready", steps: c.steps };
+}
+/* The reason goes back to the thinker once, as a retry event. A second refusal goes to the GM. */
+async function reject(combat, requestId, reason) {
+  const tries = (request(combat, requestId).tries ?? 0) + 1, last = tries >= MAX_TRIES, at = `requests.${requestId}`;
+  await saveTurns(combat, { [`${at}.state`]: "requested", [`${at}.tries`]: tries, [`${at}.verdict`]: last ? `Couldn't do: ${reason}` : reason, ...(last ? {} : eventChange("retry", requestId, tries)) });
+  return { state: "requested", reason, triesLeft: Math.max(0, MAX_TRIES - tries) };
+}
+
+/* ---------- the brain: whoever thinks waits here for an event and hands plans in ---------- */
+/* Events live on each Combat's flag with the rest of the fight, numbered across all fights so one cursor serves them all. Only the runner adds them.
+   The listener (generation and when it last asked) is a world setting, because a chat can be waiting before any fight exists. */
+/* a plan replaces the last one whole: a merge would keep keys the new one doesn't have */
+const whole = v => v && typeof v === "object" ? foundry.data.operators.ForcedReplacement.create(v) : v;
+const PLAN_BYTES = 8000, SUPERSEDED = "A newer chat is thinking for the monsters now, so this was ignored.";
+const brainNow = () => game.settings.get(ID, "brain") ?? {};
+const setBrain = value => game.settings.set(ID, "brain", value);
+const fights = () => game.combats.filter(c => c.started);
+const eventsOf = combat => Object.values(turns(combat).events ?? {}).map(e => ({ ...e, combatId: combat.id }));
+function eventChange(kind, requestId, tries) {
+  const seq = nextSeq(Math.max(0, ...game.combats.contents.flatMap(c => Object.keys(turns(c).events ?? {}).map(Number))), Date.now());
+  return { [`events.${seq}`]: { seq, kind, requestId, tries } };
+}
+function firstEvent(cursor) {
+  const reqOf = e => request(game.combats.get(e.combatId), e.requestId);
+  const ev = pickEvent(fights().flatMap(eventsOf), cursor, e => live(e, reqOf(e)));
+  return ev ? eventOut(ev, reqOf(ev)) : null;
+}
+/** Wait for something to think about. With no generation this is a new thinker: it gets `hello` (the prompt, the schemas, its generation) at once and
+    any older thinker is retired. Otherwise it returns the first event after `cursor` whose request still waits, holding up to maxSeconds (at most 100)
+    for one; { idle: true } if none came. The cursor only moves when the caller asks again with the one it was given, so a dropped call loses nothing. */
+export async function waitForEvent(cursor = 0, maxSeconds = 90, { generation = null } = {}) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  cursor = Number.isFinite(cursor) ? cursor : 0;
+  if (generation == null) { const g = (brainNow().generation ?? 0) + 1; await setBrain({ generation: g, at: Date.now() }); return { cursor, hello: hello(g) }; }
+  if (stale(brainNow(), generation)) return { cursor, superseded: true, reason: SUPERSEDED };
+  await setBrain({ generation, at: Date.now() });
+  let got = firstEvent(cursor);
+  if (!got) got = await new Promise(res => {
+    let hook = null, timer = null;
+    const done = v => { Hooks.off("updateCombat", hook); clearTimeout(timer); res(v); };
+    hook = Hooks.on("updateCombat", () => { const e = firstEvent(cursor); if (e) done(e); });
+    timer = setTimeout(() => done(null), waitSeconds(maxSeconds) * 1000);
+  });
+  if (stale(brainNow(), generation)) return { cursor, superseded: true, reason: SUPERSEDED };
+  return got ? { cursor: got.seq, event: got } : { cursor, idle: true };
+}
+/** Is the thinker there? For the Monster Turns window. */
+export const brainListening = () => listening(brainNow(), Date.now());
+export const brainSeenAt = () => brainNow().at ?? 0;
+/** Legality only: what the runner would say, with nothing written. Needs the fight open on this page. */
+export function checkOnly(combat, requestId, plan) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  const r = request(combat, requestId); if (!r) throw new Error("No such request.");
+  if (!onFightScene(combat)) throw new Error("This page doesn't have the fight's map open, so it can't tell.");
+  const clean = cleanPlan(plan); if (!clean.ok) return { ok: false, reason: clean.reason };
+  return checkPlan(clean.plan, gather(combat, r));
+}
+/** The thinker can't make a plan: the card says so and the GM plays. */
+export async function reportFailure(combat, requestId, reason, meta = {}) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  const r = request(combat, requestId); if (!r) throw new Error("No such request."); if (r.state !== "requested") throw new Error(`That turn is ${r.state}.`);
+  if (stale(brainNow(), cleanMeta(meta).generation)) return { ignored: true, reason: SUPERSEDED };
+  await save(combat, requestId, { gaveUp: true, verdict: `Angel couldn't plan this turn: ${text(reason, 200) || "no reason given"}. Play it yourself.` });
+  return { state: "requested", gaveUp: true };
+}
+/** A short read of where a fight stands, for whoever thinks. */
+export function fightState(combat = game.combat) {
+  if (!combat) return { fight: false };
+  const r = currentRequest(combat);
+  return { combatId: combat.id, started: combat.started, round: combat.round, listening: brainListening(), generation: brainNow().generation ?? 0,
+    request: r ? { id: r.id, state: r.state, monster: r.packet?.you?.label ?? null, verdict: r.verdict ?? null, triesLeft: Math.max(0, MAX_TRIES - (r.tries ?? 0)), gaveUp: !!r.gaveUp } : null };
 }
 
 /* ---------- carrying it out ---------- */

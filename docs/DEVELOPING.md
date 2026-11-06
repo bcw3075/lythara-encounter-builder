@@ -14,12 +14,14 @@ How the code works and why, for anyone changing it. What it does for a GM is in 
 | `scripts/builder.mjs` | Gathers documents (`readMap`), resolves creatures, `prepare` (plans, creates nothing), `place`, `clear`, `prepareReplace`, `applyReplace`, previews | yes |
 | `scripts/turn.mjs` | A monster's turn as data: `checkPlan` (legality), `describeStep`, `nextAction` (where a step stands), `damageOptions` | no |
 | `scripts/perceive.mjs` | What a monster perceives: `perceiveOne` (the state for one pair), `sensesOf`, `lightAt`, `packetOf` (the only way anything about others gets into a packet), memory, labels, health words, ability text as plain words | no |
+| `scripts/brain.mjs` | The brain interface: `cleanPlan` and `cleanMeta` (a plan and who made it, from outside), the event queue (`nextSeq`, `live`, `pickEvent`, `eventOut`), `listening`, `stale` generations, `hello` | no |
+| `scripts/prompt.mjs` | `promptText`: the thinker's instructions, the same for a chat and the API | no |
 | `scripts/fight.mjs` | The runner, turn requests on the Combat flag, gathering what a monster senses (`sense`, `buildPacket`), `submitPlan`, `judge`, `doIt`, carrying out a Strike, applying damage | yes |
 | `scripts/ui/build.mjs` | The Build Encounter window and the preview loop | yes |
 | `scripts/ui/turns.mjs` | The Monster Turns window: who's ticked, and the plan card | yes |
 | `scripts/main.mjs` | Settings, the left-bar group "Encounters", hooks, API | yes |
 
-The plan leaves room for `brain.mjs`, which doesn't exist yet. Its `legal.mjs` is `checkPlan` in `turn.mjs` for now, and covers Strikes only.
+The plan's `legal.mjs` is `checkPlan` in `turn.mjs` for now, and covers Strikes only.
 
 ## Data
 
@@ -27,8 +29,8 @@ All flags use the module id as their scope: a made-up scope throws.
 - **Scene:** `brief` (the last brief, or one sent from a chat), `build` (`id`, `seed`, `threat`, `rev`, `at`, `entry` the journal id), `design` (a request from Ask Angel with the map summary).
 - **Tokens:** `built`, `key`, `group`, `role`, `run`, `auto`, `model`, `opus`; `cache` on a cache's token. Per token, not actor, so each monster has its own checkbox later.
 - **Actors, journal, notes:** `built`. Folders carry `own`.
-- **Combat:** `turns.requests`, one per monster turn: `state`, `combatantId`, `tokenId`, `round`, `turn`, `labels` (E1 and so on, to token ids: only what it perceived at the time), `packet`, `plan`, `steps`, `verdict`, `note`, `go`, `hold`, and `log` by step. `turns.labels`, token id to label, kept for the whole fight. `turns.memory`, by monster token then enemy token: `square` and `round` it last perceived them. It all goes with the fight.
-- **World settings:** `partySize`, `applyMonsterDamage` and `runner` (in the settings menu), `treasure` (`manual` by level, `builds` by id).
+- **Combat:** `turns.requests`, one per monster turn: `state`, `combatantId`, `tokenId`, `round`, `turn`, `labels` (E1 and so on, to token ids: only what it perceived at the time), `packet`, `plan`, `by` (who made the plan: route, model, generation, usage), `tries`, `gaveUp`, `steps`, `verdict`, `note`, `go`, `hold`, and `log` by step. `turns.events`, by number: `seq`, `kind` (`turn` or `retry`), `requestId`, `tries`. `turns.labels`, token id to label, kept for the whole fight. `turns.memory`, by monster token then enemy token: `square` and `round` it last perceived them. It all goes with the fight.
+- **World settings:** `partySize`, `applyMonsterDamage` and `runner` (in the settings menu), `treasure` (`manual` by level, `builds` by id), `brain` (`generation`, `at`: who is thinking and when it last asked).
 - **Every document a build makes carries `built` = its id.** `clear` deletes only those, by id, so hand-placed things and Survey Sheet's documents stay. A build's actors stay if a token on any scene still uses them.
 
 ## Reading the map
@@ -87,6 +89,16 @@ All flags use the module id as their scope: a made-up scope throws.
 - **The `lythara-encounter-builder.step` hook** fires before each stage; return false to stop there. The reload tests use it.
 - **Saves use `{ render: false }`** so each stage doesn't redraw the tracker. Whether that's fully quiet with PF2e HUD open isn't checked yet. **Saves send only the change:** two browsers write to a request now, so a whole copy could put back what the other just wrote.
 - **A reload:** on the runner's `ready`, a request still `running` becomes `stopped` with a note, and Do it carries on from the record. A `go` or a plan left waiting is picked up.
+
+## The brain interface
+Whoever thinks for a monster (a Claude chat through the bridge now, the Claude API later) uses the same four calls, so nothing changes when the API arrives. The module can't tell them apart.
+- **`api.fight.waitForEvent(cursor, maxSeconds, {generation})`.** With no generation it's a new thinker: it gets `hello` at once (the prompt from `prompt.mjs`, the schemas, the step kinds, which kinds can be carried out so far, its generation) and any older thinker is retired. Otherwise it returns the first event after `cursor` whose request still waits (`live`), holding up to `maxSeconds` (capped at 100, because `run_script` stops at 120) on the `updateCombat` hook; `{idle: true}` if nothing came. The answer's `cursor` is the event's number: the caller passes it back next time, so a dropped call loses nothing and a repeat gets the same event.
+- **Events** are written by the runner only, on the Combat flag beside the request, in the same update: `turn` when a request gets its packet, `retry` after the first refusal. **Numbers are the clock, never below any number given out (`nextSeq`),** so one cursor serves every fight. An event matters only while its request waits for the plan it asks for (`state` requested, a packet, not given up, `tries` equal to the event's), so a fresh chat with cursor 0 gets only what's waiting now, never history.
+- **`submitPlan(combat, requestId, plan, meta)`** stores the plan as it came, whole (`ForcedReplacement`: a merge kept keys the new plan didn't have), with `by` from `cleanMeta`. A plan from an older generation is ignored, with words; one with no generation is a GM by hand and always counts. Anything over 8,000 characters is refused unread.
+- **The runner cleans and checks it in `judgeNow`:** `cleanPlan` keeps only the fields the module reads and refuses a wrong shape with a reason; then `checkPlan` for legality. **Tries are counted in one place, `reject`:** the first refusal goes back to the thinker as a `retry` event with the reason and its plan; the second puts "Couldn't do: …" on the card for the GM (`MAX_TRIES`).
+- **`checkPlan(combat, requestId, plan)`** on the API answers what the runner would say and writes nothing; it needs the fight open on that page. **`reportFailure`** puts the thinker's reason on the card and stops events for that turn (`gaveUp`). **`state(combat)`** is a short read for the thinker.
+- **The light:** every wait writes `brain.at`. The Monster Turns window shows "Angel is listening" while that's under 2 minutes old (`LISTEN_MS`), re-drawing itself when it turns grey, and a waiting request gets "Angel isn't listening. Play it yourself, or in the chat say go." A chat can't be woken from outside, so that's the honest fallback.
+- **Plans from outside are data.** `cleanPlan` drops unknown keys, checks ids and labels by pattern, strips control characters and caps text. The card escapes everything it shows.
 
 ## What a monster perceives
 Worked out by the module, on the runner, with the fight open. Visioner can't answer it alone: with its automatic system off it says "observed" for a pair with no record, walls or no walls, and a monster token isn't a vision source (tested). Rules: Perception and Detection (https://2e.aonprd.com/Rules.aspx?ID=2400), Light (https://2e.aonprd.com/Rules.aspx?ID=2401).

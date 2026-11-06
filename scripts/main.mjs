@@ -2,13 +2,15 @@
 import { ID, build, clear, findCreatures, markDrawn, markReady, nextToParty, place, prepare, readMap, submitBrief, summary } from "./builder.mjs";
 import { BuildApp, askClear, askReplace } from "./ui/build.mjs";
 import { TurnsApp } from "./ui/turns.mjs";
-import { busy, currentRequest, doIt, hold, onCombatUpdate, onCreateMessage, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, perceived, playMyself, submitPlan } from "./fight.mjs";
+import { busy, checkOnly, currentRequest, doIt, fightState, hold, onCombatUpdate, onCreateMessage, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, perceived, playMyself, reportFailure, submitPlan, waitForEvent } from "./fight.mjs";
 
 const CONTROL = "encounters", apps = new Map(); let turnsApp = null;
 Hooks.once("init", () => {
   game.settings.register(ID, "partySize", { name: "Party size for balance", hint: "How many PCs threat is worked out for. The campaign's rules say how many; PF2e's Low budget differs from the published one away from 4.", scope: "world", config: true, type: Number, default: 4 });
   game.settings.register(ID, "applyMonsterDamage", { name: "Apply monster damage automatically", hint: "A monster's hit changes HP at once, with PF2e's undo card. Off: damage is rolled and you apply it from the card.", scope: "world", config: true, type: Boolean, default: true });
   game.settings.register(ID, "runner", { name: "Account that runs monster turns", hint: "The GM account whose page carries out monster turns: its name, exactly. It targets for real on its own account, so yours are never touched. If it's offline, turns wait and the card says so.", scope: "world", config: true, type: String, default: "Claude Bridge" });
+  /* who is thinking for the monsters: the chat's generation and when it last asked for an event. A newer chat retires an older one. */
+  game.settings.register(ID, "brain", { scope: "world", config: false, type: Object, default: { generation: 0, at: 0 }, onChange: () => { if (turnsApp?.rendered) turnsApp.render(); } });
   game.settings.register(ID, "treasure", { scope: "world", config: false, type: Object, default: { manual: {}, builds: {} } });
 });
 function openBuild() { const scene = canvas.scene; if (!scene) return; apps.get(scene.id)?.close?.(); const app = new BuildApp(scene); apps.set(scene.id, app); app.render(true); }
@@ -49,5 +51,5 @@ Hooks.on("updateToken", (tok, change) => { onTokenFlag(tok, change); });
 Hooks.on("userConnected", () => { if (turnsApp?.rendered) turnsApp.render(); });
 Hooks.once("ready", () => {
   onRunnerReady().catch(e => console.error(`${ID} | runner`, e));
-  game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty, fight: { current: currentRequest, busy, perceived, submitPlan, doIt, hold, playMyself } };
+  game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty, fight: { current: currentRequest, busy, perceived, submitPlan, doIt, hold, playMyself, waitForEvent, checkPlan: checkOnly, reportFailure, state: fightState } };
 });

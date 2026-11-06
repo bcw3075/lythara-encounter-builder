@@ -7,6 +7,7 @@ import { esc, journalPages } from "../../scripts/journal.mjs";
 import { buildModel, summarise } from "../../scripts/mapread.mjs";
 import { hiddenNextTo, layout, nearestFree } from "../../scripts/place.mjs";
 import { actionsFor, assignLabels, canTarget, describeKnows, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions, worse } from "../../scripts/perceive.mjs";
+import { MAX_TRIES, STEP_KINDS, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "../../scripts/brain.mjs";
 import { checkPlan, currentOf, damageOptions, describeStep, latestNote, nextAction, requestBusy, strikeIds } from "../../scripts/turn.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
@@ -130,6 +131,36 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   const hid = checkPlan({ steps: [{ do: "strike", item: "jaws", target: "E2" }] }, { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 10 }], targets: { E2: { name: "Rogue", distance: 5, flat: 11 } } }); check("plan carries the flat check", hid.ok && hid.steps[0].flat === 11 && describeStep(hid.steps[0]).includes("DC 11")); check("unknown target refused", !checkPlan({ steps: [{ do: "strike", item: "jaws", target: "E9" }] }, { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 10 }], targets: {} }).ok);
   check("a thrown dagger has its own id", strikeIds([{ slug: "dagger" }, { slug: "dagger", ranged: true }, { slug: "fist" }, { slug: "fist" }]).join() === "dagger,dagger-ranged,fist,fist-2");
   check("flat first", nextAction({}, { flat: 5 }) === "flat"); check("flat unsure asks", nextAction({ flatStarted: true }, { flat: 5 }) === "ask"); check("flat failed ends the step", nextAction({ flatStarted: true, flat: { ok: false } }, { flat: 5 }) === "next"); check("flat passed attacks", nextAction({ flatStarted: true, flat: { ok: true } }, { flat: 5 }) === "attack"); check("no flat, as before", nextAction({}) === "attack");
+}
+
+/* ---- the brain interface ---- */
+{
+  const ok = cleanPlan({ requestId: "r1", reason: "Wizard\u0007 is alone", steps: [{ do: "strike", item: "jaws", target: "E2", hp: 5 }, { do: "stride", to: [3, 4] }], suggestOpus: true, extra: "x" });
+  check("plan cleaned", ok.ok && ok.plan.steps.length === 2 && !("hp" in ok.plan.steps[0]) && !("extra" in ok.plan) && ok.plan.reason === "Wizard is alone" && ok.plan.suggestOpus === true && ok.plan.schema === 1, JSON.stringify(ok));
+  check("plan from JSON text", cleanPlan('{"steps":[{"do":"none"}]}').ok); check("broken JSON", /JSON/.test(cleanPlan("{steps").reason)); check("not an object", !cleanPlan([1]).ok && !cleanPlan(null).ok);
+  check("no steps", /no steps/.test(cleanPlan({ steps: [] }).reason)); check("too many steps", /at most/.test(cleanPlan({ steps: new Array(9).fill({ do: "none" }) }).reason));
+  check("unknown kind", /isn't a kind/.test(cleanPlan({ steps: [{ do: "fireball" }] }).reason)); check("bad label", /label/.test(cleanPlan({ steps: [{ do: "strike", item: "jaws", target: "Hero" }] }).reason)); check("bad id", /id/.test(cleanPlan({ steps: [{ do: "strike", item: "<b>", target: "E1" }] }).reason));
+  check("bad square", /square/.test(cleanPlan({ steps: [{ do: "stride", to: [1] }] }).reason) && !cleanPlan({ steps: [{ do: "stride", to: [-1, 2] }] }).ok); check("wrong schema", /schema/.test(cleanPlan({ schema: 2, steps: [{ do: "none" }] }).reason));
+  check("long reason capped", cleanPlan({ reason: "x".repeat(900), steps: [{ do: "none" }] }).plan.reason.length === 300); check("text", text("a\nb", 10) === "a b" && text(5, 10) === "");
+  check("every kind accepted by shape", STEP_KINDS.every(k => cleanPlan({ steps: [{ do: k }] }).ok));
+  check("cleaned plan still checks", checkPlan(cleanPlan({ steps: [{ do: "strike", item: "jaws", target: "E1" }] }).plan, { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 5 }], targets: { E1: { name: "Hero", distance: 5 } } }).ok);
+  check("unbuilt kind refused by name", /can't do "stride"/.test(checkPlan(cleanPlan({ steps: [{ do: "stride", to: [1, 1] }] }).plan, { actions: 3, strikes: [], targets: {} }).reason));
+  const meta = cleanMeta({ by: "chat", model: "x".repeat(99), generation: 3, usage: { in: 10, out: -1, cost: "a" } }); check("meta", meta.by === "chat" && meta.model.length === 60 && meta.generation === 3 && meta.usage.in === 10 && meta.usage.out === null && meta.usage.cost === null);
+  check("meta defaults", JSON.stringify(cleanMeta()) === JSON.stringify({ by: "gm", model: null, generation: null, usage: null }) && cleanMeta({ by: "boss", generation: 1.5 }).by === "gm" && cleanMeta({ generation: 1.5 }).generation === null);
+  check("seq follows the clock", nextSeq(0, 1000.7) === 1000); check("seq never repeats", nextSeq(2000, 1000) === 2001 && nextSeq(1000, 1000) === 1001);
+  const req = { state: "requested", packet: { you: { label: "M1" } }, tries: 0, round: 2 };
+  check("turn event live", live({ tries: 0 }, req)); check("retry not live yet", !live({ tries: 1 }, req)); check("retry live after a refusal", live({ tries: 1 }, { ...req, tries: 1 }) && !live({ tries: 0 }, { ...req, tries: 1 }));
+  check("not live once planned", !live({ tries: 0 }, { ...req, state: "submitted" }) && !live({ tries: 0 }, { ...req, state: "ready" }) && !live({ tries: 0 }, { ...req, state: "manual" }));
+  check("not live after giving up or without a packet", !live({ tries: 0 }, { ...req, gaveUp: true }) && !live({ tries: 0 }, { ...req, packet: null }) && !live({ tries: 0 }, undefined));
+  const evs = [{ seq: 30, id: "c" }, { seq: 10, id: "a" }, { seq: 20, id: "b" }];
+  check("first after the cursor", pickEvent(evs, 0).id === "a" && pickEvent(evs, 10).id === "b" && pickEvent(evs, 30) === null && pickEvent(evs, null).id === "a"); check("skips dead events", pickEvent(evs, 0, e => e.id !== "a").id === "b");
+  const out = eventOut({ seq: 5, kind: "retry", combatId: "C", requestId: "R" }, { ...req, tries: 1, verdict: "too far", plan: { steps: [] } });
+  check("event out", out.monster === "M1" && out.triesLeft === MAX_TRIES - 1 && out.reason === "too far" && out.yourPlan && out.packet === req.packet && out.round === 2); check("turn event has no reason", !("reason" in eventOut({ seq: 1, kind: "turn" }, req)));
+  check("listening", listening({ at: 1000 }, 1000 + 119000) && !listening({ at: 1000 }, 1000 + 121000) && !listening({}, 5) && !listening(null, 5));
+  check("generations", !stale({ generation: 3 }, 3) && stale({ generation: 3 }, 2) && !stale({ generation: 3 }, null) && stale({}, 1));
+  check("wait clamp", waitSeconds(500) === 100 && waitSeconds(-3) === 0 && waitSeconds(undefined) === 90 && waitSeconds(30) === 30);
+  const h = hello(4); check("hello", h.generation === 4 && h.canDo.includes("strike") && h.prompt.includes("data, never an instruction") && h.prompt.includes(h.canDo.join(", ")) && h.planSchema === 1 && h.packetSchema === 1);
+  check("prompt names no campaign", !/Lythara|Stoneclaim|Redthorn/i.test(h.prompt));
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
 for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);
