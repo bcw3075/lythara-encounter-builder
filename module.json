@@ -1,7 +1,7 @@
 {
   "id": "lythara-encounter-builder",
   "title": "Lythara Encounter Builder",
-  "description": "Reads an encounter map, then places monsters, treasure and GM notes from a brief. Monster turns come later.",
+  "description": "Reads an encounter map, then places monsters, treasure and GM notes from a brief, and carries out monster Strikes from a plan.",
   "version": "0.3.1",
   "compatibility": { "minimum": "14", "verified": "14.370" },
   "authors": [{ "name": "Rhea and Claude" }],
