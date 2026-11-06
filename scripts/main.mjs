@@ -2,7 +2,7 @@
 import { ID, build, clear, findCreatures, markDrawn, markReady, nextToParty, place, prepare, readMap, submitBrief, summary } from "./builder.mjs";
 import { BuildApp, askClear, askReplace } from "./ui/build.mjs";
 import { TurnsApp } from "./ui/turns.mjs";
-import { busy, currentRequest, doIt, hold, onCombatUpdate, onCreateMessage, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, playMyself, submitPlan } from "./fight.mjs";
+import { busy, currentRequest, doIt, hold, onCombatUpdate, onCreateMessage, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, perceived, playMyself, submitPlan } from "./fight.mjs";
 
 const CONTROL = "encounters", apps = new Map(); let turnsApp = null;
 Hooks.once("init", () => {
@@ -49,5 +49,5 @@ Hooks.on("updateToken", (tok, change) => { onTokenFlag(tok, change); });
 Hooks.on("userConnected", () => { if (turnsApp?.rendered) turnsApp.render(); });
 Hooks.once("ready", () => {
   onRunnerReady().catch(e => console.error(`${ID} | runner`, e));
-  game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty, fight: { current: currentRequest, busy, submitPlan, doIt, hold, playMyself } };
+  game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty, fight: { current: currentRequest, busy, perceived, submitPlan, doIt, hold, playMyself } };
 });

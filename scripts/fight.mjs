@@ -2,8 +2,10 @@
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. For now it runs Strikes; see claude/encounter-builder-plan.md for the rest of step 2. */
 import { checkPlan, currentOf, damageOptions, latestNote, nextAction, requestBusy } from "./turn.mjs";
+import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
+import { readMap } from "./builder.mjs";
 
-const ID = "lythara-encounter-builder", WORKBENCH = "xdy-pf2e-workbench", TOOLBELT = "pf2e-toolbelt", STEP_MS = 20000, SETTLE_MS = 400, SCENE_MS = 30000, RESUMABLE = ["ready", "running", "held", "stopped"];
+const ID = "lythara-encounter-builder", WORKBENCH = "xdy-pf2e-workbench", TOOLBELT = "pf2e-toolbelt", VISIONER = "pf2e-visioner", GROUND_RADIUS = 10, STEP_MS = 20000, SETTLE_MS = 400, SCENE_MS = 30000, RESUMABLE = ["ready", "running", "held", "stopped"];
 export const runnerName = () => game.settings.get(ID, "runner");
 const runner = () => game.users.getName(runnerName());
 const isRunner = () => game.user.isGM && runner()?.id === game.user.id;
@@ -17,6 +19,7 @@ export const applySetting = () => game.settings.get(ID, "applyMonsterDamage");
 /* frequent writes: don't make the tracker redraw for each one. Two browsers write here, so only the change goes: a whole copy of the request could
    put back what the other just wrote. */
 async function save(combat, id, change) { await combat.update({ [`flags.${ID}.turns.requests.${id}`]: change }, { render: false, [ID]: { quiet: true } }); }
+const saveTurns = (combat, change) => combat.update(Object.fromEntries(Object.entries(change).map(([k, v]) => [`flags.${ID}.turns.${k}`, v])), { render: false, [ID]: { quiet: true } });
 const request = (combat, id) => turns(combat).requests[id];
 export const currentRequest = combat => currentOf(turns(combat).requests, combat.round, combat.combatant?.id);   /* only this turn's: an old unfinished one stays out of the way */
 /** The last finished turn, if it left something for the GM to read. */
@@ -39,6 +42,82 @@ async function ensureScene(combat) {
 }
 const within = (work, ms, words) => { let timer; return Promise.race([work, new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(words)), ms); })]).finally(() => clearTimeout(timer)); };
 
+/* ---------- what a monster perceives ---------- */
+/* Worked out here rather than asked of Visioner: with its automatic system off it answers "observed" for a pair with no record, walls or no walls, and a monster
+   token isn't a vision source. So: core's own sight and sound tests on the fight scene, the light at the target, the monster's senses, then Visioner's record on top. */
+const onFightScene = combat => canvas.ready && canvas.scene?.id === combat.scene?.id;
+const conditionsOn = actor => (actor.conditions?.active ?? []).map(c => c.slug);
+const squareOf = (tok, scene) => { const px = scene.grid.size, d = scene.dimensions; return [Math.round((tok.x - d.sceneX) / px), Math.round((tok.y - d.sceneY) / px)]; };
+function lightOn(point, scene) {
+  const fx = canvas.effects, sources = [];
+  for (const s of fx.darknessSources ?? []) if (s.active && s.shape?.contains?.(point.x, point.y)) sources.push({ darkness: true });
+  for (const s of fx.lightSources ?? []) { if (!s.active || s instanceof foundry.canvas.sources.GlobalLightSource || !s.shape?.contains?.(point.x, point.y)) continue; sources.push({ reach: Math.hypot(point.x - s.x, point.y - s.y) <= (s.data?.bright ?? 0) ? "bright" : "dim" }); }
+  return lightAt({ sceneLevel: scene.lightLevel, sources });
+}
+function enemiesOf(scene, tok) { return scene.tokens.contents.filter(t => t.id !== tok.id && !t.hidden && t.actor?.isOfType?.("creature") && t.object && t.actor.isEnemyOf?.(tok.actor)); }
+/** Every creature against this monster, with how it stands to each. Needs the fight on this page's canvas. */
+function sense(combat, tok, memory = {}) {
+  const scene = combat.scene, me = tok.actor, conds = conditionsOn(me), blocked = (type, a, b) => !!CONFIG.Canvas.polygonBackends[type].testCollision(a, b, { mode: "any", type });
+  const vis = game.modules.get(VISIONER)?.active ? game.modules.get(VISIONER).api : null, avs = !!vis && !!game.settings.get(VISIONER, "autoVisibilityEnabled");
+  const senses = sensesOf([...(me.perception?.senses ?? [])], { deafened: conds.includes("deafened") });
+  return enemiesOf(scene, tok).map(t => {
+    const from = tok.object.center, to = t.object.center, distance = tok.object.distanceTo(t.object), theirs = conditionsOn(t.actor);
+    const { state, by } = perceiveOne({ senses, blinded: conds.includes("blinded"), dazzled: conds.includes("dazzled"), sees: !blocked("sight", from, to), heard: !blocked("sound", from, to), light: lightOn(to, scene), distance, invisible: theirs.includes("invisible"), concealed: theirs.includes("concealed"), stored: vis?.getVisibility(tok.id, t.id) ?? null, avs, known: !!memory[t.id] });
+    return { id: t.id, token: t, state, by, distance, square: squareOf(t, scene) };
+  });
+}
+const healthWords = () => healthEntries(game.settings.get("pf2e-hud", "healthStatusData"), game.i18n.localize("pf2e-hud.health-status.default"));
+const wordsFor = actor => { try { return healthWord(actor.hitPoints ?? {}, healthWords()); } catch { const h = actor.hitPoints; return h?.max ? (h.value <= 0 ? "Down" : h.value >= h.max ? "Unhurt" : "Hurt") : null; } };   /* PF2e HUD may be off or renamed its setting */
+function gearOf(actor) {
+  const show = i => i.isIdentified === false ? (i.system.identification?.unidentified?.name ?? i.name) : i.name;
+  return [...(actor.itemTypes?.weapon ?? []).filter(i => i.system.equipped?.carryType === "held"), ...(actor.itemTypes?.shield ?? []).filter(i => i.system.equipped?.carryType === "held"), ...(actor.itemTypes?.armor ?? []).filter(i => i.isWorn)].map(show);
+}
+function actionsOf(actor, combat) {
+  const n = s => actor.getCondition?.(s)?.value ?? 0, r = actor.getFlag(WORKBENCH, "stunReduction"), reduced = r && r.combat === combat.id && r.round === combat.round ? r.reducedBy : 0;
+  return actionsFor({ quickened: actor.hasCondition?.("quickened"), slowed: n("slowed"), stunned: n("stunned"), reduced });
+}
+async function strikesOf(actor) {
+  const out = []; for (const a of (actor.system.actions ?? []).filter(a => a.type === "strike")) {
+    let damage = null; try { damage = await a.damage({ getFormula: true }); } catch (e) { console.warn(`${ID} | damage formula`, e); }
+    out.push({ id: a.slug ?? a.item?.id, name: a.label, mod: strikeMods(a.variants.map(v => v.label)), reach: actor.getReach({ action: "attack", weapon: a.item }), ...(a.item?.isRanged ? { range: a.item.range?.increment ?? null, maxRange: a.item.range?.max ?? null } : {}), damage: typeof damage === "string" ? damage : null, traits: (a.traits ?? []).map(t => t.name).filter(t => t !== "attack"), effects: a.item?.system?.attackEffects?.value ?? [] });
+  } return out;
+}
+const localize = k => game.i18n.localize(k);
+function abilitiesOf(actor) { return (actor.itemTypes?.action ?? []).map(i => ({ id: i.slug ?? game.pf2e.system.sluggify(i.name), name: i.name, kind: i.system.actionType?.value ?? "passive", cost: i.system.actions?.value ?? null, text: plainText(i.system.description?.value, localize) })); }
+function tacticsOf(scene, tok) { const page = game.journal.get(scene.getFlag(ID, "build")?.entry)?.pages.find(p => p.name === "Tactics"); return page ? tacticsFor(page.text?.content, tok.getFlag(ID, "group"), localize) : null; }
+/* Allies know where each other are, by default. */
+function alliesOf(scene, tok) { return scene.tokens.contents.filter(t => t.id !== tok.id && t.actor?.isOfType?.("creature") && t.actor.isAllyOf?.(tok.actor)); }
+/** A monster's packet as things stand, plus the labels it needs. Writes nothing. */
+async function buildPacket(combat, tok) {
+  const scene = combat.scene, t = turns(combat), memory = t.memory?.[tok.id] ?? {}, others = sense(combat, tok, memory), allies = alliesOf(scene, tok);
+  const known = others.filter(o => canTarget(o.state) || (o.state === "undetected" && memory[o.id])), labels = { ...(t.labels ?? {}) };
+  const fresh = { ...assignLabels(labels, known.map(o => o.id), "E"), ...assignLabels(labels, [tok.id, ...allies.map(a => a.id)], "M") }; Object.assign(labels, fresh);
+  const { model } = await readMap(scene), a = tok.actor, h = a.hitPoints, square = squareOf(tok, scene);
+  const speeds = a.system.movement?.speeds ?? {}, extra = Object.fromEntries(["fly", "swim", "climb", "burrow"].filter(k => speeds[k]?.value).map(k => [k, speeds[k].value]));
+  const you = { label: labels[tok.id], name: tok.name, square, size: a.size, actionsLeft: actionsOf(a, combat), hp: `${h.value}/${h.max}`, speed: speeds.land?.value ?? 0, ...(Object.keys(extra).length ? { speeds: extra } : {}), conditions: (a.conditions?.active ?? []).map(c => c.value ? `${c.slug} ${c.value}` : c.slug), strikes: await strikesOf(a), abilities: abilitiesOf(a), tactics: tacticsOf(scene, tok) };
+  const cover = game.modules.get(VISIONER)?.active ? game.modules.get(VISIONER).api : null;
+  const packet = packetOf({ you, round: combat.round, memory, ground: groundAround(model, square, GROUND_RADIUS),
+    allies: allies.map(x => ({ label: labels[x.id], name: x.name, square: squareOf(x, scene), healthWord: wordsFor(x.actor), conditions: visibleConditions(conditionsOn(x.actor)) })),
+    others: others.map(o => ({ id: o.id, state: o.state, label: labels[o.id], square: o.square, size: o.token.actor.size, distance: o.distance, gear: gearOf(o.token.actor), conditions: visibleConditions(conditionsOn(o.token.actor)), healthWord: wordsFor(o.token.actor), cover: cover?.getAutoCoverState?.(tok.object, o.token.object) ?? "none" })) });
+  return { packet, labels: labelsOf(others.map(o => ({ id: o.id, state: o.state, label: labels[o.id] }))), fresh, others };
+}
+/* Keep what each ticked monster can perceive as the fight moves, so a monster's memory is where it last perceived someone and not where they stood on its own last turn. */
+async function noteWhatTheySense(combat) {
+  if (!onFightScene(combat)) return;
+  const t = turns(combat), change = {};
+  for (const c of combat.combatants) { const tok = c.token; if (!tok?.object || !tok.getFlag(ID, "run") || !hostile(tok) || tok.actor?.isDead) continue;
+    const mem = t.memory?.[tok.id] ?? {}, now = remember(mem, sense(combat, tok, mem), combat.round);
+    for (const [id, m] of Object.entries(now)) change[`memory.${tok.id}.${id}`] = m; }
+  if (Object.keys(change).length) await saveTurns(combat, change);
+}
+/** What this monster perceives right now, as a packet. GM only, and only on a page with the fight open: anywhere else the sight tests would read the wrong map. */
+export async function perceived(tokenId, combat = game.combat) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  const tok = combat?.scene?.tokens.get(tokenId); if (!tok) throw new Error("That token isn't in this fight's scene.");
+  if (!onFightScene(combat) || !tok.object) throw new Error("This page doesn't have the fight's map open, so it can't tell.");
+  return (await buildPacket(combat, tok)).packet;
+}
+
 /* ---------- a turn starts ---------- */
 /* pf2e.startTurn fires on Foundry's active GM only, which the runner may not be, so the runner watches the Combat itself. The guard is by round and
    combatant, not turn number: Workbench moves a PC's initiative at 0 HP, which changes the turn number in the middle of a monster's turn. */
@@ -53,15 +132,20 @@ async function onTurnChange(combat) {
     await new Promise(r => setTimeout(r, SETTLE_MS));   /* start-of-turn effects; how long is enough is still to be measured */
     if (combat.combatant?.id !== combatant.id) return;
     const opened = await ensureScene(combat);
-    const id = foundry.utils.randomID(8), others = combat.combatants.filter(c => c.token && !hostile(c.token) && c.actor?.isOfType?.("character")), labels = Object.fromEntries(others.map((c, i) => [`E${i + 1}`, c.token.id]));
-    await save(combat, id, { state: "requested", combatantId: combatant.id, tokenId: tok.id, round: combat.round, turn: combat.turn, labels, at: Date.now(), log: {}, note: opened ? null : cantOpen() });
+    const id = foundry.utils.randomID(8), base = { state: "requested", combatantId: combatant.id, tokenId: tok.id, round: combat.round, turn: combat.turn, at: Date.now(), log: {} };
+    if (!opened || !tok.object) return await save(combat, id, { ...base, labels: {}, note: cantOpen() });   /* no map, no packet: words instead of silent wrong answers */
+    let built; try { built = await buildPacket(combat, tok); } catch (e) { console.error(`${ID} | packet`, e); return await save(combat, id, { ...base, labels: {}, note: `I couldn't work out what ${tok.name} perceives (${e.message}). Play this turn yourself.` }); }
+    const change = { [`requests.${id}`]: { ...base, labels: built.labels, packet: built.packet, note: null } };
+    for (const [k, v] of Object.entries(built.fresh)) change[`labels.${k}`] = v;
+    for (const [k, v] of Object.entries(remember(turns(combat).memory?.[tok.id] ?? {}, built.others, combat.round))) change[`memory.${tok.id}.${k}`] = v;
+    await saveTurns(combat, change);
   } finally { starting.delete(key); }
 }
 const cantOpen = () => `${game.user.name} couldn't open the fight map. Play this turn yourself.`;
 /** The runner's answer to any change on the Combat. */
 export function onCombatUpdate(combat, change) {
   if (!isRunner()) return;
-  if ("turn" in change || "round" in change) onTurnChange(combat).catch(e => console.error(`${ID} | turn`, e));
+  if ("turn" in change || "round" in change) noteWhatTheySense(combat).catch(e => console.warn(`${ID} | memory`, e)).then(() => onTurnChange(combat)).catch(e => console.error(`${ID} | turn`, e));
   act(combat);
 }
 function act(combat) {
@@ -88,8 +172,10 @@ export async function onRunnerReady() {
 function gather(combat, req) {
   const scene = combat.scene, tok = scene.tokens.get(req.tokenId), actor = tok.actor;
   const strikes = (actor.system.actions ?? []).filter(a => a.type === "strike").map(a => ({ id: a.slug ?? a.item?.id, name: a.label, reach: actor.getReach({ action: "attack", weapon: a.item }), ranged: !!a.item?.isRanged, maxRange: a.item?.range?.max ?? null }));
-  const targets = {}; for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const t = scene.tokens.get(tokenId); if (t?.object && tok.object) targets[label] = { name: t.name, distance: tok.object.distanceTo(t.object) }; }
-  return { actions: 3, strikes, targets };
+  /* only what it perceived when asked, and still does: a plan can't name anything else */
+  const now = new Map(sense(combat, tok, turns(combat).memory?.[tok.id] ?? {}).map(o => [o.id, o])), targets = {};
+  for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && canTarget(o.state)) targets[label] = { name: o.token.name, distance: o.distance, flat: flatDC(o.state) }; }
+  return { actions: actionsOf(actor, combat), strikes, targets };
 }
 /** Hand a plan in. Any GM may call this; the runner checks it. */
 export async function submitPlan(combat, requestId, plan) {
@@ -153,14 +239,19 @@ async function runStrike(combat, id, i, step, tok, target) {
   const record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {};
   const strike = (tok.actor.system.actions ?? []).find(a => (a.slug ?? a.item?.id) === step.item); if (!strike) throw new Error(`${tok.name} has no ${step.itemName} now.`);
   for (let guard = 0; guard < 8; guard++) {
-    const now = nextAction(get(), { apply: applySetting() });
+    const now = nextAction(get(), { apply: applySetting(), flat: step.flat ?? 0 });
     if (now === "next") return "next";
     if (now === "ask") return "ask";
     if (!stepGate(now, id)) return "stopped";
     if (now !== "apply" && !(await ensureScene(combat) && tok.object && target.object)) throw new Error(cantOpen());   /* applying needs no canvas */
     pending = { tokenId: tok.id, waiters: new Map() };
     try {
-      if (now === "attack") {
+      if (now === "flat") {
+        await record({ flatStarted: true });
+        const roll = await watched(async () => { const r = await new Roll("1d20").evaluate(); await r.toMessage({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), flavor: `Flat check, DC ${step.flat}: can ${tok.name} find its target?` }); return r; });
+        await record({ flat: { dc: step.flat, total: roll.total, ok: roll.total >= step.flat } });
+        if (roll.total < step.flat) await save(combat, id, { note: `${step.itemName} at ${step.targetName} failed its DC ${step.flat} flat check (${roll.total}). The action is spent.` });
+      } else if (now === "attack") {
         aimAt(target); await record({ started: true });
         const { message, roll } = await watched(async () => { const card = waitFor("attack-roll"), roll = await strike.variants[step.variant].roll({ event: clickWith("showCheckDialogs"), target: target.object }); return { message: await card, roll }; });
         await record({ attack: { message: message.id, degree: roll?.degreeOfSuccess ?? message.rolls?.[0]?.degreeOfSuccess ?? 0 } });

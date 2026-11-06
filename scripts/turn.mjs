@@ -3,7 +3,7 @@
 export const COSTS = { strike: 1, none: 0 };
 
 /** Check a plan against what the glue gathered. Returns { ok: true, steps } with each step resolved, or { ok: false, reason }.
-    ctx: { actions, strikes: [{ id, name, reach, ranged, maxRange }], targets: { label: { distance, name } } } */
+    ctx: { actions, strikes: [{ id, name, reach, ranged, maxRange }], targets: { label: { distance, name, flat } } }. Only what the monster perceives is in targets. */
 export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
   let left = ctx.actions, attacks = 0; const steps = [];
@@ -17,7 +17,7 @@ export function checkPlan(plan, ctx) {
     const t = ctx.targets[step.target]; if (!t) return { ok: false, reason: `${at}: it doesn't know of "${step.target}".` };
     if (s.ranged) { if (s.maxRange && t.distance > s.maxRange) return { ok: false, reason: `${at}: ${t.name} is ${t.distance} ft away, out of range of ${s.name} (${s.maxRange} ft).` }; }
     else if (t.distance > s.reach) return { ok: false, reason: `${at}: ${t.name} is ${t.distance} ft away, out of reach of ${s.name} (${s.reach} ft).` };
-    steps.push({ do: "strike", item: s.id, itemName: s.name, target: step.target, targetName: t.name, variant: Math.min(attacks, 2) });
+    steps.push({ do: "strike", item: s.id, itemName: s.name, target: step.target, targetName: t.name, variant: Math.min(attacks, 2), flat: t.flat ?? 0 });
     attacks++;
   }
   return { ok: true, steps };
@@ -25,11 +25,12 @@ export function checkPlan(plan, ctx) {
 /** A resolved step in plain words, for the card. */
 export function describeStep(s) {
   if (s.do === "none") return "Does nothing.";
-  return `${s.itemName} at ${s.targetName}${s.variant ? `, attack ${s.variant + 1}` : ""}.`;
+  return `${s.itemName} at ${s.targetName}${s.variant ? `, attack ${s.variant + 1}` : ""}${s.flat ? `, after a DC ${s.flat} flat check` : ""}.`;
 }
 /** What to do next with a Strike step, from what its record says already happened. Nothing is ever repeated: when the record can't tell
     whether something finished, the answer is "ask" and Rhea looks. */
-export function nextAction(rec = {}, { apply = false } = {}) {
+export function nextAction(rec = {}, { apply = false, flat = 0 } = {}) {
+  if (flat) { if (!rec.flatStarted) return "flat"; if (!rec.flat) return "ask"; if (!rec.flat.ok) return "next"; }   /* a failed flat check spends the action on nothing */
   if (!rec.started) return "attack";
   if (!rec.attack) return "ask";
   if (rec.attack.degree < 2) return "next";
