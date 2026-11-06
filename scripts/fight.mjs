@@ -30,9 +30,12 @@ function stepGate(stage, id) { return Hooks.call(`${ID}.step`, stage, id) !== fa
 /** The runner needs the fight on its canvas: reach, distance and targets all use it, and Visioner answers "observed" for tokens it can't find. Anyone
     activating another scene pulls this page along, so it's checked before everything that uses the canvas. */
 async function ensureScene(combat) {
-  if (canvas.scene?.id === combat.scene?.id && canvas.ready) return true;
-  try { await within(combat.scene.view(), SCENE_MS, "Opening the fight map took too long."); } catch (e) { console.error(`${ID} | scene`, e); return false; }
-  return canvas.scene?.id === combat.scene?.id;
+  for (let tries = 0; tries < 3; tries++) {   /* a view can lose to an activation already on its way, so look again */
+    if (canvas.scene?.id === combat.scene?.id && canvas.ready) return true;
+    try { await within(combat.scene.view(), SCENE_MS, "Opening the fight map took too long."); } catch (e) { console.error(`${ID} | scene`, e); return false; }
+    await new Promise(r => setTimeout(r, 500));
+  }
+  return canvas.scene?.id === combat.scene?.id && canvas.ready;
 }
 const within = (work, ms, words) => { let timer; return Promise.race([work, new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(words)), ms); })]).finally(() => clearTimeout(timer)); };
 
@@ -145,7 +148,7 @@ async function runStrike(combat, id, i, step, tok, target) {
     if (now === "next") return "next";
     if (now === "ask") return "ask";
     if (!stepGate(now, id)) return "stopped";
-    if (!await ensureScene(combat)) throw new Error(cantOpen());
+    if (now !== "apply" && !(await ensureScene(combat) && tok.object && target.object)) throw new Error(cantOpen());   /* applying needs no canvas */
     pending = { tokenId: tok.id, waiters: new Map() };
     try {
       if (now === "attack") {
