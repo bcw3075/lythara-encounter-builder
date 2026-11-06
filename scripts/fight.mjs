@@ -14,7 +14,7 @@ export function runnerProblem() {
   const u = runner(); if (!u) return `There's no account called ${runnerName()}, so monster turns wait. Change it in the module's settings, or play this turn yourself.`;
   return u.active ? null : `${u.name} is offline, so monster turns wait. They carry on when it's back, or play this turn yourself.`;
 }
-const turns = combat => combat.getFlag(ID, "turns") ?? { requests: {} };
+const turns = combat => ({ requests: {}, ...combat.getFlag(ID, "turns") });   /* memory can land before the first request */
 export const applySetting = () => game.settings.get(ID, "applyMonsterDamage");
 /* frequent writes: don't make the tracker redraw for each one. Two browsers write here, so only the change goes: a whole copy of the request could
    put back what the other just wrote. */
@@ -69,7 +69,8 @@ function sense(combat, tok, memory = {}) {
 const healthWords = () => healthEntries(game.settings.get("pf2e-hud", "healthStatusData"), game.i18n.localize("pf2e-hud.health-status.default"));
 const wordsFor = actor => { try { return healthWord(actor.hitPoints ?? {}, healthWords()); } catch { const h = actor.hitPoints; return h?.max ? (h.value <= 0 ? "Down" : h.value >= h.max ? "Unhurt" : "Hurt") : null; } };   /* PF2e HUD may be off or renamed its setting */
 function gearOf(actor) {
-  const show = i => i.isIdentified === false ? (i.system.identification?.unidentified?.name ?? i.name) : i.name;
+  /* what it looks like: never a rune or an item's hidden name. PF2e builds "+1 Striking Longsword" from the runes; the source name is the plain one. */
+  const show = i => i.isIdentified === false ? (i.system.identification?.unidentified?.name ?? i._source?.name ?? i.name) : (i._source?.name ?? i.name);
   return [...(actor.itemTypes?.weapon ?? []).filter(i => i.system.equipped?.carryType === "held"), ...(actor.itemTypes?.shield ?? []).filter(i => i.system.equipped?.carryType === "held"), ...(actor.itemTypes?.armor ?? []).filter(i => i.isWorn)].map(show);
 }
 function actionsOf(actor, combat) {
