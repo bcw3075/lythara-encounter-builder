@@ -39,6 +39,10 @@ export function nextAction(rec = {}, { apply = false } = {}) {
   if (!rec.applying) return "apply";
   return rec.applied ? "next" : "ask";
 }
+/** This turn's unfinished request. By round and combatant, not turn number: an initiative change can move the number during the turn. */
+export function currentOf(requests = {}, round, combatantId) {
+  return Object.entries(requests).map(([id, r]) => ({ id, ...r })).filter(r => !["done", "manual"].includes(r.state) && r.round === round && r.combatantId === combatantId).at(-1) ?? null;
+}
 /** The note to show between turns: only the latest finished turn's, so an old warning never outlives the turn it was about. */
 export function latestNote(requests = {}) {
   const fin = Object.values(requests).filter(r => ["done", "manual"].includes(r.state)).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));

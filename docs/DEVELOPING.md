@@ -13,7 +13,7 @@ How the code works and why, for anyone changing it. What it does for a GM is in 
 | `scripts/place.mjs` | `layout`: scoring and placement; `nearestFree`, `hiddenNextTo` | no |
 | `scripts/builder.mjs` | Gathers documents (`readMap`), resolves creatures, `prepare` (plans, creates nothing), `place`, `clear`, `prepareReplace`, `applyReplace`, previews | yes |
 | `scripts/turn.mjs` | A monster's turn as data: `checkPlan` (legality), `describeStep`, `nextAction` (where a step stands), `damageOptions` | no |
-| `scripts/fight.mjs` | Turn requests on the Combat flag, `submitPlan`, `judge`, `doIt`, carrying out a Strike, applying damage | yes |
+| `scripts/fight.mjs` | The runner, turn requests on the Combat flag, `submitPlan`, `judge`, `doIt`, carrying out a Strike, applying damage | yes |
 | `scripts/ui/build.mjs` | The Build Encounter window and the preview loop | yes |
 | `scripts/ui/turns.mjs` | The Monster Turns window: who's ticked, and the plan card | yes |
 | `scripts/main.mjs` | Settings, the left-bar group "Encounters", hooks, API | yes |
@@ -26,8 +26,8 @@ All flags use the module id as their scope: a made-up scope throws.
 - **Scene:** `brief` (the last brief, or one sent from a chat), `build` (`id`, `seed`, `threat`, `rev`, `at`, `entry` the journal id), `design` (a request from Ask Angel with the map summary).
 - **Tokens:** `built`, `key`, `group`, `role`, `run`, `auto`, `model`, `opus`; `cache` on a cache's token. Per token, not actor, so each monster has its own checkbox later.
 - **Actors, journal, notes:** `built`. Folders carry `own`.
-- **Combat:** `turns.requests`, one per monster turn: `state`, `combatantId`, `tokenId`, `round`, `turn`, `labels` (E1 and so on, to token ids), `plan`, `steps`, `verdict`, `note`, and `log` by step. It goes with the fight.
-- **World settings:** `partySize` and `applyMonsterDamage` (in the settings menu), `treasure` (`manual` by level, `builds` by id).
+- **Combat:** `turns.requests`, one per monster turn: `state`, `combatantId`, `tokenId`, `round`, `turn`, `labels` (E1 and so on, to token ids), `plan`, `steps`, `verdict`, `note`, `go`, `hold`, and `log` by step. It goes with the fight.
+- **World settings:** `partySize`, `applyMonsterDamage` and `runner` (in the settings menu), `treasure` (`manual` by level, `builds` by id).
 - **Every document a build makes carries `built` = its id.** `clear` deletes only those, by id, so hand-placed things and Survey Sheet's documents stay. A build's actors stay if a token on any scene still uses them.
 
 ## Reading the map
@@ -68,17 +68,25 @@ All flags use the module id as their scope: a made-up scope throws.
 - **Survey Sheet's redraw** removes only its own `enc` documents, and its Extend shifts everything else, so builder documents move with the map.
 
 ## A monster's turn (so far: Strikes)
-- **A turn starts:** `pf2e.startTurn`, on the active GM only, for a token with `run`. It fires for the first turn of a fight too. A short wait, then a request in state `requested`. How long start-of-turn effects really need is still to be measured.
-- **The plan:** any GM may call `api.fight.submitPlan`; the active GM runs `judge`, which needs the canvas on the fight scene for reach and distance. `ready` shows the card; Do it calls `doIt`.
+- **The runner does the work.** The `runner` setting names one GM account, Claude Bridge by default. Only that account's page creates requests, judges plans and carries out turns. Any other GM's Do it writes `go` on the request and the runner picks it up from `updateCombat`. If the runner is offline or doesn't exist, `runnerProblem` gives the words, the card shows them, Do it is disabled, and nothing runs anywhere else. Foundry's active GM can't be chosen, which is why the module names its own. PF2e's and Workbench's own automations still run on the active GM.
+- **A turn starts:** the runner sees `turn` or `round` change in `updateCombat`, because `pf2e.startTurn` fires on the active GM only. Also when a monster is ticked during its own turn, and when the runner's page loads. A short wait, then a request in state `requested`. How long start-of-turn effects really need is still to be measured.
+- **By round and combatant, not turn number.** Workbench moves a PC's initiative at 0 HP, which changes `combat.turn` in the middle of a monster's turn. `currentOf` and the guard in `onTurnChange` use the combatant so that doesn't start a second request or hide the card.
+- **The scene:** `ensureScene` opens the fight scene on the runner before anything that uses the canvas, because activating any scene pulls that page along and Visioner answers "observed" for tokens it can't find. A view takes about 1 to 3 s. Map jobs (a sheet redraw, the exploration carry) don't move the view and a Strike during one wasn't slowed (measured 2026-11-05). If it can't open, the card says so.
+- **The plan:** any GM may call `api.fight.submitPlan`; the runner's `judge` checks it. `ready` shows the card.
 - **Only the module rolls damage.** Workbench's auto-damage would roll on the card author's browser, with the dialog if that user has dialogs on. So `preCreateChatMessage` adds Workbench's own `noAutoDamageRoll` flag to this module's attack cards, and the module always rolls. One roller, one card, whatever anyone's settings. If Workbench drops that flag you'd see a second damage card, but not double HP, because Workbench never applies damage. Test D1 catches it; re-run D1 after any PF2e, Workbench or Toolbelt update.
-- **No dialogs:** a click event with `shiftKey` equal to the user's dialog setting, because PF2e flips on Shift. `skipDialog` doesn't work. `target` is passed, so `game.user.targets` stays alone.
+- **No dialogs:** a click event with `shiftKey` equal to the user's dialog setting, because PF2e flips on Shift. `skipDialog` doesn't work.
+- **A prompt nobody can click:** a roll waits for its dialog for ever, and nobody can click the runner's page. `watched` gives each stage `STEP_MS`, stops at once if a window that looks like a dialog appears, closes what appeared (a closed Modifier dialog makes the roll return with no card), and the record then says the stage may not have finished, so it goes to Rhea with the window's title and nothing repeats. PF2e's Modifier dialog is a v1 app in `ui.windows`, not in `foundry.applications.instances`, so both are watched.
+- **Real targets:** `aimAt` targets on the runner's own account before each attack and damage roll, and `stopAiming` clears them after the turn. Each account has its own targets, so a GM's are never touched. That clears Workbench's targeting reminder and gives Toolbelt's Target Helper rows on the damage card. Others see the runner's target mark on the token during the turn.
 - **Applying** copies PF2e's Damage button (`applyFromCard`) for a named target: contextual clone, roll options from the card, item, outcome. It doesn't read effects that count only for one hit, because PF2e's `extractEphemeralEffects` isn't exported.
 - **One run at a time:** `judge` and `doIt` each guard by request id in memory. With Auto on, the `updateCombat` hook and the submitter both reached `judge` and rolled the first attack twice, which the D1 matrix didn't catch because it didn't use Auto. D1 now includes it.
 - **Only this turn on the card:** `currentRequest` is this round and turn's unfinished request, and `latestNote` only the latest finished turn's note. Both came from an old turn showing up as if it were current: a stopped request after Play it myself, and a 0 HP warning while the hero stood at 5.
-- **Targets stay alone,** which has two costs: no Target Helper rows on its cards, and Workbench's `reminderTargeting` shows "Please target before you attack." on each attack at "reminder", and should block the attack at "mustTarget" (read in its code, not run). The plan has this as an open question.
 - **Never twice:** `save` writes each stage to `log` before moving on, and `nextAction` reads it. `started` with no attack, `damageStarted` with no card, or `applying` with no `applied` means it can't tell, so the card stops and asks. A reload at any point resumes from there through Do it.
 - **The `lythara-encounter-builder.step` hook** fires before each stage; return false to stop there. The reload tests use it.
-- **Saves use `{ render: false }`** so each stage doesn't redraw the tracker. Whether that's fully quiet with PF2e HUD open isn't checked yet.
+- **Saves use `{ render: false }`** so each stage doesn't redraw the tracker. Whether that's fully quiet with PF2e HUD open isn't checked yet. **Saves send only the change:** two browsers write to a request now, so a whole copy could put back what the other just wrote.
+- **A reload:** on the runner's `ready`, a request still `running` becomes `stopped` with a note, and Do it carries on from the record. A `go` or a plan left waiting is picked up.
+
+## Hooks must return nothing
+Core fires `canvasReady` with `Hooks.call`, where a handler returning `false` stops every later handler, from every module. 0.1.0 to 0.2.4 had `c => markReady(id)`, and `Set#delete` returns false for an id it doesn't hold, so on every client the other 21 modules' `canvasReady` handlers never ran. Every hook here has a block body, and `unit.mjs` fails if one doesn't.
 
 ## Tests
 - **Local:** see `tools/test/README.md`.
