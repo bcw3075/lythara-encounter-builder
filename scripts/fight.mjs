@@ -9,7 +9,7 @@ export const applySetting = () => game.settings.get(ID, "applyMonsterDamage");
 /* frequent writes: don't make the tracker redraw for each one */
 async function save(combat, id, change) { await combat.update({ [`flags.${ID}.turns.requests.${id}`]: foundry.utils.mergeObject(foundry.utils.deepClone(turns(combat).requests[id] ?? {}), change) }, { render: false, [ID]: { quiet: true } }); }
 const request = (combat, id) => turns(combat).requests[id];
-export const currentRequest = combat => Object.entries(turns(combat).requests).map(([id, r]) => ({ id, ...r })).filter(r => !["done", "manual"].includes(r.state)).at(-1) ?? null;
+export const currentRequest = combat => Object.entries(turns(combat).requests).map(([id, r]) => ({ id, ...r })).filter(r => !["done", "manual"].includes(r.state) && r.round === combat.round && r.turn === combat.turn).at(-1) ?? null;   /* only this turn's: an old unfinished one stays out of the way */
 /** The last finished turn, if it left something for the GM to read. */
 export const lastNote = combat => Object.entries(turns(combat).requests).map(([id, r]) => ({ id, ...r })).filter(r => r.state === "done" && r.note).at(-1) ?? null;
 const hostile = t => t.actor?.isOfType?.("npc");
