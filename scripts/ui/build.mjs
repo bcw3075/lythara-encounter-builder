@@ -76,18 +76,18 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
       if (r) { this.close(); ui.notifications.info(`Placed ${r.tokens} creatures: ${r.threat.rating}, ${r.threat.xp} XP.`); for (const w of r.warnings) ui.notifications.warn(w); } else await this.maximize(); }
   }
 }
-function describe(prep) {
+function describe(prep, moving) {
   const w = prep.warnings.length ? `<ul>${prep.warnings.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "", p = prep.plan.placed;
-  return `<p><b>${esc(prep.threat.rating)}</b>, ${prep.threat.xp} XP for ${prep.threat.size} PCs of level ${prep.threat.level}. ${p.length} creatures. Treasure: ${prep.treasure.value} gp. Layout ${prep.seed}.</p>${prep.treasure.note ? `<p>${esc(prep.treasure.note)}</p>` : ""}${w}<p>The coloured squares are visible to GMs only.</p>`;
+  return `<p><b>${esc(prep.threat.rating)}</b>, ${prep.threat.xp} XP for ${prep.threat.size} PCs of level ${prep.threat.level}. ${p.length} creatures.${moving ? "" : ` Treasure: ${prep.treasure.value} gp.`} Layout ${prep.seed}.</p>${prep.treasure.note && !moving ? `<p>${esc(prep.treasure.note)}</p>` : ""}${w}<p>The coloured squares are visible to GMs only.</p>`;
 }
 /** Show a layout as GM-only drawings until the GM places it or cancels. "Try another layout" changes only the seed. */
-async function previewLoop(scene, makePrep, apply, title) {
+async function previewLoop(scene, makePrep, apply, title, moving = false) {
   if (canvas.scene?.id !== scene.id) await scene.view();
   let seed = null;
   try {
     for (;;) {
       const prep = await makePrep(seed); seed = prep.seed; await clearPreview(scene); await showPreview(prep);
-      const choice = await foundry.applications.api.DialogV2.wait({ window: { title }, position: { width: 420, left: 110, top: 60 }, modal: false, rejectClose: false, content: describe(prep), buttons: [{ action: "place", label: "Place it", icon: "fa-solid fa-check", default: true }, { action: "again", label: "Try another layout", icon: "fa-solid fa-shuffle" }, { action: "cancel", label: "Cancel", icon: "fa-solid fa-xmark" }] });
+      const choice = await foundry.applications.api.DialogV2.wait({ window: { title }, position: { width: 420, left: 110, top: 60 }, modal: false, rejectClose: false, content: describe(prep, moving), buttons: [{ action: "place", label: "Place it", icon: "fa-solid fa-check", default: true }, { action: "again", label: "Try another layout", icon: "fa-solid fa-shuffle" }, { action: "cancel", label: "Cancel", icon: "fa-solid fa-xmark" }] });
       if (choice === "again") { seed += 1; continue; }
       if (choice !== "place") return null;
       return await apply(prep);
@@ -95,7 +95,7 @@ async function previewLoop(scene, makePrep, apply, title) {
   } finally { await clearPreview(scene); }
 }
 export async function askReplace(scene) {
-  const r = await previewLoop(scene, s => prepareReplace(scene, s), applyReplace, "Move them here?");
+  const r = await previewLoop(scene, s => prepareReplace(scene, s), applyReplace, "Move them here?", true);
   if (r) { ui.notifications.info(`Moved ${r.moved} creatures.`); for (const w of r.warnings) ui.notifications.warn(w); }
 }
 export async function askClear(scene) {
