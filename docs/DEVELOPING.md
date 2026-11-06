@@ -44,13 +44,14 @@ All flags use the module id as their scope: a made-up scope throws.
 ## Placing
 `layout` scores every square that fits for each creature in role order (guard, brute, ambusher, beast, ranged, caster), so the back line can read where the front went. Same model, creatures and seed give the same layout: "Try another layout" only adds 1 to the seed.
 - **First a strict pass:** a creature that doesn't start alert avoids every square the party can see. If nothing fits, a second pass allows them and warns.
+- **A guard stays by what it guards** (within `GUARD_REACH` squares), in view or not, and the warning says so. Otherwise a camp in plain sight sent its guard to the far side of the map.
 - **`MOOD_WINDOW`** sets the walking distance from the entry: first contact by about round 2. These are starting points to judge on samples.
 - **Never** in a wall, on a token, on a footprint that doesn't fit, in deep water without a swim speed, or within 15 ft of walking from the entry.
 
 ## The numbers
 - **XP is PF2e's `calculateXP`.** Before placing, levels come from `adjustedLevel`; after placing, from the real tokens. If the rating changes the report says so.
 - **Party level is never taken silently from the Party actor,** which reports a level no member has. `suggestedLevel` is the sheets' most common level, and the window shows the sheets and asks.
-- **Treasure:** the brief's list first; otherwise Treasure by Encounter (GM Core, https://2e.aonprd.com/Rules.aspx?ID=2738) with Treasure by Level's totals (https://2e.aonprd.com/Rules.aspx?ID=2656). Trivial has no column, so it places none. `chooseTreasure` keeps it sensible: nothing for animals and other things with `NO_CARRY` traits, a cache for a lair. Items are common, within a level of the party's, consumables from the equipment pack; a lair's goods come from KCTG Trade Goods when active.
+- **Treasure:** the brief's list first; otherwise Treasure by Encounter (GM Core, https://2e.aonprd.com/Rules.aspx?ID=2738) with Treasure by Level's totals (https://2e.aonprd.com/Rules.aspx?ID=2656). Trivial has no column, so it places none. `chooseTreasure` keeps it sensible: nothing for animals and other things with `NO_CARRY` traits, a cache for a lair. Items are common, within a level of the party's: potions, elixirs, talismans and oils from the equipment pack; a lair's goods come from KCTG Trade Goods when active.
 - **`chooseTreasure` doesn't pick permanent items.** The rule borrows their value from other encounters, so those are the GM's or the brief's to place.
 
 ## Placing documents

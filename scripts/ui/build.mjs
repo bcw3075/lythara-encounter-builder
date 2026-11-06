@@ -4,7 +4,7 @@ import { adjustedLevel, partySizeNote, treasureFor } from "../budget.mjs";
 import { esc } from "../journal.mjs";
 import { ID, applyReplace, clear, clearPreview, findCreatures, ledgerFor, partyLevels, partySize, place, prepare, prepareReplace, setManualTreasure, showPreview, suggestedLevel, summary, threatOf } from "../builder.mjs";
 
-const STYLE = `.leb-build .window-content{overflow-y:auto!important;display:block}.leb-build fieldset{margin:0 0 8px;padding:6px 8px}.leb-build .leb-row{display:grid;grid-template-columns:1fr 54px 70px 88px 78px 24px 24px;gap:4px;align-items:center;margin-bottom:3px}.leb-build .leb-row b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.leb-build .leb-row input[type=number]{width:100%}.leb-build .leb-results{max-height:150px;overflow-y:auto;margin-top:4px}.leb-build .leb-results button{display:block;width:100%;text-align:left;line-height:1.5;height:auto;margin-bottom:1px}.leb-build .leb-warn{color:#b04020}.leb-build .leb-num{font-weight:600}.leb-build textarea{width:100%;min-height:42px}.leb-build .leb-two{display:grid;grid-template-columns:1fr 1fr;gap:6px}.leb-build .leb-actions{display:flex;gap:6px;position:sticky;bottom:0;padding:6px 0;background:var(--color-cool-5-75,#1b1b1f)}.leb-build .leb-actions button{flex:1}.leb-build label{font-size:.9em}`;
+const STYLE = `.leb-build .window-content{overflow:hidden!important;padding:0;display:block}.leb-build form.leb-form{display:flex;flex-direction:column;height:100%}.leb-build .leb-scroll{flex:1;overflow-y:auto;padding:8px 12px}.leb-build fieldset{margin:0 0 8px;padding:6px 8px}.leb-build .leb-row{display:grid;grid-template-columns:1fr 54px 70px 88px 78px 24px 24px;gap:4px;align-items:center;margin-bottom:3px}.leb-build .leb-row b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.leb-build .leb-row input[type=number]{width:100%}.leb-build .leb-results{max-height:150px;overflow-y:auto;margin-top:4px}.leb-build .leb-results button{display:block;width:100%;text-align:left;line-height:1.5;height:auto;margin-bottom:1px}.leb-build .leb-warn{color:#e07050}.leb-build .leb-num{font-weight:600}.leb-build textarea{width:100%;min-height:42px}.leb-build .leb-two{display:grid;grid-template-columns:1fr 1fr;gap:6px}.leb-build .leb-actions{display:flex;gap:6px;padding:8px 12px;border-top:1px solid #0006}.leb-build .leb-actions button{flex:1}.leb-build label{font-size:.9em}`;
 const ensureStyle = () => { if (!document.getElementById("leb-style")) { const s = document.createElement("style"); s.id = "leb-style"; s.textContent = STYLE; document.head.append(s); } };
 const options = (list, cur, label = v => v) => list.map(v => `<option value="${esc(v)}"${v === cur ? " selected" : ""}>${esc(label(v))}</option>`).join("");
 
@@ -22,7 +22,7 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
     await this.rowFacts(); ensureStyle();
     const b = this.brief, t = this.threat(), lv = b.partyLevel, line = ledgerFor(lv), gp = t ? treasureFor(lv, t.rating) : 0, built = this.scene.getFlag(ID, "build"), sizeNote = partySizeNote(partySize());
     const rows = b.creatures.map((c, k) => { const i = this.rowInfo.get(c.uuid); return `<div class="leb-row" data-row="${k}"><b title="${esc(c.uuid)}">${esc(c.name)}${i ? ` (${i.level})` : ""}</b><input type="number" name="count" min="1" max="30" value="${c.count}" title="How many"><select name="adjust" title="Adjustment">${options(ADJUSTMENTS, c.adjust, v => v || "normal")}</select><select name="role" title="Role">${options(ROLES, c.role)}</select><select name="state" title="How it starts">${options(STATES, c.state)}</select><input type="checkbox" name="run" ${c.run ? "checked" : ""} title="Angel runs this (used once monster turns exist)"><a data-action="removeRow" title="Remove"><i class="fa-solid fa-xmark"></i></a></div><textarea name="tactics" data-row="${k}" placeholder="Tactics for ${esc(c.name)} (goes on the Tactics page)">${esc(c.tactics)}</textarea>`; }).join("");
-    return `<form>
+    return `<form class="leb-form"><div class="leb-scroll">
       ${built ? `<p class="leb-warn">This map already has a build. Placing replaces what that build made. Anything placed by hand stays.</p>` : ""}
       ${this.fromChat ? `<p>Brief filled in from what's stored on this map. You can still change it.</p>` : ""}
       ${this.message ? `<p class="leb-num">${esc(this.message)}</p>` : ""}
@@ -42,10 +42,10 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
         <div class="form-group"><label>Source</label><select name="treasureMode">${b.treasure.length ? `<option value="list"${b.treasureMode === "list" ? " selected" : ""}>The brief's list (${b.treasure.length})</option>` : ""}<option value="table"${b.treasureMode === "table" ? " selected" : ""}>Treasure by Encounter: ${gp} gp</option><option value="none"${b.treasureMode === "none" ? " selected" : ""}>None</option></select></div>
         <p>Level ${lv}: ${line.placed} gp placed by builds and ${line.manual} gp added by hand, of ${line.total} gp for the level. <span class="${line.left < gp ? "leb-warn" : ""}">${Math.max(0, line.left)} gp left.</span></p>
         <div class="form-group"><label>Added by hand at this level (gp)</label><input type="number" name="manual" min="0" value="${line.manual}"></div></fieldset>
-      <div class="leb-actions"><button type="button" data-action="askAngel"><i class="fa-solid fa-comments"></i> Ask Angel</button><button type="button" data-action="preview"><i class="fa-solid fa-eye"></i> Preview</button></div>
+      </div><div class="leb-actions"><button type="button" data-action="askAngel"><i class="fa-solid fa-comments"></i> Ask Angel</button><button type="button" data-action="preview"><i class="fa-solid fa-eye"></i> Preview</button></div>
     </form>`;
   }
-  _replaceHTML(html, content) { const top = content.scrollTop; content.innerHTML = html; content.scrollTop = top; }
+  _replaceHTML(html, content) { const top = content.querySelector(".leb-scroll")?.scrollTop ?? 0; content.innerHTML = html; const box = content.querySelector(".leb-scroll"); if (box) box.scrollTop = top; }
   /* whatever the form holds goes into the brief at once, so a re-render loses nothing */
   readForm(el) {
     const n = el.name, row = el.closest("[data-row]")?.dataset.row ?? el.dataset.row, c = row === undefined ? null : this.brief.creatures[+row];
@@ -70,7 +70,10 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
     if (a === "addResult") { const r = this.results[+el.dataset.k]; if (r) { this.brief.creatures.push({ uuid: r.uuid, name: r.name, count: 1, adjust: "", role: "brute", state: this.brief.mood === "ambush" ? "hidden" : "alert", tactics: "", anchor: "", run: true, opus: false }); this.results = []; this.render(); } }
     else if (a === "removeRow") { this.brief.creatures.splice(+el.closest("[data-row]").dataset.row, 1); this.render(); }
     else if (a === "askAngel") { const s = await summary(this.scene); await this.scene.setFlag(ID, "design", { requested: Date.now(), summary: s }); this.message = `Asked. In your chat, say "build an encounter on ${this.scene.name}". The brief appears here when it's sent.`; this.render(); }
-    else if (a === "preview") { const r = await previewLoop(this.scene, s => prepare(this.scene, this.brief, { seed: s }), place, "Build this?"); if (r) { this.close(); ui.notifications.info(`Placed ${r.tokens} creatures: ${r.threat.rating}, ${r.threat.xp} XP.`); for (const w of r.warnings) ui.notifications.warn(w); } }
+    else if (a === "preview") { /* out of the way while she looks at the map */
+      await this.minimize();
+      const r = await previewLoop(this.scene, s => prepare(this.scene, this.brief, { seed: s }), place, "Build this?");
+      if (r) { this.close(); ui.notifications.info(`Placed ${r.tokens} creatures: ${r.threat.rating}, ${r.threat.xp} XP.`); for (const w of r.warnings) ui.notifications.warn(w); } else await this.maximize(); }
   }
 }
 function describe(prep) {

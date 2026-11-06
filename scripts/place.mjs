@@ -3,6 +3,7 @@
 const hashf = (a, b, c) => { let h = (a * 374761393 + b * 668265263 + c * 2147483647) | 0; h = (h ^ (h >>> 13)) * 1274126177 | 0; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 /* feet of walking from the party's entry: first contact by about round 2 */
 export const MOOD_WINDOW = { ambush: [25, 55], chase: [30, 60], standoff: [50, 90], patrol: [60, 110], lair: [30, 200], default: [40, 80] };
+const GUARD_REACH = 5;   /* squares from what it guards */
 const ORDER = { guard: 0, brute: 1, ambusher: 2, beast: 3, ranged: 4, caster: 5 };
 const windowScore = (d, [lo, hi]) => d < lo ? Math.max(-1, 1 - (lo - d) / Math.max(10, lo) * 2) : d > hi ? Math.max(-1, 1 - (d - hi) / 40) : 1;
 
@@ -25,9 +26,12 @@ export function layout(model, creatures, { seed = 1, mood = "ambush", extraAncho
     if (c.role === "guard" && !anchor) warnings.push(`${c.label}: nothing on this map to guard, so it stands like a brute.`);
     const inView = c.state === "alert";
     let best = null;
-    for (const strict of [true, false]) {
+    /* a guard stays by what it guards even if that's in view: out of view comes second. Last resort: anywhere. */
+    const keepNear = anchor && c.role === "guard";
+    for (const [strict, near] of keepNear ? [[true, true], [false, true], [false, false]] : [[true, false], [false, false]]) {
       for (let j = 0; j <= rows - n; j++) for (let i = 0; i <= cols - n; i++) {
         if (!fits(i, j, n, { swim: c.swim, taken })) continue;
+        if (near && Math.hypot(i + n / 2 - anchor.at[0] - .5, j + n / 2 - anchor.at[1] - .5) > GUARD_REACH) continue;
         const k = idx(i, j), d = approach[k]; if (!Number.isFinite(d) || d < 15) continue;
         const seen = exposure[k]; if (strict && !inView && seen > 0) continue;
         const x = i + n / 2, y = j + n / 2, w = windowScore(d, win), cv = cover[k], cost = costs[k]; let s = 0;
@@ -51,7 +55,7 @@ export function layout(model, creatures, { seed = 1, mood = "ambush", extraAncho
         s += hashf(seed, k, cIndex) * .25;
         if (!best || s > best.s) best = { s, i, j, seen };
       }
-      if (best) { if (!strict) warnings.push(`${c.label}: every free square is in the party's first view.`); break; }
+      if (best) { if (best.seen > 0 && c.state !== "alert") warnings.push(keepNear ? `${c.label}: what it guards is in the party's first view, so it is too.` : `${c.label}: every free square is in the party's first view.`); break; }
     }
     if (!best) { warnings.push(`${c.label}: no room for it on this map.`); continue; }
     for (let a = 0; a < n; a++) for (let b = 0; b < n; b++) taken.add(idx(best.i + a, best.j + b));

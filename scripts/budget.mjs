@@ -28,7 +28,7 @@ export const claimDiffers = (claimed, xp) => claimed !== null && claimed !== und
 export const partySizeNote = size => size === 4 ? "" : `Party size is ${size}, not 4. For other sizes PF2e adds 15 XP per PC to the Low budget and Archives of Nethys lists 20. These numbers are PF2e's.`;
 
 const hashf = (a, b) => { let h = (a * 374761393 + b * 668265263) | 0; h = (h ^ (h >>> 13)) * 1274126177 | 0; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
-const CONSUMABLE = new Set(["potion", "elixir", "talisman", "oil", "other"]);
+const CONSUMABLE = new Set(["potion", "elixir", "talisman", "oil"]);   /* not "other": it holds blank runestones and the like */
 /** What a table-rolled treasure holds. Nothing random where it should make sense: a creature that carries nothing gets nothing,
     a lair keeps a cache. candidates: { items:[{uuid,name,level,gp,rarity,category}], goods:[...] }. Picks are seeded. */
 export function chooseTreasure({ gp, level, carriers, lair, candidates, seed = 1 }) {
