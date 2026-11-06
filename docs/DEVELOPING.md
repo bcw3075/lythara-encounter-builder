@@ -13,12 +13,13 @@ How the code works and why, for anyone changing it. What it does for a GM is in 
 | `scripts/place.mjs` | `layout`: scoring and placement; `nearestFree`, `hiddenNextTo` | no |
 | `scripts/builder.mjs` | Gathers documents (`readMap`), resolves creatures, `prepare` (plans, creates nothing), `place`, `clear`, `prepareReplace`, `applyReplace`, previews | yes |
 | `scripts/turn.mjs` | A monster's turn as data: `checkPlan` (legality), `describeStep`, `nextAction` (where a step stands), `damageOptions` | no |
-| `scripts/fight.mjs` | The runner, turn requests on the Combat flag, `submitPlan`, `judge`, `doIt`, carrying out a Strike, applying damage | yes |
+| `scripts/perceive.mjs` | What a monster perceives: `perceiveOne` (the state for one pair), `sensesOf`, `lightAt`, `packetOf` (the only way anything about others gets into a packet), memory, labels, health words, ability text as plain words | no |
+| `scripts/fight.mjs` | The runner, turn requests on the Combat flag, gathering what a monster senses (`sense`, `buildPacket`), `submitPlan`, `judge`, `doIt`, carrying out a Strike, applying damage | yes |
 | `scripts/ui/build.mjs` | The Build Encounter window and the preview loop | yes |
 | `scripts/ui/turns.mjs` | The Monster Turns window: who's ticked, and the plan card | yes |
 | `scripts/main.mjs` | Settings, the left-bar group "Encounters", hooks, API | yes |
 
-The plan leaves room for `perceive.mjs` and `brain.mjs`, which don't exist yet. Its `legal.mjs` is `checkPlan` in `turn.mjs` for now, and covers Strikes only.
+The plan leaves room for `brain.mjs`, which doesn't exist yet. Its `legal.mjs` is `checkPlan` in `turn.mjs` for now, and covers Strikes only.
 
 ## Data
 
@@ -26,7 +27,7 @@ All flags use the module id as their scope: a made-up scope throws.
 - **Scene:** `brief` (the last brief, or one sent from a chat), `build` (`id`, `seed`, `threat`, `rev`, `at`, `entry` the journal id), `design` (a request from Ask Angel with the map summary).
 - **Tokens:** `built`, `key`, `group`, `role`, `run`, `auto`, `model`, `opus`; `cache` on a cache's token. Per token, not actor, so each monster has its own checkbox later.
 - **Actors, journal, notes:** `built`. Folders carry `own`.
-- **Combat:** `turns.requests`, one per monster turn: `state`, `combatantId`, `tokenId`, `round`, `turn`, `labels` (E1 and so on, to token ids), `plan`, `steps`, `verdict`, `note`, `go`, `hold`, and `log` by step. It goes with the fight.
+- **Combat:** `turns.requests`, one per monster turn: `state`, `combatantId`, `tokenId`, `round`, `turn`, `labels` (E1 and so on, to token ids: only what it perceived at the time), `packet`, `plan`, `steps`, `verdict`, `note`, `go`, `hold`, and `log` by step. `turns.labels`, token id to label, kept for the whole fight. `turns.memory`, by monster token then enemy token: `square` and `round` it last perceived them. It all goes with the fight.
 - **World settings:** `partySize`, `applyMonsterDamage` and `runner` (in the settings menu), `treasure` (`manual` by level, `builds` by id).
 - **Every document a build makes carries `built` = its id.** `clear` deletes only those, by id, so hand-placed things and Survey Sheet's documents stay. A build's actors stay if a token on any scene still uses them.
 
@@ -86,6 +87,24 @@ All flags use the module id as their scope: a made-up scope throws.
 - **The `lythara-encounter-builder.step` hook** fires before each stage; return false to stop there. The reload tests use it.
 - **Saves use `{ render: false }`** so each stage doesn't redraw the tracker. Whether that's fully quiet with PF2e HUD open isn't checked yet. **Saves send only the change:** two browsers write to a request now, so a whole copy could put back what the other just wrote.
 - **A reload:** on the runner's `ready`, a request still `running` becomes `stopped` with a note, and Do it carries on from the record. A `go` or a plan left waiting is picked up.
+
+## What a monster perceives
+Worked out by the module, on the runner, with the fight open. Visioner can't answer it alone: with its automatic system off it says "observed" for a pair with no record, walls or no walls, and a monster token isn't a vision source (tested). Rules: Perception and Detection (https://2e.aonprd.com/Rules.aspx?ID=2400), Light (https://2e.aonprd.com/Rules.aspx?ID=2401).
+- **Inputs, per pair (`sense`):** `actor.perception.senses` plus hearing, which PF2e doesn't list on NPCs and the rules give no fixed range; core's `testCollision` centre to centre for sight and for sound; the light at the target; blinded, dazzled, deafened on the monster; invisible and concealed on the target; Visioner's stored state.
+- **Light (`lightOn`, `lightAt`):** the scene's level by PF2e's own thresholds (`ScenePF2e.isBright` at 3/4, `isDark` at 1/4), raised by any source whose shape holds the point. A darkness source wins. `GlobalLightSource` doesn't count: PF2e's rule-based levels decide what the scene gives.
+- **Visioner on top:** a stored Concealed, Hidden, Undetected or Unnoticed counts if it's worse than what the senses say. A stored Observed says nothing, because it's also the answer for no record. With its automatic system on, its answer is used directly.
+- **Hearing makes most things Hidden:** a creature it can't see but can hear is hidden at its exact square, however far, unless a wall blocks sound (Survey Sheet's trunks don't) or Visioner has it undetected from a Sneak. That's the rules with no made-up limit.
+- **Who counts:** tokens on the scene that are creatures, not core-hidden, and `isEnemyOf` the monster, in the fight or not. Allies are `isAllyOf`, known by default; a brief's "no shared knowledge" isn't built.
+- **The packet (`packetOf`):** observed and concealed show square, size, gear, visible conditions, health word, distance, cover. Hidden shows the square only. Undetected isn't listed; if it has memory, a `memory` line with `lastSeen` and round. Unnoticed: nothing. Everything about others goes through `packetOf`, field by field, so HP, AC, saves, level and names can't get in. `you` is the monster's own sheet. Text in it is data, never instruction. `schema` is checked by whoever reads it.
+- **Health words** are PF2e HUD's: its `healthStatusData` setting, or its default list with the markers it would give them.
+- **Gear** uses the item's source name, because PF2e builds "+1 Striking Longsword" from the runes.
+- **Ground (`groundAround`):** a text map 10 squares around it, from the same `readMap` model the builder uses. Tokens aren't marked, or an unseen one would show as a gap. Allies and what it perceives have squares of their own.
+- **Actions (`actionsFor`):** Workbench's sum: 3, plus quickened, less the largest of slowed, stunned and Workbench's `stunReduction` for this round. Workbench lowers stunned at the start of the turn, so reading stunned alone would miss it (tested).
+- **Labels and memory:** E and M labels last the whole fight and are given out when first needed. Memory updates at every turn change for every ticked monster, not only on its own turn.
+- **A plan can name only labels in its request that it still perceives** (`gather`). `flatDC` adds the check to the step: DC 5 concealed, DC 11 hidden. It's rolled first and logged, and a failure spends the action with no attack (`nextAction`). PF2e and Visioner don't roll it. Undetected can't be targeted yet: picking a square isn't built.
+- **Strike ids** come from `strikeIds`: a thrown dagger shares its slug with the melee one, so the second gets `-ranged`.
+- **Cover with no dialog works.** Visioner's auto-cover applied on a real Strike by the Shift route: AC 11 became DC 15 behind a test wall, and behind one real trunk with a Shortbow (tested 2026-11-06). So nothing needs passing on, and `getAutoCoverState` is what the packet shows.
+- **Not on the fight scene:** `perceived` refuses, and a turn's request says so instead of giving silent wrong answers.
 
 ## Hooks must return nothing
 Core fires `canvasReady` with `Hooks.call`, where a handler returning `false` stops every later handler, from every module. 0.1.0 to 0.2.4 had `c => markReady(id)`, and `Set#delete` returns false for an id it doesn't hold, so on every client the 20 `canvasReady` handlers registered after it never ran. Every hook here has a block body, and `unit.mjs` fails if one doesn't.
