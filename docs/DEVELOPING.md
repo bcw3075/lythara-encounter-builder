@@ -12,10 +12,13 @@ How the code works and why, for anyone changing it. What it does for a GM is in 
 | `scripts/mapread.mjs` | `buildModel`: the per-square model (footing, cover, exposure, approach, anchors) and its `sees` and `fits` tests; `summarise` | no |
 | `scripts/place.mjs` | `layout`: scoring and placement; `nearestFree`, `hiddenNextTo` | no |
 | `scripts/builder.mjs` | Gathers documents (`readMap`), resolves creatures, `prepare` (plans, creates nothing), `place`, `clear`, `prepareReplace`, `applyReplace`, previews | yes |
+| `scripts/turn.mjs` | A monster's turn as data: `checkPlan` (legality), `describeStep`, `nextAction` (where a step stands), `damageOptions` | no |
+| `scripts/fight.mjs` | Turn requests on the Combat flag, `submitPlan`, `judge`, `doIt`, carrying out a Strike, applying damage | yes |
 | `scripts/ui/build.mjs` | The Build Encounter window and the preview loop | yes |
+| `scripts/ui/turns.mjs` | The Monster Turns window: who's ticked, and the plan card | yes |
 | `scripts/main.mjs` | Settings, the left-bar group "Encounters", hooks, API | yes |
 
-The plan for the steps after this one (monster turns, the chat route, the API route) leaves room for `legal.mjs`, `perceive.mjs` and `brain.mjs`. They don't exist yet.
+The plan leaves room for `perceive.mjs` and `brain.mjs`, which don't exist yet. Its `legal.mjs` is `checkPlan` in `turn.mjs` for now, and covers Strikes only.
 
 ## Data
 
@@ -23,7 +26,8 @@ All flags use the module id as their scope: a made-up scope throws.
 - **Scene:** `brief` (the last brief, or one sent from a chat), `build` (`id`, `seed`, `threat`, `rev`, `at`, `entry` the journal id), `design` (a request from Ask Angel with the map summary).
 - **Tokens:** `built`, `key`, `group`, `role`, `run`, `auto`, `model`, `opus`; `cache` on a cache's token. Per token, not actor, so each monster has its own checkbox later.
 - **Actors, journal, notes:** `built`. Folders carry `own`.
-- **World settings:** `partySize` (in the settings menu), `treasure` (`manual` by level, `builds` by id).
+- **Combat:** `turns.requests`, one per monster turn: `state`, `combatantId`, `tokenId`, `round`, `turn`, `labels` (E1 and so on, to token ids), `plan`, `steps`, `verdict`, `note`, and `log` by step. It goes with the fight.
+- **World settings:** `partySize` and `applyMonsterDamage` (in the settings menu), `treasure` (`manual` by level, `builds` by id).
 - **Every document a build makes carries `built` = its id.** `clear` deletes only those, by id, so hand-placed things and Survey Sheet's documents stay. A build's actors stay if a token on any scene still uses them.
 
 ## Reading the map
@@ -62,6 +66,16 @@ All flags use the module id as their scope: a made-up scope throws.
 - **Map notes** only where the brief asks, each with its own page. **A clue players may find has OBSERVER on its page, not LIMITED:** core's `Note#_canView` refuses a page with exact LIMITED unless it's an image, and a double-click then does nothing (tested 14.370). LIMITED on the journal itself would list it in their sidebar, so the journal stays at none and an `activateNote` hook shows the page in a small window, with its @Check links working.
 - **Foundry's redraw rule:** never create placeables while a client redraws (see Survey Sheet's DEVELOPING.md). `canvasSettled` waits for `canvasReady` when the GM's canvas is on that scene and a draw just happened.
 - **Survey Sheet's redraw** removes only its own `enc` documents, and its Extend shifts everything else, so builder documents move with the map.
+
+## A monster's turn (so far: Strikes)
+- **A turn starts:** `pf2e.startTurn`, on the active GM only, for a token with `run`. It fires for the first turn of a fight too. A short wait, then a request in state `requested`. How long start-of-turn effects really need is still to be measured.
+- **The plan:** any GM may call `api.fight.submitPlan`; the active GM runs `judge`, which needs the canvas on the fight scene for reach and distance. `ready` shows the card; Do it calls `doIt`.
+- **Only the module rolls damage.** Workbench's auto-damage would roll on the card author's browser, with the dialog if that user has dialogs on. So `preCreateChatMessage` adds Workbench's own `noAutoDamageRoll` flag to this module's attack cards, and the module always rolls. One roller, one card, whatever anyone's settings. If Workbench drops that flag you'd see a second damage card, but not double HP, because Workbench never applies damage. Test D1 catches it; re-run D1 after any PF2e, Workbench or Toolbelt update.
+- **No dialogs:** a click event with `shiftKey` equal to the user's dialog setting, because PF2e flips on Shift. `skipDialog` doesn't work. `target` is passed, so `game.user.targets` stays alone.
+- **Applying** copies PF2e's Damage button (`applyFromCard`) for a named target: contextual clone, roll options from the card, item, outcome. It doesn't read effects that count only for one hit, because PF2e's `extractEphemeralEffects` isn't exported.
+- **Never twice:** `save` writes each stage to `log` before moving on, and `nextAction` reads it. `started` with no attack, `damageStarted` with no card, or `applying` with no `applied` means it can't tell, so the card stops and asks. A reload at any point resumes from there through Do it.
+- **The `lythara-encounter-builder.step` hook** fires before each stage; return false to stop there. The reload tests use it.
+- **Saves use `{ render: false }`** so each stage doesn't redraw the tracker. Whether that's fully quiet with PF2e HUD open isn't checked yet.
 
 ## Tests
 - **Local:** see `tools/test/README.md`.

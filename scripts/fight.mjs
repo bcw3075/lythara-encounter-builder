@@ -10,9 +10,11 @@ export const applySetting = () => game.settings.get(ID, "applyMonsterDamage");
 async function save(combat, id, change) { await combat.update({ [`flags.${ID}.turns.requests.${id}`]: foundry.utils.mergeObject(foundry.utils.deepClone(turns(combat).requests[id] ?? {}), change) }, { render: false, [ID]: { quiet: true } }); }
 const request = (combat, id) => turns(combat).requests[id];
 export const currentRequest = combat => Object.entries(turns(combat).requests).map(([id, r]) => ({ id, ...r })).filter(r => !["done", "manual"].includes(r.state)).at(-1) ?? null;
+/** The last finished turn, if it left something for the GM to read. */
+export const lastNote = combat => Object.entries(turns(combat).requests).map(([id, r]) => ({ id, ...r })).filter(r => r.state === "done" && r.note).at(-1) ?? null;
 const hostile = t => t.actor?.isOfType?.("npc");
 const tokenOf = (combat, c) => c?.token ?? null;
-/* this client should fetch a chance to step in */
+/* a chance to stop before each stage, which the reload tests use */
 function stepGate(stage, id) { return Hooks.call(`${ID}.step`, stage, id) !== false; }
 
 /* ---------- a turn starts ---------- */
@@ -82,6 +84,8 @@ async function runStrike(combat, id, i, step, tok, target) {
         await record({ applying: true });
         await applyFromCard(message, roll, target);
         await record({ applied: true });
+        /* undo restores HP but not what Workbench and PF2e did at 0 HP (seen in test D1) */
+        if (target.actor?.isOfType?.("character") && target.actor.hitPoints?.value === 0) await save(combat, id, { note: `${target.name} is at 0 HP. If you undo this, PF2e restores the HP but you still need to remove Wounded and Prone and put their initiative back.` });
       }
     } finally { pending = null; }
   }

@@ -2,7 +2,7 @@
 import { describeStep } from "../turn.mjs";
 import { esc } from "../journal.mjs";
 import { ID } from "../builder.mjs";
-import { applySetting, currentRequest, doIt, hold, playMyself } from "../fight.mjs";
+import { applySetting, currentRequest, doIt, hold, lastNote, playMyself } from "../fight.mjs";
 
 const STYLE = `.leb-turns .window-content{overflow-y:auto;padding:8px 12px}.leb-turns .leb-t{display:grid;grid-template-columns:1fr 58px 44px;gap:4px;align-items:center}.leb-turns .leb-cur{font-weight:700}.leb-turns .leb-card{border:1px solid #0006;padding:6px 8px;margin-top:8px}.leb-turns .leb-warn{color:#e07050}.leb-turns .leb-btns{display:flex;gap:6px;margin-top:6px}.leb-turns .leb-btns button{flex:1}`;
 export class TurnsApp extends foundry.applications.api.ApplicationV2 {
@@ -15,6 +15,7 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     const r = currentRequest(c); let card = "";
     if (r) { const tok = c.scene.tokens.get(r.tokenId), words = { requested: "Waiting for a plan.", submitted: "Checking the plan.", ready: "Ready.", running: "Carrying it out.", held: "Held.", stopped: "Stopped." }[r.state] ?? r.state;
       card = `<div class="leb-card" data-request="${r.id}"><b>${esc(tok?.name)}</b>: ${esc(words)}${r.plan?.reason ? `<p>${esc(r.plan.reason)}</p>` : ""}${r.steps ? `<ol>${r.steps.map(s => `<li>${esc(describeStep(s))}</li>`).join("")}</ol>` : ""}${r.verdict ? `<p class="leb-warn">${esc(r.verdict)}</p>` : ""}${r.note ? `<p class="leb-warn">${esc(r.note)}</p>` : ""}<div class="leb-btns">${["ready", "held", "stopped"].includes(r.state) ? `<button type="button" data-do="doit"><i class="fa-solid fa-play"></i> Do it</button>` : ""}${r.state === "running" ? `<button type="button" data-do="hold"><i class="fa-solid fa-hand"></i> Hold</button>` : ""}<button type="button" data-do="manual"><i class="fa-solid fa-user"></i> Play it myself</button></div></div>`; }
+    const left = !r && lastNote(c); if (left) card = `<div class="leb-card"><p class="leb-warn">${esc(left.note)}</p></div>`;
     return `<div>${rows || "<p>No monsters in this fight.</p>"}${card}${applySetting() ? "" : "<p><em>Damage is rolled, not applied: use the card's Damage button.</em></p>"}</div>`;
   }
   _replaceHTML(html, content) { content.innerHTML = html; }
