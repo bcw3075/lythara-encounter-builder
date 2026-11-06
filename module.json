@@ -1,0 +1,16 @@
+{
+  "id": "lythara-encounter-builder",
+  "title": "Lythara Encounter Builder",
+  "description": "Reads an encounter map, then places monsters, treasure and GM notes from a brief. Monster turns come later.",
+  "version": "0.1.0",
+  "compatibility": { "minimum": "14", "verified": "14.370" },
+  "authors": [{ "name": "Rhea and Claude" }],
+  "url": "https://github.com/bcw3075/lythara-encounter-builder",
+  "manifest": "https://raw.githubusercontent.com/bcw3075/lythara-encounter-builder/main/module.json",
+  "download": "https://raw.githubusercontent.com/bcw3075/lythara-encounter-builder/main/dist/lythara-encounter-builder.zip",
+  "esmodules": ["scripts/main.mjs"],
+  "relationships": {
+    "recommends": [{ "id": "lythara-survey-sheet", "type": "module", "reason": "Reads its encounter maps. Without it the builder works from walls and regions alone." }],
+    "systems": [{ "id": "pf2e", "type": "system", "compatibility": { "minimum": "8.7" } }]
+  }
+}
