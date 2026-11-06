@@ -1,6 +1,6 @@
 /* A fight's turns, on the active GM's browser with the fight scene open. Everything is kept on the Combat's flag, so a reload or a summarised
    chat loses nothing. For now it runs Strikes; see claude/encounter-builder-plan.md for the rest of step 2. */
-import { checkPlan, damageOptions, nextAction } from "./turn.mjs";
+import { checkPlan, damageOptions, latestNote, nextAction } from "./turn.mjs";
 
 const ID = "lythara-encounter-builder", WORKBENCH = "xdy-pf2e-workbench", STEP_MS = 20000, SETTLE_MS = 400;
 const isActive = () => game.users.activeGM?.id === game.user.id;
@@ -11,7 +11,7 @@ async function save(combat, id, change) { await combat.update({ [`flags.${ID}.tu
 const request = (combat, id) => turns(combat).requests[id];
 export const currentRequest = combat => Object.entries(turns(combat).requests).map(([id, r]) => ({ id, ...r })).filter(r => !["done", "manual"].includes(r.state) && r.round === combat.round && r.turn === combat.turn).at(-1) ?? null;   /* only this turn's: an old unfinished one stays out of the way */
 /** The last finished turn, if it left something for the GM to read. */
-export const lastNote = combat => Object.entries(turns(combat).requests).map(([id, r]) => ({ id, ...r })).filter(r => r.state === "done" && r.note).at(-1) ?? null;
+export const lastNote = combat => latestNote(turns(combat).requests);
 const hostile = t => t.actor?.isOfType?.("npc");
 const tokenOf = (combat, c) => c?.token ?? null;
 /* a chance to stop before each stage, which the reload tests use */

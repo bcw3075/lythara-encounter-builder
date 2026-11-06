@@ -39,6 +39,11 @@ export function nextAction(rec = {}, { apply = false } = {}) {
   if (!rec.applying) return "apply";
   return rec.applied ? "next" : "ask";
 }
+/** The note to show between turns: only the latest finished turn's, so an old warning never outlives the turn it was about. */
+export function latestNote(requests = {}) {
+  const fin = Object.values(requests).filter(r => ["done", "manual"].includes(r.state)).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+  const last = fin.at(-1); return last?.state === "done" && last.note ? last : null;
+}
 /** The roll options PF2e's own damage button gives a target, from the damage card's context. */
 export function damageOptions(options = []) {
   const origin = options.filter(o => o.startsWith("self:")).map(o => o.replace(/^self\b/, "origin"));

@@ -6,7 +6,7 @@ import { adjustedLevel, chooseTreasure, claimDiffers, coinsOf, ledgerLine, level
 import { esc, journalPages } from "../../scripts/journal.mjs";
 import { buildModel, summarise } from "../../scripts/mapread.mjs";
 import { hiddenNextTo, layout, nearestFree } from "../../scripts/place.mjs";
-import { checkPlan, damageOptions, describeStep, nextAction } from "../../scripts/turn.mjs";
+import { checkPlan, damageOptions, describeStep, latestNote, nextAction } from "../../scripts/turn.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
 
@@ -40,6 +40,7 @@ check("fourth has no actions", !checkPlan({ steps: [1, 2, 3, 4].map(() => st({ i
 check("unknown target", /doesn't know/.test(checkPlan({ steps: [st({ item: "jaws", target: "E9" })] }, tctx).reason)); check("unknown attack", /no attack/.test(checkPlan({ steps: [st({ item: "claw", target: "E1" })] }, tctx).reason)); check("unknown step", /can't do/.test(checkPlan({ steps: [{ do: "stride" }] }, tctx).reason)); check("no plan", !checkPlan(null, tctx).ok); check("words", describeStep(pl.steps[1]) === "Jaws at Hero, attack 2.");
 const hit = { started: true, attack: { degree: 2 } };
 check("fresh attacks", nextAction({}) === "attack"); check("started, no result: ask, never roll again", nextAction({ started: true }) === "ask"); check("miss ends", nextAction({ started: true, attack: { degree: 1 } }, { apply: true }) === "next"); check("hit rolls", nextAction(hit) === "damage"); check("damage started, no card: ask", nextAction({ ...hit, damageStarted: true }) === "ask");
+check("a note shows", latestNote({ a: { state: "done", at: 1, note: "x" } })?.note === "x"); check("a later clean turn clears an old note", latestNote({ a: { state: "done", at: 1, note: "x" }, b: { state: "done", at: 2 } }) === null); check("a turn played by hand clears it too", latestNote({ a: { state: "done", at: 1, note: "x" }, b: { state: "manual", at: 2 } }) === null); check("order comes from the time, not the key", latestNote({ b: { state: "done", at: 2, note: "new" }, a: { state: "done", at: 1, note: "old" } })?.note === "new"); check("a turn still open doesn't count", latestNote({ a: { state: "done", at: 1, note: "x" }, b: { state: "stopped", at: 2 } })?.note === "x"); check("no turns, no note", latestNote() === null);
 const dmg = { ...hit, damageStarted: true, damage: { message: "m" } }; check("apply off stops", nextAction(dmg) === "next"); check("apply on applies", nextAction(dmg, { apply: true }) === "apply"); check("applying unknown: ask, never apply again", nextAction({ ...dmg, applying: true }, { apply: true }) === "ask"); check("applied ends", nextAction({ ...dmg, applying: true, applied: true }, { apply: true }) === "next");
 const dop = damageOptions(["self:level:1", "target:x", "item:y", "self"]); check("options", dop.origin.join() === "origin:level:1" && dop.keep.join() === "item:y");
 
