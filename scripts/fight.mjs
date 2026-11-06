@@ -136,7 +136,8 @@ async function watched(work) {
   catch (e) { for (const a of fresh()) await a.close?.().catch?.(() => {}); throw e; }
   finally { clearInterval(poll); clearTimeout(timer); }
 }
-/* Real targets, on the runner's own account: hers are never touched. Workbench's "Please target" and Toolbelt's Target Helper rows both read them. */
+/* Real targets, on the runner's own account: hers are never touched. Workbench's "Please target" reads them at the attack. Toolbelt's Target Helper
+   row reads them at the damage roll, so they stay on for that only when the GM applies damage from the card. */
 const aimAt = target => target.object?.setTarget(true, { user: game.user, releaseOthers: true, groupSelection: false });
 const stopAiming = () => { if (game.user.targets.size) canvas.tokens?.setTargets?.([], { mode: "replace" }); };
 
@@ -156,7 +157,8 @@ async function runStrike(combat, id, i, step, tok, target) {
         const { message, roll } = await watched(async () => { const card = waitFor("attack-roll"), roll = await strike.variants[step.variant].roll({ event: clickWith("showCheckDialogs"), target: target.object }); return { message: await card, roll }; });
         await record({ attack: { message: message.id, degree: roll?.degreeOfSuccess ?? message.rolls?.[0]?.degreeOfSuccess ?? 0 } });
       } else if (now === "damage") {
-        const degree = get().attack.degree; aimAt(target); await record({ damageStarted: true });
+        const degree = get().attack.degree; if (applySetting()) stopAiming(); else aimAt(target);   /* Target Helper's row reads the targets, and its Damage button would only apply a second time */
+        await record({ damageStarted: true });
         const message = await watched(async () => { const card = waitFor("damage-roll"); await strike[degree === 3 ? "critical" : "damage"]({ event: clickWith("showDamageDialogs"), target: target.object, mapIncreases: step.variant }); return card; });
         await record({ damage: { message: message.id } });
       } else if (now === "apply") {
