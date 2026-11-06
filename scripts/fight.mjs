@@ -39,12 +39,17 @@ function gather(combat, req) {
 export async function submitPlan(combat, requestId, plan) {
   const r = request(combat, requestId); if (!r) throw new Error("No such request."); if (r.state !== "requested" && r.state !== "ready") throw new Error(`That turn is ${r.state}.`);
   await save(combat, requestId, { plan, state: "submitted", verdict: null });
-  if (isActive()) return judge(combat, requestId);
+  if (isActive()) await judge(combat, requestId);
   for (let i = 0; i < 40; i++) { await new Promise(res => setTimeout(res, 250)); const n = request(combat, requestId); if (n.state !== "submitted") return { state: n.state, reason: n.verdict }; }
   return { state: "submitted", reason: "The active GM hasn't answered." };
 }
+/* the plan is checked once, and a turn runs once: the updateCombat hook and the submitter can both arrive here, and Auto calls doIt straight after */
+const judging = new Set(), running = new Set();
 export async function judge(combat, requestId) {
-  if (!isActive()) return null;
+  if (!isActive() || judging.has(requestId) || request(combat, requestId)?.state !== "submitted") return null;
+  judging.add(requestId); try { return await judgeNow(combat, requestId); } finally { judging.delete(requestId); }
+}
+async function judgeNow(combat, requestId) {
   const r = request(combat, requestId), ctx = gather(combat, r); if (ctx.error) { await save(combat, requestId, { state: "requested", verdict: ctx.error }); return { state: "requested", reason: ctx.error }; }
   const c = checkPlan(r.plan, ctx); await save(combat, requestId, c.ok ? { state: "ready", steps: c.steps, verdict: null } : { state: "requested", verdict: c.reason });
   const tok = combat.scene.tokens.get(r.tokenId);
@@ -102,6 +107,10 @@ export async function doIt(combat, requestId) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
   if (!isActive()) throw new Error(`${game.users.activeGM?.name} is the active GM, so it runs in their browser.`);
   if (canvas.scene?.id !== combat.scene?.id) throw new Error("Open the fight scene first.");
+  if (running.has(requestId)) return;
+  running.add(requestId); try { await runTurn(combat, requestId); } finally { running.delete(requestId); }
+}
+async function runTurn(combat, requestId) {
   const r = request(combat, requestId); if (!["ready", "running", "held", "stopped"].includes(r?.state)) throw new Error("That turn isn't ready.");
   await save(combat, requestId, { state: "running", note: null });
   const tok = combat.scene.tokens.get(r.tokenId);
