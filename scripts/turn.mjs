@@ -22,6 +22,11 @@ export function checkPlan(plan, ctx) {
   }
   return { ok: true, steps };
 }
+/** One id per Strike. A thrown dagger shares its slug with the melee one, and a plan has to be able to say which. strikes: [{ slug, ranged }]. */
+export function strikeIds(strikes) {
+  const seen = new Map();
+  return strikes.map(s => { const n = (seen.get(s.slug) ?? 0) + 1; seen.set(s.slug, n); return n === 1 ? s.slug : s.ranged ? `${s.slug}-ranged${n > 2 ? `-${n}` : ""}` : `${s.slug}-${n}`; });
+}
 /** A resolved step in plain words, for the card. */
 export function describeStep(s) {
   if (s.do === "none") return "Does nothing.";

@@ -7,7 +7,7 @@ import { esc, journalPages } from "../../scripts/journal.mjs";
 import { buildModel, summarise } from "../../scripts/mapread.mjs";
 import { hiddenNextTo, layout, nearestFree } from "../../scripts/place.mjs";
 import { actionsFor, assignLabels, canTarget, describeKnows, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions, worse } from "../../scripts/perceive.mjs";
-import { checkPlan, currentOf, damageOptions, describeStep, latestNote, nextAction, requestBusy } from "../../scripts/turn.mjs";
+import { checkPlan, currentOf, damageOptions, describeStep, latestNote, nextAction, requestBusy, strikeIds } from "../../scripts/turn.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
 
@@ -128,6 +128,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("plan labels", Object.keys(labelsOf(others)).join() === "E1,E2"); const rem = remember({ a: { square: [1, 1], round: 3 } }, others, 3); check("remember only changes", Object.keys(rem).join() === "b" && rem.b.square.join() === "2,2");
   check("card line", describeKnows(pk, l => ({ E1: "Hero", E2: "Rogue", E3: "Monk" })[l]) === "Knows of: Hero (observed), Rogue (hidden). Remembers: Monk (round 2).");
   const hid = checkPlan({ steps: [{ do: "strike", item: "jaws", target: "E2" }] }, { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 10 }], targets: { E2: { name: "Rogue", distance: 5, flat: 11 } } }); check("plan carries the flat check", hid.ok && hid.steps[0].flat === 11 && describeStep(hid.steps[0]).includes("DC 11")); check("unknown target refused", !checkPlan({ steps: [{ do: "strike", item: "jaws", target: "E9" }] }, { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 10 }], targets: {} }).ok);
+  check("a thrown dagger has its own id", strikeIds([{ slug: "dagger" }, { slug: "dagger", ranged: true }, { slug: "fist" }, { slug: "fist" }]).join() === "dagger,dagger-ranged,fist,fist-2");
   check("flat first", nextAction({}, { flat: 5 }) === "flat"); check("flat unsure asks", nextAction({ flatStarted: true }, { flat: 5 }) === "ask"); check("flat failed ends the step", nextAction({ flatStarted: true, flat: { ok: false } }, { flat: 5 }) === "next"); check("flat passed attacks", nextAction({ flatStarted: true, flat: { ok: true } }, { flat: 5 }) === "attack"); check("no flat, as before", nextAction({}) === "attack");
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */

@@ -1,7 +1,7 @@
 /* A fight's turns. One named account does the work (the runner: the Claude Bridge unless the setting says otherwise), on its own page with the
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. For now it runs Strikes; see claude/encounter-builder-plan.md for the rest of step 2. */
-import { checkPlan, currentOf, damageOptions, latestNote, nextAction, requestBusy } from "./turn.mjs";
+import { checkPlan, currentOf, damageOptions, latestNote, nextAction, requestBusy, strikeIds } from "./turn.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap } from "./builder.mjs";
 
@@ -46,6 +46,8 @@ const within = (work, ms, words) => { let timer; return Promise.race([work, new 
 /* Worked out here rather than asked of Visioner: with its automatic system off it answers "observed" for a pair with no record, walls or no walls, and a monster
    token isn't a vision source. So: core's own sight and sound tests on the fight scene, the light at the target, the monster's senses, then Visioner's record on top. */
 const onFightScene = combat => canvas.ready && canvas.scene?.id === combat.scene?.id;
+/** The monster's Strikes with the ids plans use. */
+const strikesWithIds = actor => { const list = (actor.system.actions ?? []).filter(a => a.type === "strike"), ids = strikeIds(list.map(a => ({ slug: a.slug ?? a.item?.id, ranged: !!a.item?.isRanged }))); return list.map((a, i) => ({ id: ids[i], strike: a })); };
 const conditionsOn = actor => (actor.conditions?.active ?? []).map(c => c.slug);
 const squareOf = (tok, scene) => { const px = scene.grid.size, d = scene.dimensions; return [Math.round((tok.x - d.sceneX) / px), Math.round((tok.y - d.sceneY) / px)]; };
 function lightOn(point, scene) {
@@ -78,9 +80,9 @@ function actionsOf(actor, combat) {
   return actionsFor({ quickened: actor.hasCondition?.("quickened"), slowed: n("slowed"), stunned: n("stunned"), reduced });
 }
 async function strikesOf(actor) {
-  const out = []; for (const a of (actor.system.actions ?? []).filter(a => a.type === "strike")) {
+  const out = []; for (const { id, strike: a } of strikesWithIds(actor)) {
     let damage = null; try { damage = await a.damage({ getFormula: true }); } catch (e) { console.warn(`${ID} | damage formula`, e); }
-    out.push({ id: a.slug ?? a.item?.id, name: a.label, mod: strikeMods(a.variants.map(v => v.label)), reach: actor.getReach({ action: "attack", weapon: a.item }), ...(a.item?.isRanged ? { range: a.item.range?.increment ?? null, maxRange: a.item.range?.max ?? null } : {}), damage: typeof damage === "string" ? damage : null, traits: (a.traits ?? []).map(t => t.name).filter(t => t !== "attack"), effects: a.item?.system?.attackEffects?.value ?? [] });
+    out.push({ id, name: a.label, mod: strikeMods(a.variants.map(v => v.label)), reach: actor.getReach({ action: "attack", weapon: a.item }), ...(a.item?.isRanged ? { range: a.item.range?.increment ?? null, maxRange: a.item.range?.max ?? null } : {}), damage: typeof damage === "string" ? damage : null, traits: (a.traits ?? []).map(t => t.name).filter(t => t !== "attack"), effects: a.item?.system?.attackEffects?.value ?? [] });
   } return out;
 }
 const localize = k => game.i18n.localize(k);
@@ -172,7 +174,7 @@ export async function onRunnerReady() {
 /** Live values for the legality check. Reach and distance need the canvas on the fight scene. */
 function gather(combat, req) {
   const scene = combat.scene, tok = scene.tokens.get(req.tokenId), actor = tok.actor;
-  const strikes = (actor.system.actions ?? []).filter(a => a.type === "strike").map(a => ({ id: a.slug ?? a.item?.id, name: a.label, reach: actor.getReach({ action: "attack", weapon: a.item }), ranged: !!a.item?.isRanged, maxRange: a.item?.range?.max ?? null }));
+  const strikes = strikesWithIds(actor).map(({ id, strike: a }) => ({ id, name: a.label, reach: actor.getReach({ action: "attack", weapon: a.item }), ranged: !!a.item?.isRanged, maxRange: a.item?.range?.max ?? null }));
   /* only what it perceived when asked, and still does: a plan can't name anything else */
   const now = new Map(sense(combat, tok, turns(combat).memory?.[tok.id] ?? {}).map(o => [o.id, o])), targets = {};
   for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && canTarget(o.state)) targets[label] = { name: o.token.name, distance: o.distance, flat: flatDC(o.state) }; }
@@ -238,7 +240,7 @@ const stopAiming = () => { if (game.user.targets.size) canvas.tokens?.setTargets
 
 async function runStrike(combat, id, i, step, tok, target) {
   const record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {};
-  const strike = (tok.actor.system.actions ?? []).find(a => (a.slug ?? a.item?.id) === step.item); if (!strike) throw new Error(`${tok.name} has no ${step.itemName} now.`);
+  const strike = strikesWithIds(tok.actor).find(x => x.id === step.item)?.strike; if (!strike) throw new Error(`${tok.name} has no ${step.itemName} now.`);
   for (let guard = 0; guard < 8; guard++) {
     const now = nextAction(get(), { apply: applySetting(), flat: step.flat ?? 0 });
     if (now === "next") return "next";
@@ -249,7 +251,7 @@ async function runStrike(combat, id, i, step, tok, target) {
     try {
       if (now === "flat") {
         await record({ flatStarted: true });
-        const roll = await watched(async () => { const r = await new Roll("1d20").evaluate(); await r.toMessage({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), flavor: `Flat check, DC ${step.flat}: can ${tok.name} find its target?` }); return r; });
+        const roll = await watched(async () => { const r = await new Roll("1d20").evaluate(); await r.toMessage({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), flavor: `Flat check, DC ${step.flat}` }); return r; });
         await record({ flat: { dc: step.flat, total: roll.total, ok: roll.total >= step.flat } });
         if (roll.total < step.flat) await save(combat, id, { note: `${step.itemName} at ${step.targetName} failed its DC ${step.flat} flat check (${roll.total}). The action is spent.` });
       } else if (now === "attack") {
