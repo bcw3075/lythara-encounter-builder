@@ -6,7 +6,7 @@ import { adjustedLevel, chooseTreasure, claimDiffers, coinsOf, ledgerLine, level
 import { esc, journalPages } from "../../scripts/journal.mjs";
 import { buildModel, summarise } from "../../scripts/mapread.mjs";
 import { hiddenNextTo, layout, nearestFree } from "../../scripts/place.mjs";
-import { checkPlan, currentOf, damageOptions, describeStep, latestNote, nextAction } from "../../scripts/turn.mjs";
+import { checkPlan, currentOf, damageOptions, describeStep, latestNote, nextAction, requestBusy } from "../../scripts/turn.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
 
@@ -89,6 +89,7 @@ const anch = { ...blank(), anchors: [{ kind: "camp", at: [10, 10] }] }, gd = lay
 const miss = layout(blank(), [{ key: "a-0", group: 0, n: 1, role: "brute", state: "alert", anchor: "cave", label: "G" }]); check("missing anchor warns", miss.warnings.some(w => w.includes("no cave")));
 const rq = { a: { state: "done", round: 1, combatantId: "w" }, b: { state: "ready", round: 2, combatantId: "w", turn: 0 }, c: { state: "stopped", round: 2, combatantId: "x" } };
 check("current by round and combatant", currentOf(rq, 2, "w")?.id === "b"); check("a moved turn number keeps the request", currentOf({ b: { ...rq.b, turn: 0 } }, 2, "w")?.turn === 0); check("old round not current", currentOf(rq, 3, "w") === null); check("finished not current", currentOf(rq, 1, "w") === null);
+check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "submitted" }) && requestBusy({ state: "ready", go: true }) && !requestBusy({ state: "ready" }) && !requestBusy({ state: "requested" }) && !requestBusy({ state: "held" }) && !requestBusy({ state: "stopped" }) && !requestBusy(null));
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
 for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);
 fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts.json"), JSON.stringify(out));

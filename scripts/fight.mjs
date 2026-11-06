@@ -1,7 +1,7 @@
 /* A fight's turns. One named account does the work (the runner: the Claude Bridge unless the setting says otherwise), on its own page with the
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. For now it runs Strikes; see claude/encounter-builder-plan.md for the rest of step 2. */
-import { checkPlan, currentOf, damageOptions, latestNote, nextAction } from "./turn.mjs";
+import { checkPlan, currentOf, damageOptions, latestNote, nextAction, requestBusy } from "./turn.mjs";
 
 const ID = "lythara-encounter-builder", WORKBENCH = "xdy-pf2e-workbench", TOOLBELT = "pf2e-toolbelt", STEP_MS = 20000, SETTLE_MS = 400, SCENE_MS = 30000, RESUMABLE = ["ready", "running", "held", "stopped"];
 export const runnerName = () => game.settings.get(ID, "runner");
@@ -138,9 +138,15 @@ async function watched(work) {
 }
 /* Real targets, on the runner's own account: hers are never touched. Workbench's "Please target" and Toolbelt's Target Helper rows both read them. */
 const aimAt = target => target.object?.setTarget(true, { user: game.user, releaseOthers: true, groupSelection: false });
-/* With automatic damage on, a Target Helper row's Damage button can only apply a second time, and its Block comes too late. The row is taken off after the
-   card is made, because Toolbelt fills it in a preCreate hook that runs after this module's. If Toolbelt renames its flag the row simply stays. */
-async function dropRow(message) { if (message.flags?.[TOOLBELT]?.targetHelper) await message.update({ [`flags.${TOOLBELT}.targetHelper`]: foundry.data.operators.ForcedDeletion.create() }).catch(e => console.warn(`${ID} | row`, e)); }
+/* With automatic damage on, a damage card's buttons can only apply a second time, and Block comes too late (the reaction pop-up is its proper route). So the
+   card is marked, which hides PF2e's buttons from players, and Target Helper's row is taken off. That's done after the card is made, because Toolbelt fills
+   the row in a preCreate hook that runs after this module's. If Toolbelt renames its flag the row simply stays. */
+async function markApplied(message) {
+  const change = { [`flags.${ID}.autoApplied`]: true }; if (message.flags?.[TOOLBELT]?.targetHelper) change[`flags.${TOOLBELT}.targetHelper`] = foundry.data.operators.ForcedDeletion.create();
+  await message.update(change).catch(e => console.warn(`${ID} | card`, e));
+}
+/** Drawing a marked card for a player. It changes only what this browser shows, so if PF2e changes its markup the buttons just show again. */
+export function onRenderMessage(message, html) { if (game.user.isGM || !message.getFlag(ID, "autoApplied")) return; for (const el of html.querySelectorAll?.(".damage-application") ?? []) el.remove(); }
 const stopAiming = () => { if (game.user.targets.size) canvas.tokens?.setTargets?.([], { mode: "replace" }); };
 
 async function runStrike(combat, id, i, step, tok, target) {
@@ -162,7 +168,7 @@ async function runStrike(combat, id, i, step, tok, target) {
         const degree = get().attack.degree; aimAt(target); await record({ damageStarted: true });
         const message = await watched(async () => { const card = waitFor("damage-roll"); await strike[degree === 3 ? "critical" : "damage"]({ event: clickWith("showDamageDialogs"), target: target.object, mapIncreases: step.variant }); return card; });
         await record({ damage: { message: message.id } });
-        if (applySetting()) await dropRow(message);
+        if (applySetting()) await markApplied(message);
       } else if (now === "apply") {
         const message = game.messages.get(get().damage.message), roll = message?.rolls?.[0]; if (!roll) return "ask";
         await record({ applying: true });
@@ -206,5 +212,8 @@ async function runTurn(combat, requestId) {
   }
   if (request(combat, requestId).state !== "manual") return save(combat, requestId, { state: "done" });
 }
+/** Is this page working on a turn, or about to? For tools that share the runner's page. The in-memory sets cover the start of a turn, before any request
+    exists, so only the runner's own page has the full answer; on any other page it's the flag alone. */
+export const busy = () => starting.size > 0 || judging.size > 0 || running.size > 0 || game.combats.filter(c => c.started).some(c => requestBusy(currentRequest(c)));
 export const hold = (combat, id) => save(combat, id, { hold: true });
 export const playMyself = (combat, id) => save(combat, id, { state: "manual" });

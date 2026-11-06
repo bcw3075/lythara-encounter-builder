@@ -43,6 +43,8 @@ export function nextAction(rec = {}, { apply = false } = {}) {
 export function currentOf(requests = {}, round, combatantId) {
   return Object.entries(requests).map(([id, r]) => ({ id, ...r })).filter(r => !["done", "manual"].includes(r.state) && r.round === round && r.combatantId === combatantId).at(-1) ?? null;
 }
+/** Whether a request has work in flight or about to start. Waiting on a person or a plan doesn't count. */
+export const requestBusy = r => !!r && (r.state === "running" || r.state === "submitted" || !!r.go);
 /** The note to show between turns: only the latest finished turn's, so an old warning never outlives the turn it was about. */
 export function latestNote(requests = {}) {
   const fin = Object.values(requests).filter(r => ["done", "manual"].includes(r.state)).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
