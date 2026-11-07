@@ -6,12 +6,14 @@ const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
 
 /** Check a plan against what the glue gathered. Returns { ok: true, steps } with each step resolved, or { ok: false, reason }.
     ctx: { actions (left this turn), attacksBefore (attacks already made this turn, for the multiple attack penalty), strikes: [{ id, name, reach, ranged, maxRange }],
-    targets: { label: { name, square, size, flat } or { name, distance, flat } }, me: { square, size }, speed, cantMove (why it can't Stride, or null),
-    route(from, to) → { ok, route, cost } or { ok: false, reason } }. Only what the monster perceives is in targets. A Stride moves where later steps are
+    targets: { label: { name, square, size, flat } or { name, distance, flat } }, me: { square, size }, speed, cantAct (why it can't act at all, or null),
+    cantMove (why it can't Stride, or null),
+    route(from, to, before) → { ok, route, cost } or { ok: false, reason }, before being the routes of this plan's earlier Strides (the diagonal count
+    runs across the turn) }. Only what the monster perceives is in targets. A Stride moves where later steps are
     measured from. Names here are labels when the reason goes to the thinker. */
 export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
-  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null; const steps = [];
+  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null; const steps = [], routes = [];
   const distanceTo = (t, reach) => here && t.square ? distanceBetween({ x: here[0], y: here[1], size: ctx.me.size ?? 1 }, { x: t.square[0], y: t.square[1], size: t.size ?? 1 }, { reach }) : t.distance;
   for (const [n, step] of plan.steps.entries()) {
     const at = `Step ${n + 1}`;
@@ -19,15 +21,16 @@ export function checkPlan(plan, ctx) {
     if (COSTS[step.do] > left) return { ok: false, reason: `${at}: no actions left.` };
     left -= COSTS[step.do];
     if (step.do === "none") { steps.push({ do: "none" }); continue; }
+    if (ctx.cantAct) return { ok: false, reason: `${at}: ${ctx.cantAct}` };
     if (step.do === "stride") {
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
       if (!Array.isArray(step.to)) return { ok: false, reason: `${at}: a Stride needs "to", the square to end on.` };
       if (!here || !ctx.route) return { ok: false, reason: `${at}: I can't work out moves here.` };
       if (same(here, step.to)) return { ok: false, reason: `${at}: it is already at [${step.to[0]}, ${step.to[1]}].` };
-      const way = ctx.route(here, step.to);
+      const way = ctx.route(here, step.to, routes);
       if (!way.ok) return { ok: false, reason: `${at}: ${way.reason}` };
       if (way.cost > ctx.speed) return { ok: false, reason: `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, more than its Speed of ${ctx.speed} ft.` };
-      steps.push({ do: "stride", from: [...here], to: [...step.to], route: way.route, cost: way.cost });
+      steps.push({ do: "stride", from: [...here], to: [...step.to], route: way.route, cost: way.cost }); routes.push(way.route);
       here = [...step.to]; continue;
     }
     const s = ctx.strikes.find(x => x.id === step.item); if (!s) return { ok: false, reason: `${at}: it has no attack called "${step.item}".` };

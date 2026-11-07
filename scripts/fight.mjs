@@ -2,7 +2,7 @@
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. For now it runs Strikes; see claude/encounter-builder-plan.md for the rest of step 2. */
 import { MAX_REPLANS, changesSince, checkPlan, currentOf, damageOptions, describeChanges, doneStep, latestNote, nextAction, nextMove, requestBusy, situationOf, spentBy, strikeIds } from "./turn.mjs";
-import { findRoute, footprintAt, routeWords } from "./move.mjs";
+import { diagonalsIn, findRoute, footprintAt, routeWords } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap } from "./builder.mjs";
 import { MAX_TRIES, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "./brain.mjs";
@@ -200,19 +200,24 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }) {
   for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && canTarget(o.state)) targets[label] = { name: label, square: o.square, size: sizeOf(o.token), flat: flatDC(o.state) }; }
   const speed = landSpeed(actor), route = await mover(combat, tok, speed);
   return { actions: Math.max(0, actionsOf(actor, combat) - (req.spent ?? 0) - used.actions), attacksBefore: (req.attacks ?? 0) + used.attacks, strikes, targets,
-    me: { square: squareOf(tok, scene), size: sizeOf(tok) }, speed, cantMove: cantMove(actor, speed), route };
+    me: { square: squareOf(tok, scene), size: sizeOf(tok) }, speed, cantAct: cantAct(actor), cantMove: cantMove(actor, speed), route };
 }
 
 /* ---------- moving ---------- */
 /* Foundry has no pathfinding, so move.mjs finds the route; Foundry's own measurement then says what it costs, because that is what a real move charges
    (the same on 5 test routes over difficult terrain, 2026-11-07). Walls are core's own movement test between where the creature would stand. */
 const landSpeed = actor => Number(actor.system.movement?.speeds?.land?.value) || 0;
-/** Why it can't Stride at all, or null. Rules: Immobilized, Grabbed and Restrained can't move; Prone has to Stand first; Paralyzed, Petrified and
-    Unconscious can't act. */
+/** Why it can't act at all, or null: Paralyzed, Petrified and Unconscious creatures take no actions (and a dead one none either). */
+function cantAct(actor) {
+  if (actor.isDead) return "it is dead.";
+  for (const c of ["paralyzed", "petrified", "unconscious"]) if (actor.hasCondition?.(c)) return `it is ${c} and can't act.`;
+  return null;
+}
+/** Why it can't Stride, or null. Rules: Grabbed and Restrained creatures are Immobilized and can't move; Prone has to Stand first. Grabbed and
+    Restrained are checked first because PF2e adds Immobilized with them, and the cause is what the reader needs. */
 function cantMove(actor, speed) {
   const has = c => actor.hasCondition?.(c);
-  for (const c of ["paralyzed", "petrified", "unconscious"]) if (has(c)) return `it is ${c} and can't act.`;
-  for (const c of ["immobilized", "grabbed", "restrained"]) if (has(c)) return `it is ${c}, so it can't move.`;
+  for (const c of ["restrained", "grabbed", "immobilized"]) if (has(c)) return `it is ${c}, so it can't move.`;
   if (has("prone")) return "it is prone, so it has to Stand first, which I can't do yet.";
   return speed > 0 ? null : "it has no land Speed.";
 }
@@ -231,11 +236,16 @@ async function mover(combat, tok, speed) {
   const world = { cols: model.cols, rows: model.rows, terrain, blocked: (i, j) => !!model.blocked[model.idx(i, j)], creature: (i, j) => who.get(`${i},${j}`) ?? null,
     wall: (a, b) => !!CONFIG.Canvas.polygonBackends.move.testCollision(centre(a), centre(b), { mode: "any", type: "move" }) };
   const action = tok.movementAction, costFn = CONFIG.Token.movement.TerrainData.getMovementCostFunction(tok, {});
-  const measure = route => tok.measureMovementPath(tok.object.createTerrainMovementPath(route.map(([x, y]) => ({ x: ox + x * px, y: oy + y * px, action }))), { cost: costFn }).cost;
-  return (from, to) => {
-    const r = findRoute({ from, to, size, budget: speed }, world);
+  const measure = squares => squares.length < 2 ? 0 : tok.measureMovementPath(tok.object.createTerrainMovementPath(squares.map(([x, y]) => ({ x: ox + x * px, y: oy + y * px, action }))), { cost: costFn }).cost;
+  /* What it has already moved this turn: Foundry keeps the token's movement history for the turn (cleared when the turn changes) and charges a new move
+     as the rest of that path, so diagonals carry on from it, as the rules say. */
+  const history = (tok.movementHistory ?? []).map(w => [Math.round((w.x - ox) / px), Math.round((w.y - oy) / px)]);
+  return (from, to, before = []) => {
+    const prefix = [...history]; for (const r of before) prefix.push(...(prefix.length && same(prefix.at(-1), r[0]) ? r.slice(1) : r));
+    if (!prefix.length || !same(prefix.at(-1), from)) prefix.push(from);
+    const r = findRoute({ from, to, size, budget: speed, odd: diagonalsIn(prefix) % 2 === 1 }, world);
     if (!r.ok && r.why !== "far") return { ok: false, reason: routeWords(r, to, speed) };
-    return { ok: true, route: r.route, cost: measure(r.route) };   /* checkPlan compares the cost with Speed */
+    return { ok: true, route: r.route, cost: measure([...prefix, ...r.route.slice(1)]) - measure(prefix) };   /* checkPlan compares the cost with Speed */
   };
 }
 /** Hand a plan in. Any GM may call this; the runner checks it. meta says who made it ({ by: "chat" | "api" | "gm", model, generation, usage }); a plan
@@ -485,7 +495,7 @@ async function runTurn(combat, requestId) {
     if (work) {
       let result; try { result = await work(); } catch (e) { console.error(e); result = "ask"; await save(combat, requestId, { note: e.message }); }
       if (result === "stopped") return save(combat, requestId, { state: "stopped" });
-      if (result === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} may not have finished. Check the chat and HP, then play the rest yourself.`.trim() });
+      if (result === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} may not have finished. ${step.do === "stride" ? "Put the monster where it should be" : "Check the chat and HP"}, then play the rest yourself.`.trim() });
     }
     if (request(combat, requestId).state === "manual") return;
     if (i + 1 >= r.steps.length) return save(combat, requestId, { pos: i + 1, state: "done" });

@@ -48,19 +48,23 @@ function extraFor(from, to, size, w) {
   return worst * FT;
 }
 
+/** How many diagonal steps a list of squares takes, one square to the next. */
+export function diagonalsIn(squares = []) { let n = 0; for (let k = 1; k < squares.length; k++) if (squares[k][0] !== squares[k - 1][0] && squares[k][1] !== squares[k - 1][1]) n++; return n; }
+
 /** The cheapest route for a Stride from `from` to `to`, counting as PF2e does: every other diagonal 10 ft, each difficult square entered 5 ft more,
-    greater 10 more. world: { cols, rows, terrain(i, j) → 0 | 1 | 2, or null where a Stride can't go (deep water); blocked(i, j) → a trunk or rock in the
+    greater 10 more. The diagonal count runs across the whole turn (Rules ID 444: "your total diagonal movement across all your movement during your
+    turn"), so `odd` says whether an odd number of diagonals has already been taken this turn: then the first diagonal here costs 10. world: { cols, rows, terrain(i, j) → 0 | 1 | 2, or null where a Stride can't go (deep water); blocked(i, j) → a trunk or rock in the
     square; creature(i, j) → null | "ally" | "enemy" (anyone else's space); wall(a, b) → a wall between two places it could stand }.
     budget: feet to look within. Returns { ok: true, route: [[x, y], ...from first to last], cost } or { ok: false, why, cost? }, why being
     "same", "off", "blocked", "terrain", "occupied" (the end square), "far" (cost is what it would take) or "noway". */
-export function findRoute({ from, to, size = 1, budget = 200 }, w) {
+export function findRoute({ from, to, size = 1, budget = 200, odd = false }, w) {
   if (from[0] === to[0] && from[1] === to[1]) return { ok: false, why: "same" };
   const end = standProblem(to, size, w); if (end) return { ok: false, why: end };
   /* Dijkstra over (square, whether an odd number of diagonals has been taken): the 5-10 rule makes the cost of the next diagonal depend on it */
   const best = new Map(), prev = new Map(), heap = [];
   const push = (c, s) => { heap.push([c, s]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
   const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const a = 2 * i + 1, b = a + 1; let m = i; if (a < heap.length && heap[a][0] < heap[m][0]) m = a; if (b < heap.length && heap[b][0] < heap[m][0]) m = b; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
-  const start = `${key(...from)}|0`; best.set(start, 0); push(0, start);
+  const start = `${key(...from)}|${odd ? 1 : 0}`; best.set(start, 0); push(0, start);
   const limit = Math.max(budget, 0) * 4 + 60;   /* look past the budget, so "too far" can say how far */
   while (heap.length) {
     const [c, s] = pop(); if (c > (best.get(s) ?? Infinity)) continue;

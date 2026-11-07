@@ -9,7 +9,7 @@ import { hiddenNextTo, layout, nearestFree } from "../../scripts/place.mjs";
 import { actionsFor, assignLabels, canTarget, describeKnows, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions, worse } from "../../scripts/perceive.mjs";
 import { MAX_TRIES, STEP_KINDS, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "../../scripts/brain.mjs";
 import { MAX_REPLANS, changesSince, checkPlan, currentOf, damageOptions, describeChange, describeChanges, describeStep, doneStep, latestNote, nextAction, nextMove, requestBusy, situationOf, spentBy, strikeIds } from "../../scripts/turn.mjs";
-import { distanceBetween, findRoute, footprintAt, headingOf, routeWords } from "../../scripts/move.mjs";
+import { diagonalsIn, distanceBetween, findRoute, footprintAt, headingOf, routeWords } from "../../scripts/move.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
 
@@ -248,6 +248,12 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("spent counts a stride", spentBy([{ do: "stride" }, { do: "strike" }]).actions === 2 && spentBy([{ do: "stride" }]).attacks === 0);
   check("done: arrived", doneStep({ do: "stride", to: [5, 5] }, { moved: { to: [5, 5] } }).result === "arrived" && doneStep({ do: "stride", to: [5, 5] }, { moved: { to: [4, 5] } }).result === "stopped at [4, 5]" && doneStep({ do: "stride", to: [5, 5] }, { started: true }).result === "unknown");
   check("next move", nextMove({}) === "move" && nextMove({ started: true }, [1, 1], [2, 2]) === "ask" && nextMove({ started: true }, [2, 2], [2, 2]) === "arrived" && nextMove({ started: true, moved: { to: [2, 2] } }) === "next");
+  /* the diagonal count runs across the turn (Rules ID 444); Foundry charged 15 ft, not 10, for a diagonal and a straight after a move with 3 diagonals (2026-11-07) */
+  check("diagonals counted", diagonalsIn([[26, 19], [25, 19], [24, 20], [23, 21], [22, 20], [21, 20], [20, 20]]) === 3 && diagonalsIn() === 0);
+  check("odd start: first diagonal 10", findRoute({ from: [6, 6], to: [5, 8], odd: true }, W()).cost === 15 && findRoute({ from: [6, 6], to: [5, 8] }, W()).cost === 10);
+  { const seen = []; checkPlan({ steps: [{ do: "stride", to: [2, 5] }, { do: "stride", to: [3, 6] }] }, { ...mctx, route: (f, t, before) => { seen.push(before.map(r => r.length)); return route(f, t); } });
+    check("later strides see earlier routes", seen.length === 2 && seen[0].length === 0 && seen[1].length === 1 && seen[1][0] === 3, JSON.stringify(seen)); }
+  check("can't act: no step but none", /paralyzed/.test(checkPlan({ steps: [st({ item: "bite", target: "E1" })] }, { ...mctx, cantAct: "it is paralyzed and can't act." }).reason) && checkPlan({ steps: [{ do: "none" }] }, { ...mctx, cantAct: "x" }).ok);
   check("hello can stride", hello(1).canDo.includes("stride") && hello(1).prompt.includes('"do": "stride"'));
   check("plan keeps to", cleanPlan({ steps: [{ do: "stride", to: [3, 4] }] }).plan.steps[0].to.join() === "3,4");
 }
