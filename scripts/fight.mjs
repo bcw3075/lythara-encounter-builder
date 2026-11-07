@@ -398,7 +398,8 @@ async function pauseBetween(combat, id) {
 async function runTurn(combat, requestId) {
   const r = request(combat, requestId); if (!RESUMABLE.includes(r?.state)) throw new Error("That turn isn't ready.");
   if (!await ensureScene(combat)) return save(combat, requestId, { state: "stopped", go: false, note: cantOpen() });
-  await save(combat, requestId, { state: "running", go: false, hold: false, note: null });   /* pressing Do it means go, whatever was held */
+  /* pressing Do it means go, whatever was held. A note about why it stopped goes; one from an earlier step (a PC at 0 HP) stays with the turn. */
+  await save(combat, requestId, { state: "running", go: false, hold: false, ...(r.state === "held" || r.state === "stopped" ? { note: null } : {}) });
   const tok = combat.scene.tokens.get(r.tokenId);
   for (let i = r.pos ?? 0; i < r.steps.length; i++) {
     const now = { ...request(combat, requestId), id: requestId }, step = r.steps[i];   /* a stored request doesn't carry its own id; replan needs it */
