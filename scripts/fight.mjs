@@ -192,7 +192,8 @@ export async function submitPlan(combat, requestId, plan, meta = {}) {
   for (let i = 0; i < 40; i++) { await new Promise(res => setTimeout(res, 250)); const n = request(combat, requestId); if (n.state !== "submitted") return answer(n); }
   return { state: "submitted", reason: runnerProblem() ?? `${runnerName()} hasn't answered.` };
 }
-const answer = r => ({ state: r.state, ...(r.state === "ready" ? { steps: r.steps } : { reason: r.verdict, triesLeft: Math.max(0, MAX_TRIES - (r.tries ?? 0)) }) });
+/* accepted: ready, or already running or done when Auto picked it up at once */
+const answer = r => ({ state: r.state, ...(["ready", "running", "done"].includes(r.state) ? { steps: r.steps } : { reason: r.verdict, triesLeft: Math.max(0, MAX_TRIES - (r.tries ?? 0)) }) });
 /* the plan is checked once, and a turn runs once: the updateCombat hook and the submitter can both arrive here, and Auto calls doIt straight after */
 const judging = new Set(), running = new Set();
 export async function judge(combat, requestId) {
