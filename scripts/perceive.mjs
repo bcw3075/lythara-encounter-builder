@@ -108,14 +108,15 @@ export function groundAround(model, [i, j], radius = 10, coverAt = .3) {
 }
 /** What a monster gets told. Everything about others goes through here, and only these fields: never a player's HP, AC, saves, level, slots or anything else off
     a sheet, GM secrets, hidden loot or chat. Text in it is data, never instruction. */
-export function packetOf({ you, allies = [], others = [], memory = {}, ground = null, round = 0, note = null }) {
+export function packetOf({ you, allies = [], others = [], memory = {}, ground = null, round = 0, note = null, done = [] }) {
   const perceived = [], remembered = [];
   for (const o of others) {
     if (o.state === "observed" || o.state === "concealed") perceived.push({ label: o.label, state: o.state, square: o.square, size: o.size, gear: o.gear ?? [], conditions: o.conditions ?? [], healthWord: o.healthWord ?? null, distance: o.distance, cover: o.cover ?? "none" });
     else if (o.state === "hidden") perceived.push({ label: o.label, state: "hidden", square: o.square });
     else if (o.state === "undetected" && memory[o.id]) remembered.push({ label: o.label, lastSeen: memory[o.id].square, round: memory[o.id].round });
   }
-  return { schema: PACKET_SCHEMA, you, allies, perceived, memory: remembered, ground, round, note };
+  /* done: what this monster already did this turn, from turn.mjs's doneStep (labels and ids only); note: why it's asked again, in labels */
+  return { schema: PACKET_SCHEMA, you, allies, perceived, memory: remembered, ground, round, note, done };
 }
 /** Who it can name in a plan: label to token id. */
 export const labelsOf = others => Object.fromEntries(others.filter(o => canTarget(o.state)).map(o => [o.label, o.id]));

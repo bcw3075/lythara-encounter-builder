@@ -1,7 +1,7 @@
 /* The brain interface: the one contract between the fight and whoever thinks for a monster. Today that's a Claude chat waiting through the bridge;
    later the Claude API. The module can't tell them apart: both wait for an event, read its packet, and hand in a plan. Pure: no Foundry globals;
    fight.mjs keeps the events on the Combat flag and the listener in a world setting. See claude/encounter-builder-plan.md, steps 3 and 5. */
-import { COSTS } from "./turn.mjs";
+import { COSTS, describeChanges } from "./turn.mjs";
 import { PACKET_SCHEMA } from "./perceive.mjs";
 import { PROMPT_VERSION, promptText } from "./prompt.mjs";
 
@@ -56,12 +56,13 @@ export function pickEvent(events = [], cursor = 0, isLive = () => true) {
 /** What the thinker receives for an event: the event, its packet, and how many tries are left. The packet already went through packetOf. */
 export function eventOut(ev, req) {
   return { seq: ev.seq, kind: ev.kind, combatId: ev.combatId, requestId: ev.requestId, round: req.round, monster: req.packet?.you?.label ?? null, triesLeft: MAX_TRIES - (req.tries ?? 0),
-    ...(ev.kind === "retry" ? { reason: req.verdict, yourPlan: req.plan ?? null } : {}), packet: req.packet };
+    ...(ev.kind === "retry" ? { reason: req.verdict, yourPlan: req.plan ?? null } : ev.kind === "replan" ? { reason: describeChanges(req.why), done: req.done ?? [] } : {}), packet: req.packet };
 }
 
 /* ---------- who is listening ---------- */
-/** The light on the Monster Turns window: a thinker asked for an event within the last two minutes. */
-export const listening = (brain, now) => !!brain?.at && now - brain.at < LISTEN_MS;
+/** The light on the Monster Turns window: a thinker asked for an event within the last two minutes. Times are Foundry's server clock, which every
+    browser shares; it starts again when the server does, so a time ahead of now is from before a restart and counts as not listening. */
+export const listening = (brain, now) => !!brain?.at && now >= brain.at && now - brain.at < LISTEN_MS;
 /** A newer chat takes over: plans and waits from an older generation are refused, so two chats never both play a monster. No generation means a GM by hand. */
 export const stale = (brain, generation) => generation != null && generation !== (brain?.generation ?? 0);
 /** The first answer a new thinker gets. */

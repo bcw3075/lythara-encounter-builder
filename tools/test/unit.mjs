@@ -8,7 +8,7 @@ import { buildModel, summarise } from "../../scripts/mapread.mjs";
 import { hiddenNextTo, layout, nearestFree } from "../../scripts/place.mjs";
 import { actionsFor, assignLabels, canTarget, describeKnows, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions, worse } from "../../scripts/perceive.mjs";
 import { MAX_TRIES, STEP_KINDS, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "../../scripts/brain.mjs";
-import { checkPlan, currentOf, damageOptions, describeStep, latestNote, nextAction, requestBusy, strikeIds } from "../../scripts/turn.mjs";
+import { MAX_REPLANS, changesSince, checkPlan, currentOf, damageOptions, describeChange, describeChanges, describeStep, doneStep, latestNote, nextAction, requestBusy, situationOf, spentBy, strikeIds } from "../../scripts/turn.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
 
@@ -45,6 +45,32 @@ check("fresh attacks", nextAction({}) === "attack"); check("started, no result: 
 check("a note shows", latestNote({ a: { state: "done", at: 1, note: "x" } })?.note === "x"); check("a later clean turn clears an old note", latestNote({ a: { state: "done", at: 1, note: "x" }, b: { state: "done", at: 2 } }) === null); check("a turn played by hand clears it too", latestNote({ a: { state: "done", at: 1, note: "x" }, b: { state: "manual", at: 2 } }) === null); check("order comes from the time, not the key", latestNote({ b: { state: "done", at: 2, note: "new" }, a: { state: "done", at: 1, note: "old" } })?.note === "new"); check("a turn still open doesn't count", latestNote({ a: { state: "done", at: 1, note: "x" }, b: { state: "stopped", at: 2 } })?.note === "x"); check("no turns, no note", latestNote() === null);
 const dmg = { ...hit, damageStarted: true, damage: { message: "m" } }; check("apply off stops", nextAction(dmg) === "next"); check("apply on applies", nextAction(dmg, { apply: true }) === "apply"); check("applying unknown: ask, never apply again", nextAction({ ...dmg, applying: true }, { apply: true }) === "ask"); check("applied ends", nextAction({ ...dmg, applying: true, applied: true }, { apply: true }) === "next");
 const dop = damageOptions(["self:level:1", "target:x", "item:y", "self"]); check("options", dop.origin.join() === "origin:level:1" && dop.keep.join() === "item:y");
+/* ---- one action at a time ---- */
+{
+  const three = { steps: [st({ item: "jaws", target: "E1" }), st({ item: "jaws", target: "E1" })] };
+  check("attack penalty carries on after a re-plan", checkPlan(three, { ...tctx, attacksBefore: 1 }).steps.map(s => s.variant).join() === "1,2" && checkPlan(three, { ...tctx, attacksBefore: 2 }).steps.map(s => s.variant).join() === "2,2");
+  check("actions left after a re-plan", /no actions left/.test(checkPlan(three, { ...tctx, actions: 1 }).reason));
+  check("a label stays a label when no name is given", checkPlan({ steps: [st({ item: "jaws", target: "E1" })] }, { ...tctx, targets: { E1: { distance: 5 } } }).steps[0].targetName === "E1");
+  const sp = spentBy([{ do: "strike" }, { do: "none" }, { do: "strike" }]); check("spent", sp.actions === 2 && sp.attacks === 2); check("nothing spent", spentBy().actions === 0);
+  check("done: critical hit", doneStep({ do: "strike", item: "jaws", target: "E1" }, { started: true, attack: { degree: 3 } }).result === "critical hit");
+  check("done: flat check failed", doneStep({ do: "strike", item: "jaws", target: "E1", flat: 11 }, { flatStarted: true, flat: { ok: false } }).result === "flat check failed");
+  check("done: no names", JSON.stringify(doneStep({ do: "strike", item: "jaws", target: "E1", targetName: "Hero", itemName: "Jaws" }, { attack: { degree: 1 } })) === '{"do":"strike","item":"jaws","target":"E1","result":"miss"}');
+  const base = situationOf({ me: { square: [5, 5], hp: 50, actions: 3, conditions: ["frightened 1"] }, others: { E1: { square: [6, 5], state: "observed", down: false }, E2: { square: [9, 9], state: "hidden", down: false } } });
+  const tweak = f => { const n = JSON.parse(JSON.stringify(base)); f(n); return changesSince(base, n); };
+  check("nothing changed", changesSince(base, situationOf(JSON.parse(JSON.stringify(base)))).length === 0);
+  check("conditions in any order", changesSince(situationOf({ me: { conditions: ["a", "b"] } }), situationOf({ me: { conditions: ["b", "a", "a"] } })).length === 0);
+  check("target down", tweak(n => { n.others.E1.down = true; }).map(c => `${c.who}:${c.what}`).join() === "E1:down");
+  check("someone moved", tweak(n => { n.others.E2.square = [9, 8]; }).map(c => `${c.who}:${c.what}`).join() === "E2:moved");
+  check("perceived differently", tweak(n => { n.others.E1.state = "hidden"; })[0]?.now === "hidden");
+  check("gone", tweak(n => { delete n.others.E2; })[0]?.what === "gone");
+  check("it moved", tweak(n => { n.me.square = [5, 6]; })[0]?.what === "moved"); check("it was hurt", tweak(n => { n.me.hp = 40; })[0]?.what === "hurt"); check("it healed", tweak(n => { n.me.hp = 55; })[0]?.what === "healed");
+  check("its actions", tweak(n => { n.me.actions = 2; })[0]?.now === 2); check("its conditions", tweak(n => { n.me.conditions = ["slowed 1"]; })[0]?.what === "conditions");
+  check("no baseline, no change", changesSince(null, base).length === 0 && changesSince(base, null).length === 0);
+  check("words for the thinker keep labels", describeChange({ who: "E1", what: "down" }) === "E1 is down." && describeChange({ who: "me", what: "hurt" }) === "It was hurt." && describeChange({ who: "me", what: "actions", now: 2 }) === "Its actions this turn are now 2.");
+  check("words for the GM have names", describeChanges([{ who: "E1", what: "down" }, { who: "me", what: "conditions", now: ["slowed 1"] }], l => ({ E1: "Hero" })[l], "Wolf") === "Hero is down. Wolf's conditions are now slowed 1.");
+  check("a plan reason loses its step number", describeChange({ who: "plan", what: "illegal", reason: "Step 1: E1 is 30 ft away, out of reach of Jaws (5 ft)." }) === "E1 is 30 ft away, out of reach of Jaws (5 ft).");
+  check("re-plans capped", MAX_REPLANS === 3);
+}
 
 /* ---- geometry ---- */
 const ring = (x, y, r, sight) => { const pts = [...Array(6)].map((_, k) => [x + Math.cos(k * Math.PI / 3) * r, y + Math.sin(k * Math.PI / 3) * r]); return pts.map((p, k) => ({ ax: p[0], ay: p[1], bx: pts[(k + 1) % 6][0], by: pts[(k + 1) % 6][1], move: true, sight, dir: 1 })); };
@@ -126,6 +152,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   const others = [{ id: "a", label: "E1", state: "observed", square: [1, 1], size: "med", gear: ["Sword"], conditions: ["prone"], healthWord: "Barely Hurt", distance: 10, cover: "none", hp: 17, ac: 19, level: 3, name: "Sekrit" }, { id: "b", label: "E2", state: "hidden", square: [2, 2], size: "med", gear: ["Sword"], healthWord: "x", distance: 5 }, { id: "c", label: "E3", state: "undetected", square: [3, 3] }, { id: "d", label: "E4", state: "undetected", square: [4, 4] }, { id: "e", label: "E5", state: "unnoticed", square: [5, 5] }];
   const pk = packetOf({ you: { label: "M1" }, others, memory: { c: { square: [9, 9], round: 2 } }, round: 3 }), flat = JSON.stringify(pk);
   check("hidden shows the square only", Object.keys(pk.perceived[1]).sort().join() === "label,square,state"); check("nothing off a sheet", !/"(hp|ac|level|name|saves)"/.test(flat.replace(/"you":\{[^}]*\}/, "")) && !flat.includes("Sekrit") && !flat.includes("17")); check("undetected: only what it remembers", pk.memory.length === 1 && pk.memory[0].lastSeen.join() === "9,9" && !pk.perceived.some(p => p.label === "E3" || p.label === "E4")); check("unnoticed: nothing", !flat.includes("E5") && !flat.includes("E4"));
+  check("packet carries what's done and why", pk.note === null && Array.isArray(pk.done) && pk.done.length === 0 && packetOf({ you: {}, done: [{ do: "none" }], note: "E1 is down." }).done.length === 1);
   check("plan labels", Object.keys(labelsOf(others)).join() === "E1,E2"); const rem = remember({ a: { square: [1, 1], round: 3 } }, others, 3); check("remember only changes", Object.keys(rem).join() === "b" && rem.b.square.join() === "2,2");
   check("card line", describeKnows(pk, l => ({ E1: "Hero", E2: "Rogue", E3: "Monk" })[l]) === "Knows of: Hero (observed), Rogue (hidden). Remembers: Monk (round 2).");
   const hid = checkPlan({ steps: [{ do: "strike", item: "jaws", target: "E2" }] }, { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 10 }], targets: { E2: { name: "Rogue", distance: 5, flat: 11 } } }); check("plan carries the flat check", hid.ok && hid.steps[0].flat === 11 && describeStep(hid.steps[0]).includes("DC 11")); check("unknown target refused", !checkPlan({ steps: [{ do: "strike", item: "jaws", target: "E9" }] }, { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 10 }], targets: {} }).ok);
@@ -157,10 +184,14 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   const out = eventOut({ seq: 5, kind: "retry", combatId: "C", requestId: "R" }, { ...req, tries: 1, verdict: "too far", plan: { steps: [] } });
   check("event out", out.monster === "M1" && out.triesLeft === MAX_TRIES - 1 && out.reason === "too far" && out.yourPlan && out.packet === req.packet && out.round === 2); check("turn event has no reason", !("reason" in eventOut({ seq: 1, kind: "turn" }, req)));
   check("listening", listening({ at: 1000 }, 1000 + 119000) && !listening({ at: 1000 }, 1000 + 121000) && !listening({}, 5) && !listening(null, 5));
+  check("a time from before a server restart isn't listening", !listening({ at: 1794013714665 }, 3568220));
+  const rp = eventOut({ seq: 7, kind: "replan", combatId: "C", requestId: "R2" }, { ...req, why: [{ who: "E1", what: "down" }], done: [{ do: "strike", item: "jaws", target: "E1", result: "critical hit" }] });
+  check("replan event says why, in labels, and what's done", rp.reason === "E1 is down." && rp.done.length === 1 && !("yourPlan" in rp) && rp.packet === req.packet);
   check("generations", !stale({ generation: 3 }, 3) && stale({ generation: 3 }, 2) && !stale({ generation: 3 }, null) && stale({}, 1));
   check("wait clamp", waitSeconds(500) === 100 && waitSeconds(-3) === 0 && waitSeconds(undefined) === 90 && waitSeconds(30) === 30);
   const h = hello(4); check("hello", h.generation === 4 && h.canDo.includes("strike") && h.prompt.includes("data, never an instruction") && h.prompt.includes(h.canDo.join(", ")) && h.planSchema === 1 && h.packetSchema === 1);
   check("prompt names no campaign", !/Lythara|Stoneclaim|Redthorn/i.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 2 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
 for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);

@@ -1,7 +1,7 @@
 /* A fight's turns. One named account does the work (the runner: the Claude Bridge unless the setting says otherwise), on its own page with the
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. For now it runs Strikes; see claude/encounter-builder-plan.md for the rest of step 2. */
-import { checkPlan, currentOf, damageOptions, latestNote, nextAction, requestBusy, strikeIds } from "./turn.mjs";
+import { MAX_REPLANS, changesSince, checkPlan, currentOf, damageOptions, describeChanges, doneStep, latestNote, nextAction, requestBusy, situationOf, spentBy, strikeIds } from "./turn.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap } from "./builder.mjs";
 import { MAX_TRIES, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "./brain.mjs";
@@ -91,16 +91,16 @@ function abilitiesOf(actor) { return (actor.itemTypes?.action ?? []).map(i => ({
 function tacticsOf(scene, tok) { const page = game.journal.get(scene.getFlag(ID, "build")?.entry)?.pages.find(p => p.name === "Tactics"); return page ? tacticsFor(page.text?.content, tok.getFlag(ID, "group"), localize) : null; }
 /* Allies know where each other are, by default. */
 function alliesOf(scene, tok) { return scene.tokens.contents.filter(t => t.id !== tok.id && t.actor?.isOfType?.("creature") && t.actor.isAllyOf?.(tok.actor)); }
-/** A monster's packet as things stand, plus the labels it needs. Writes nothing. */
-async function buildPacket(combat, tok) {
+/** A monster's packet as things stand, plus the labels it needs. Writes nothing. turn: what this turn already used ({ spent, attacks, done, note }), on a re-plan. */
+async function buildPacket(combat, tok, turn = {}) {
   const scene = combat.scene, t = turns(combat), memory = t.memory?.[tok.id] ?? {}, others = sense(combat, tok, memory), allies = alliesOf(scene, tok);
   const known = others.filter(o => canTarget(o.state) || (o.state === "undetected" && memory[o.id])), labels = { ...(t.labels ?? {}) };
   const fresh = { ...assignLabels(labels, known.map(o => o.id), "E"), ...assignLabels(labels, [tok.id, ...allies.map(a => a.id)], "M") }; Object.assign(labels, fresh);
   const { model } = await readMap(scene), a = tok.actor, h = a.hitPoints, square = squareOf(tok, scene);
   const speeds = a.system.movement?.speeds ?? {}, extra = Object.fromEntries(["fly", "swim", "climb", "burrow"].filter(k => speeds[k]?.value).map(k => [k, speeds[k].value]));
-  const you = { label: labels[tok.id], name: tok.name, square, size: a.size, actionsLeft: actionsOf(a, combat), hp: `${h.value}/${h.max}`, speed: speeds.land?.value ?? 0, ...(Object.keys(extra).length ? { speeds: extra } : {}), conditions: (a.conditions?.active ?? []).map(c => c.value ? `${c.slug} ${c.value}` : c.slug), strikes: await strikesOf(a), abilities: abilitiesOf(a), tactics: tacticsOf(scene, tok) };
+  const you = { label: labels[tok.id], name: tok.name, square, size: a.size, actionsLeft: Math.max(0, actionsOf(a, combat) - (turn.spent ?? 0)), attacksMade: turn.attacks ?? 0, hp: `${h.value}/${h.max}`, speed: speeds.land?.value ?? 0, ...(Object.keys(extra).length ? { speeds: extra } : {}), conditions: (a.conditions?.active ?? []).map(c => c.value ? `${c.slug} ${c.value}` : c.slug), strikes: await strikesOf(a), abilities: abilitiesOf(a), tactics: tacticsOf(scene, tok) };
   const cover = game.modules.get(VISIONER)?.active ? game.modules.get(VISIONER).api : null;
-  const packet = packetOf({ you, round: combat.round, memory, ground: groundAround(model, square, GROUND_RADIUS),
+  const packet = packetOf({ you, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], ground: groundAround(model, square, GROUND_RADIUS),
     allies: allies.map(x => ({ label: labels[x.id], name: x.name, square: squareOf(x, scene), healthWord: wordsFor(x.actor), conditions: visibleConditions(conditionsOn(x.actor)) })),
     others: others.map(o => ({ id: o.id, state: o.state, label: labels[o.id], square: o.square, size: o.token.actor.size, distance: o.distance, gear: gearOf(o.token.actor), conditions: visibleConditions(conditionsOn(o.token.actor)), healthWord: wordsFor(o.token.actor), cover: cover?.getAutoCoverState?.(tok.object, o.token.object) ?? "none" })) });
   return { packet, labels: labelsOf(others.map(o => ({ id: o.id, state: o.state, label: labels[o.id] }))), fresh, others };
@@ -139,13 +139,27 @@ async function onTurnChange(combat) {
     const id = foundry.utils.randomID(8), base = { state: "requested", combatantId: combatant.id, tokenId: tok.id, round: combat.round, turn: combat.turn, at: Date.now(), log: {} };
     if (!opened || !tok.object) return await save(combat, id, { ...base, labels: {}, note: cantOpen() });   /* no map, no packet: words instead of silent wrong answers */
     let built; try { built = await buildPacket(combat, tok); } catch (e) { console.error(`${ID} | packet`, e); return await save(combat, id, { ...base, labels: {}, note: `I couldn't work out what ${tok.name} perceives (${e.message}). Play this turn yourself.` }); }
-    const change = { [`requests.${id}`]: { ...base, labels: built.labels, packet: built.packet, note: null, tries: 0 }, ...eventChange("turn", id, 0) };
-    for (const [k, v] of Object.entries(built.fresh)) change[`labels.${k}`] = v;
-    for (const [k, v] of Object.entries(remember(turns(combat).memory?.[tok.id] ?? {}, built.others, combat.round))) change[`memory.${tok.id}.${k}`] = v;
-    await saveTurns(combat, change);
+    await saveTurns(combat, { [`requests.${id}`]: { ...base, labels: built.labels, packet: built.packet, seen: situationNow(combat, tok, built.labels, built.others), note: null, tries: 0, pos: 0 }, ...eventChange("turn", id, 0), ...packetExtras(combat, tok, built) });
   } finally { starting.delete(key); }
 }
 const cantOpen = () => `${game.user.name} couldn't open the fight map. Play this turn yourself.`;
+/* new labels and memory that come with a packet */
+function packetExtras(combat, tok, built) {
+  const change = {}; for (const [k, v] of Object.entries(built.fresh)) change[`labels.${k}`] = v;
+  for (const [k, v] of Object.entries(remember(turns(combat).memory?.[tok.id] ?? {}, built.others, combat.round))) change[`memory.${tok.id}.${k}`] = v;
+  return change;
+}
+/* Down: no HP left, dying, unconscious or dead. A creature the monster can see falling is the change that matters most. */
+const isDown = actor => !actor || (actor.hitPoints?.value ?? 1) <= 0 || !!actor.isDead || ["dying", "unconscious"].some(c => actor.hasCondition?.(c));
+const conditionWords = actor => (actor.conditions?.active ?? []).map(c => c.value ? `${c.slug} ${c.value}` : c.slug);
+/** What the rest of the turn rests on, as things stand: the monster itself, and each creature it could name when asked (labels: label to token id). */
+function situationNow(combat, tok, labels = {}, others = null) {
+  const a = tok.actor, h = a.hitPoints ?? {};
+  others ??= sense(combat, tok, turns(combat).memory?.[tok.id] ?? {});
+  const byId = new Map(others.map(o => [o.id, o])), seen = {};
+  for (const [label, id] of Object.entries(labels)) { const o = byId.get(id); if (o) seen[label] = { square: o.square, state: o.state, down: isDown(o.token.actor) }; }
+  return situationOf({ me: { square: squareOf(tok, combat.scene), hp: (h.value ?? 0) + (h.temp ?? 0), actions: actionsOf(a, combat), conditions: conditionWords(a) }, others: seen });
+}
 /** The runner's answer to any change on the Combat. */
 export function onCombatUpdate(combat, change) {
   if (!isRunner()) return;
@@ -172,14 +186,15 @@ export async function onRunnerReady() {
     await onTurnChange(combat); act(combat);
   }
 }
-/** Live values for the legality check. Reach and distance need the canvas on the fight scene. */
-function gather(combat, req) {
+/** Live values for the legality check. Reach and distance need the canvas on the fight scene. used: what this request's finished steps took. Names are
+    labels, because a refusal's reason goes back to the thinker; the card puts names in. */
+function gather(combat, req, used = { actions: 0, attacks: 0 }) {
   const scene = combat.scene, tok = scene.tokens.get(req.tokenId), actor = tok.actor;
   const strikes = strikesWithIds(actor).map(({ id, strike: a }) => ({ id, name: a.label, reach: actor.getReach({ action: "attack", weapon: a.item }), ranged: !!a.item?.isRanged, maxRange: a.item?.range?.max ?? null }));
   /* only what it perceived when asked, and still does: a plan can't name anything else */
   const now = new Map(sense(combat, tok, turns(combat).memory?.[tok.id] ?? {}).map(o => [o.id, o])), targets = {};
-  for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && canTarget(o.state)) targets[label] = { name: o.token.name, distance: o.distance, flat: flatDC(o.state) }; }
-  return { actions: actionsOf(actor, combat), strikes, targets };
+  for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && canTarget(o.state)) targets[label] = { name: label, distance: o.distance, flat: flatDC(o.state) }; }
+  return { actions: Math.max(0, actionsOf(actor, combat) - (req.spent ?? 0) - used.actions), attacksBefore: (req.attacks ?? 0) + used.attacks, strikes, targets };
 }
 /** Hand a plan in. Any GM may call this; the runner checks it. meta says who made it ({ by: "chat" | "api" | "gm", model, generation, usage }); a plan
     from an older chat's generation is ignored. The plan is stored as it came and cleaned by the runner, so tries are counted in one place. */
@@ -243,9 +258,9 @@ function firstEvent(cursor) {
 export async function waitForEvent(cursor = 0, maxSeconds = 90, { generation = null } = {}) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
   cursor = Number.isFinite(cursor) ? cursor : 0;
-  if (generation == null) { const g = (brainNow().generation ?? 0) + 1; await setBrain({ generation: g, at: Date.now() }); return { cursor, hello: hello(g) }; }
+  if (generation == null) { const g = (brainNow().generation ?? 0) + 1; await setBrain({ generation: g, at: clock() }); return { cursor, hello: hello(g) }; }
   if (stale(brainNow(), generation)) return { cursor, superseded: true, reason: SUPERSEDED };
-  await setBrain({ generation, at: Date.now() });
+  await setBrain({ generation, at: clock() });
   let got = firstEvent(cursor);
   if (!got) got = await new Promise(res => {
     let hook = null, timer = null;
@@ -256,8 +271,10 @@ export async function waitForEvent(cursor = 0, maxSeconds = 90, { generation = n
   if (stale(brainNow(), generation)) return { cursor, superseded: true, reason: SUPERSEDED };
   return got ? { cursor: got.seq, event: got } : { cursor, idle: true };
 }
+/** Foundry's server clock: the same in every browser, so the light means the same on Rhea's computer as on the server PC. */
+export const clock = () => game.time.serverTime;
 /** Is the thinker there? For the Monster Turns window. */
-export const brainListening = () => listening(brainNow(), Date.now());
+export const brainListening = () => listening(brainNow(), clock());
 export const brainSeenAt = () => brainNow().at ?? 0;
 /** Legality only: what the runner would say, with nothing written. Needs the fight open on this page. */
 export function checkOnly(combat, requestId, plan) {
@@ -362,30 +379,66 @@ async function applyFromCard(message, roll, target) {
   const rollOptions = new Set([...keep, ...origin, ...actor.getSelfRollOptions()]);
   await actor.applyDamage({ damage: roll, token: target, item: message.item, rollOptions, shieldBlockRequest: false, outcome: context.outcome });
 }
-/** Do it: on the runner, run the steps in order. Safe to call again after a reload: finished work is never repeated. From anyone else's browser it asks
-    the runner, through the flag; a turn never runs quietly in the wrong browser. */
+/** Do it (and Next step): on the runner, carry the plan on from where it stands. Without Auto it does one action and waits for Next step; with Auto it
+    goes on by itself, with a pause between actions. Safe to call again after a reload: finished work is never repeated. From anyone else's browser it
+    asks the runner, through the flag; a turn never runs quietly in the wrong browser. */
 export async function doIt(combat, requestId) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
   if (!isRunner()) { const why = runnerProblem(); if (why) throw new Error(why); return save(combat, requestId, { go: true }); }
   if (running.has(requestId)) return;
   running.add(requestId); try { await runTurn(combat, requestId); } finally { running.delete(requestId); stopAiming(); }
 }
+const autoPause = () => Math.max(0, Number(game.settings.get(ID, "autoPause")) || 0);
+/* Auto's pause between actions, so each roll can be followed. Hold and Play it myself end it at once. */
+async function pauseBetween(combat, id) {
+  const end = Date.now() + autoPause() * 1000;
+  while (Date.now() < end) { await new Promise(r => setTimeout(r, Math.min(200, end - Date.now()))); const n = request(combat, id); if (n?.hold || n?.state === "manual") return; }
+}
 async function runTurn(combat, requestId) {
   const r = request(combat, requestId); if (!RESUMABLE.includes(r?.state)) throw new Error("That turn isn't ready.");
   if (!await ensureScene(combat)) return save(combat, requestId, { state: "stopped", go: false, note: cantOpen() });
-  await save(combat, requestId, { state: "running", go: false, note: null });
+  await save(combat, requestId, { state: "running", go: false, hold: false, note: null });   /* pressing Do it means go, whatever was held */
   const tok = combat.scene.tokens.get(r.tokenId);
-  for (const [i, step] of r.steps.entries()) {
-    const now = request(combat, requestId);
+  for (let i = r.pos ?? 0; i < r.steps.length; i++) {
+    const now = request(combat, requestId), step = r.steps[i];
     if (now.state === "manual") return;
     if (now.hold) return save(combat, requestId, { state: "held", hold: false, note: "Held before the next step." });
-    if (step.do !== "strike") continue;
-    const target = combat.scene.tokens.get(r.labels[step.target]); if (!target) return save(combat, requestId, { state: "stopped", note: `${step.targetName} is gone.` });
-    let result; try { result = await runStrike(combat, requestId, i, step, tok, target); } catch (e) { console.error(e); result = "ask"; await save(combat, requestId, { note: e.message }); }
-    if (result === "stopped") return save(combat, requestId, { state: "stopped" });
-    if (result === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} may not have finished. Check the chat and HP, then play the rest yourself.`.trim() });
+    /* look again before an action that hasn't begun. One begun before a reload carries on, never re-planned halfway. */
+    if (!Object.keys(now.log?.[i] ?? {}).length) { const why = lookAgain(combat, now, i, tok); if (why.length) return replan(combat, now, i, why, tok); }
+    if (step.do === "strike") {
+      const target = combat.scene.tokens.get(r.labels[step.target]); if (!target) return save(combat, requestId, { state: "stopped", note: `${step.targetName} is gone.` });
+      let result; try { result = await runStrike(combat, requestId, i, step, tok, target); } catch (e) { console.error(e); result = "ask"; await save(combat, requestId, { note: e.message }); }
+      if (result === "stopped") return save(combat, requestId, { state: "stopped" });
+      if (result === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} may not have finished. Check the chat and HP, then play the rest yourself.`.trim() });
+    }
+    if (request(combat, requestId).state === "manual") return;
+    if (i + 1 >= r.steps.length) return save(combat, requestId, { pos: i + 1, state: "done" });
+    if (!tok.getFlag(ID, "auto")) return save(combat, requestId, { pos: i + 1, state: "ready" });   /* Next step */
+    await save(combat, requestId, { pos: i + 1 });
+    await pauseBetween(combat, requestId);
   }
   if (request(combat, requestId).state !== "manual") return save(combat, requestId, { state: "done" });
+}
+/** What changed since the plan was made, or why the next step no longer works. Empty when it can go on. */
+function lookAgain(combat, r, i, tok) {
+  if (!r.seen || !tok.object) return [];   /* a request from before 0.4.0 has no baseline */
+  const changes = changesSince(r.seen, situationNow(combat, tok, r.labels));
+  if (changes.length) return changes;
+  const rest = checkPlan({ steps: (r.plan?.steps ?? []).slice(i) }, gather(combat, r, spentBy(r.steps.slice(0, i))));
+  return rest.ok ? [] : [{ who: "plan", what: "illegal", reason: rest.reason }];
+}
+/** Drop the rest of the plan and ask again, for the same turn: a new request with a fresh packet, what's done so far, and why. The old one ends there. */
+async function replan(combat, r, i, changes, tok) {
+  const used = spentBy(r.steps.slice(0, i)), spent = (r.spent ?? 0) + used.actions, attacks = (r.attacks ?? 0) + used.attacks, replans = (r.replans ?? 0) + 1;
+  const done = [...(r.done ?? []), ...r.steps.slice(0, i).map((s, k) => doneStep(s, r.log?.[k]))], why = describeChanges(changes), at = `requests.${r.id}`;
+  if (actionsOf(tok.actor, combat) - spent <= 0) return saveTurns(combat, { [`${at}.state`]: "done", [`${at}.pos`]: i, [`${at}.why`]: changes, [`${at}.note`]: `${why} No actions left, so the turn ends here.` });
+  if (replans > MAX_REPLANS) return saveTurns(combat, { [`${at}.state`]: "done", [`${at}.pos`]: i, [`${at}.why`]: changes, [`${at}.note`]: `${why} That would be re-plan ${replans} this turn, so play the rest yourself.` });
+  let built; try { built = await buildPacket(combat, tok, { spent, attacks, done, note: `Asked again mid-turn: ${why}` }); }
+  catch (e) { console.error(`${ID} | packet`, e); return save(combat, r.id, { state: "stopped", note: `Something changed (${why}) and I couldn't work out what ${tok.name} perceives now (${e.message}). Play the rest yourself.` }); }
+  const id = foundry.utils.randomID(8);
+  await saveTurns(combat, { [`${at}.state`]: "done", [`${at}.pos`]: i, [`${at}.replanned`]: id,
+    [`requests.${id}`]: { state: "requested", combatantId: r.combatantId, tokenId: r.tokenId, round: r.round, turn: r.turn, at: Date.now(), log: {}, labels: built.labels, packet: built.packet, seen: situationNow(combat, tok, built.labels, built.others), note: null, tries: 0, pos: 0, spent, attacks, done, replans, why: changes, parent: r.id },
+    ...eventChange("replan", id, 0), ...packetExtras(combat, tok, built) });
 }
 /** Is this page working on a turn, or about to? For tools that share the runner's page. The in-memory sets cover the start of a turn, before any request
     exists, so only the runner's own page has the full answer; on any other page it's the flag alone. */
