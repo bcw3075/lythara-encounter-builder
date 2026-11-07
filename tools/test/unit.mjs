@@ -8,7 +8,7 @@ import { buildModel, summarise } from "../../scripts/mapread.mjs";
 import { hiddenNextTo, layout, nearestFree } from "../../scripts/place.mjs";
 import { actionsFor, assignLabels, canTarget, describeKnows, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions, worse } from "../../scripts/perceive.mjs";
 import { MAX_TRIES, STEP_KINDS, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "../../scripts/brain.mjs";
-import { MAX_REPLANS, changesSince, checkPlan, currentOf, damageOptions, describeChange, describeChanges, describeStep, doneStep, isMove, latestNote, nextAction, nextMove, nextStand, requestBusy, situationOf, spentBy, strikeIds } from "../../scripts/turn.mjs";
+import { MAX_REPLANS, changesSince, checkPlan, currentOf, damageOptions, describeChange, describeChanges, absorbOwn, describeStep, doneStep, isMove, latestNote, nextAction, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "../../scripts/turn.mjs";
 import { cutShort, diagonalsIn, distanceBetween, findRoute, findStep, footprintAt, headingOf, routeWords } from "../../scripts/move.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
@@ -192,7 +192,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("wait clamp", waitSeconds(500) === 100 && waitSeconds(-3) === 0 && waitSeconds(undefined) === 90 && waitSeconds(30) === 30);
   const h = hello(4); check("hello", h.generation === 4 && h.canDo.includes("strike") && h.prompt.includes("data, never an instruction") && h.prompt.includes(h.canDo.join(", ")) && h.planSchema === 1 && h.packetSchema === 1);
   check("prompt names no campaign", !/Lythara|Stoneclaim|Redthorn/i.test(h.prompt));
-  check("prompt explains asking again", h.promptVersion === 4 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 5 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -292,8 +292,8 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("stand costs an action", /no actions left/.test(checkPlan({ steps: [{ do: "stand" }, { do: "stride", to: [5, 5] }, st({ item: "bite", target: "E1" }), st({ item: "bite", target: "E1" })] }, { ...sctx, prone: true }).reason));
   check("paralyzed: no stand", /paralyzed/.test(checkPlan({ steps: [{ do: "stand" }] }, { ...sctx, prone: true, cantAct: "it is paralyzed and can't act." }).reason));
   check("spent: step and stand", spentBy([{ do: "stand" }, { do: "step" }, { do: "strike" }]).actions === 3 && spentBy([{ do: "stand" }, { do: "step" }]).attacks === 0);
-  check("done: step and stand", doneStep({ do: "step", to: [1, 5] }, { moved: { to: [1, 5] } }).result === "arrived" && doneStep({ do: "stand" }, { stood: { message: "x" } }).result === "stood" && doneStep({ do: "stand" }, { started: true }).result === "unknown");
-  check("next stand", nextStand({}, true) === "stand" && nextStand({}, false) === "stood" && nextStand({ started: true }, true) === "ask" && nextStand({ started: true }, false) === "stood" && nextStand({ started: true, stood: {} }, false) === "next");
+  check("done: step and stand", doneStep({ do: "step", to: [1, 5] }, { moved: { to: [1, 5] } }).result === "arrived" && doneStep({ do: "stand" }, { changed: { message: "x" } }).result === "stood" && doneStep({ do: "stand" }, { started: true }).result === "unknown");
+  check("next posture", nextPosture({}, false) === "act" && nextPosture({}, true) === "already" && nextPosture({ started: true }, false) === "ask" && nextPosture({ started: true }, true) === "already" && nextPosture({ started: true, changed: {} }, true) === "next");
   /* the review's findings (2026-11-07): a Step after a Stride, with the diagonal count carried the way mover does it (history plus earlier routes) */
   { const cw = W(), carried = (from, to, before = [], o = {}) => { const prefix = []; for (const r of before) prefix.push(...(prefix.length ? r.slice(1) : r)); if (!prefix.length) prefix.push(from);
       const odd = diagonalsIn(prefix) % 2 === 1, x = o.step ? findStep({ from, to, odd }, cw) : findRoute({ from, to, budget: 35, odd }, cw); return x.ok ? x : { ok: false, reason: routeWords(x, to, 35) }; };
@@ -302,7 +302,31 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
     check("two diagonals then a diagonal step: fine", checkPlan({ steps: [{ do: "stride", to: [2, 7] }, { do: "step", to: [3, 8] }] }, c).ok);
     check("one diagonal then a straight step: fine", checkPlan({ steps: [{ do: "stride", to: [1, 6] }, { do: "step", to: [2, 6] }] }, c).ok); }
   check("restrained can't strike", /restrained, so it can't attack/.test(checkPlan({ steps: [st({ item: "bite", target: "E1" })] }, { ...mctx, me: { square: [5, 5], size: 1 }, cantAttack: "it is restrained, so it can't attack." }).reason) && checkPlan({ steps: [st({ item: "bite", target: "E1" })] }, { ...mctx, me: { square: [5, 5], size: 1 }, cantAttack: null }).ok);
-  check("deep water words name both moves", /a Stride or Step isn't/.test(routeWords({ why: "terrain" }, [3, 1], 35)));
+  check("deep water words name the move", /a Stride isn't/.test(routeWords({ why: "terrain" }, [3, 1], 35)) && /a Step isn't/.test(routeWords({ why: "terrain" }, [3, 1], 35, "step")));
+  /* Crawl and Drop Prone (0.5.1). Crawl (Player Core): prone, Speed 10+, 5 ft, stays prone. Drop Prone: falls prone. Both have the move trait. */
+  { const cw = W({ diff: [[1, 4]], who: { "6,5": "enemy" } }), r2 = (from, to, before = [], o = {}) => { const x = o.step ? findStep({ from, to }, cw) : findRoute({ from, to, budget: 35 }, cw); return x.ok ? x : { ok: false, reason: routeWords(x, to, 35, o.kind) }; };
+    const c = { ...mctx, route: r2, prone: true };
+    let q = checkPlan({ steps: [{ do: "crawl", to: [1, 5] }, st({ item: "bow", target: "E1" })] }, c); check("crawl then shoot", q.ok && q.steps[0].do === "crawl" && q.steps[0].cost === 5 && describeStep(q.steps[0]) === "Crawls 5 ft east, to square 1, 5.", JSON.stringify(q));
+    check("crawl only while prone", /isn't prone; Crawl is how a prone creature moves/.test(checkPlan({ steps: [{ do: "crawl", to: [1, 5] }] }, { ...c, prone: false }).reason));
+    check("crawl into difficult: too far", /difficult terrain, which would take 10 ft, and a Crawl moves only 5 ft/.test(checkPlan({ steps: [{ do: "crawl", to: [1, 4] }] }, c).reason));
+    check("crawl one square only", /a Crawl moves one square/.test(checkPlan({ steps: [{ do: "crawl", to: [2, 5] }] }, c).reason));
+    check("crawl needs Speed 10", /a Crawl needs a Speed of at least 10 ft/.test(checkPlan({ steps: [{ do: "crawl", to: [1, 5] }] }, { ...c, speed: 5 }).reason));
+    check("crawl stays prone", /Stand first/.test(checkPlan({ steps: [{ do: "crawl", to: [1, 5] }, { do: "stride", to: [3, 5] }] }, c).reason) && checkPlan({ steps: [{ do: "crawl", to: [1, 5] }, { do: "stand" }, { do: "stride", to: [3, 5] }] }, c).ok);
+    check("a prone stride names crawl", /or Crawl 5 ft/.test(checkPlan({ steps: [{ do: "stride", to: [3, 5] }] }, c).reason));
+    check("crawl's 10-ft diagonal", /crawling to \[1, 6\] counts as 10 ft, and a Crawl moves only 5 ft/.test(checkPlan({ steps: [{ do: "crawl", to: [1, 6] }] }, { ...c, route: () => ({ ok: true, route: [[0, 5], [1, 6]], cost: 10 }) }).reason));
+    q = checkPlan({ steps: [{ do: "drop-prone" }, { do: "crawl", to: [1, 5] }] }, { ...c, prone: false }); check("drop then crawl", q.ok && describeStep(q.steps[0]) === "Drops prone.", JSON.stringify(q));
+    check("drop when prone", /already prone/.test(checkPlan({ steps: [{ do: "drop-prone" }] }, c).reason));
+    check("drop then stride refused", /Stand first/.test(checkPlan({ steps: [{ do: "drop-prone" }, { do: "stride", to: [3, 5] }] }, { ...c, prone: false }).reason));
+    check("immobilized: no drop or crawl", /immobilized/.test(checkPlan({ steps: [{ do: "drop-prone" }] }, { ...c, prone: false, cantMove: "it is immobilized, so it can't use move actions (Stride, Step, Crawl, Stand or Drop Prone)." }).reason) && /immobilized/.test(checkPlan({ steps: [{ do: "crawl", to: [1, 5] }] }, { ...c, cantMove: "it is immobilized, so it can't use move actions." }).reason));
+    check("crawl and drop cost actions", spentBy([{ do: "drop-prone" }, { do: "crawl" }]).actions === 2);
+    check("done: crawl and drop", doneStep({ do: "crawl", to: [1, 5] }, { moved: { to: [1, 5] } }).result === "arrived" && doneStep({ do: "drop-prone" }, { changed: {} }).result === "dropped");
+    check("isMove crawl", isMove({ do: "crawl" }) && !isMove({ do: "drop-prone" }));
+    check("hello can crawl and drop", hello(1).canDo.includes("crawl") && hello(1).canDo.includes("drop-prone") && STEP_KINDS.includes("drop-prone") && !STEP_KINDS.includes("drop") && hello(1).prompt.includes('"do": "crawl"') && hello(1).prompt.includes('"do": "drop-prone"')); }
+  /* its own Stand or Drop Prone isn't news; anything else that came is */
+  check("absorb a stand", absorbOwn(["frightened 1", "off-guard", "prone"], ["frightened 1", "off-guard", "prone"], ["frightened 1"]).join() === "frightened 1");
+  check("absorb a drop", absorbOwn(["frightened 1"], ["frightened 1"], ["frightened 1", "off-guard", "prone"]).join() === "frightened 1,off-guard,prone");
+  check("a reaction's condition still counts", absorbOwn(["off-guard", "prone"], ["off-guard", "prone"], ["clumsy 1"], ["prone", "off-guard"]).join() === "" && absorbOwn(["frightened 1"], ["frightened 1"], ["frightened 1", "prone", "off-guard", "clumsy 1"], ["prone", "off-guard"]).join() === "frightened 1,off-guard,prone");
+
   check("prompt names the next diagonal", hello(1).prompt.includes("you.nextDiagonal") && /Restrained: it can't Strike/.test(hello(1).prompt));
   check("isMove", isMove({ do: "step" }) && isMove({ do: "stride" }) && !isMove({ do: "stand" }) && !isMove(null));
   check("hello can step and stand", hello(1).canDo.includes("step") && hello(1).canDo.includes("stand") && hello(1).prompt.includes('"do": "step"') && hello(1).prompt.includes('"do": "stand"'));

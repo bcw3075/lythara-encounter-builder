@@ -1,7 +1,7 @@
 /* A fight's turns. One named account does the work (the runner: the Claude Bridge unless the setting says otherwise), on its own page with the
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
-   summarised chat loses nothing. For now it runs Strikes, Strides, Steps and Stand; see claude/encounter-builder-plan.md for the rest of step 2. */
-import { MAX_REPLANS, changesSince, checkPlan, currentOf, damageOptions, describeChanges, doneStep, isMove, latestNote, nextAction, nextMove, nextStand, requestBusy, situationOf, spentBy, strikeIds } from "./turn.mjs";
+   summarised chat loses nothing. For now it runs Strikes, Strides, Steps, Crawls, Stand and Drop Prone; see claude/encounter-builder-plan.md for the rest of step 2. */
+import { MAX_REPLANS, POSTURES, absorbOwn, changesSince, checkPlan, currentOf, damageOptions, describeChanges, doneStep, isMove, latestNote, nextAction, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "./turn.mjs";
 import { cutShort, diagonalsIn, findRoute, findStep, footprintAt, routeWords } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap } from "./builder.mjs";
@@ -230,15 +230,16 @@ function cantAct(actor) {
 }
 /** Why it can't attack, or null. Rules: Restrained (Player Core) bars actions with the attack or manipulate trait except to Escape or Force Open. */
 function cantAttack(actor) { return actor.hasCondition?.("restrained") ? "it is restrained, so it can't attack." : null; }
-/** Why it can't use any move action (Stride, Step, Stand), or null. Rules: Immobilized bars every action with the move trait, and Grabbed and
+/** Why it can't use any move action (Stride, Step, Crawl, Stand, Drop Prone), or null. Rules: Immobilized bars every action with the move trait, and Grabbed and
     Restrained creatures are Immobilized. Grabbed and Restrained are named first because PF2e adds Immobilized with them, and the cause is what the reader
     needs. Prone (Stand first) and no land Speed are checkPlan's, because a Stand earlier in the plan changes the first. */
 function cantMove(actor) {
-  for (const c of ["restrained", "grabbed", "immobilized"]) if (actor.hasCondition?.(c)) return `it is ${c}, so it can't use move actions (Stride, Step or Stand).`;
+  for (const c of ["restrained", "grabbed", "immobilized"]) if (actor.hasCondition?.(c)) return `it is ${c}, so it can't use move actions (Stride, Step, Crawl, Stand or Drop Prone).`;
   return null;
 }
 const DEEP = /deep water/i;   /* Survey Sheet's name for its greater-difficult water. Other greater difficult terrain is just 10 ft more a square. */
-/** route(from, to, before, { step }) for checkPlan, for this monster on this scene as it stands now: a Stride's route, or with step a single 5-ft Step. */
+/** route(from, to, before, { step, kind }) for checkPlan, for this monster on this scene as it stands now: a Stride's route, or with step a single 5-ft
+    square (a Step or a Crawl, which kind names for the words). */
 async function mover(combat, tok, speed, known = null) {
   const scene = combat.scene, px = scene.grid.size, d = scene.dimensions, ox = d.sceneX, oy = d.sceneY, size = sizeOf(tok);
   const { model } = await readMap(scene, { except: new Set(scene.tokens.map(t => t.id)) });   /* creatures are counted below, ally or enemy */
@@ -256,11 +257,11 @@ async function mover(combat, tok, speed, known = null) {
   /* What it has already moved this turn: Foundry keeps the token's movement history for the turn (cleared when the turn changes) and charges a new move
      as the rest of that path, so diagonals carry on from it, as the rules say. */
   const history = (tok.movementHistory ?? []).map(w => [Math.round((w.x - ox) / px), Math.round((w.y - oy) / px)]);
-  return (from, to, before = [], { step = false } = {}) => {
+  return (from, to, before = [], { step = false, kind = "stride" } = {}) => {
     const prefix = [...history]; for (const r of before) prefix.push(...(prefix.length && same(prefix.at(-1), r[0]) ? r.slice(1) : r));
     if (!prefix.length || !same(prefix.at(-1), from)) prefix.push(from);
     const odd = diagonalsIn(prefix) % 2 === 1, r = step ? findStep({ from, to, size, odd }, world) : findRoute({ from, to, size, budget: speed, odd }, world);
-    if (!r.ok && r.why !== "far") return { ok: false, reason: routeWords(r, to, speed) };
+    if (!r.ok && r.why !== "far") return { ok: false, reason: routeWords(r, to, speed, kind) };
     return { ok: true, route: r.route, cost: measure([...prefix, ...r.route.slice(1)]) - measure(prefix) };   /* checkPlan compares the cost with Speed */
   };
 }
@@ -442,7 +443,8 @@ async function runStrike(combat, id, i, step, tok, target) {
   }
   return "ask";
 }
-/** A Stride or a Step, along the route the check found (a Step's is its one square), with the action PF2e gives the token (walk in a fight). Never sent twice: a move begun before a reload
+/** A Stride, a Step or a Crawl, along the route the check found (a Step's or Crawl's is its one square), with the action the token moves by: its own for
+    a Stride or Step, crawl for a Crawl (a prone token can't walk, and Foundry prices crawling like walking: 5 ft a square, tested 2026-11-07). Never sent twice: a move begun before a reload
     counts as done only if the monster is where it was going. Afterwards the monster's own square in `seen` moves with it, so the look before the next
     action doesn't take its own Stride for a change; anything else (an HP change from a reaction, someone now out of sight) still counts. */
 async function runStride(combat, id, i, step, tok) {
@@ -452,7 +454,7 @@ async function runStride(combat, id, i, step, tok) {
   const now = nextMove(get(), squareOf(tok, scene), step.to);
   if (now === "next") return "next";
   if (now === "arrived") { await record({ moved: { to: squareOf(tok, scene), cost: null } }); await after(); return "next"; }
-  if (now === "ask") { await save(combat, id, { note: `${tok.name} started a ${step.do === "step" ? "Step" : "Stride"} and isn't where it was going.` }); return "ask"; }
+  if (now === "ask") { await save(combat, id, { note: `${tok.name} started a ${{ step: "Step", crawl: "Crawl" }[step.do] ?? "Stride"} and isn't where it was going.` }); return "ask"; }
   if (!stepGate(step.do, id)) return "stopped";
   if (!(await ensureScene(combat) && tok.object)) throw new Error(cantOpen());
   /* someone it didn't know was there, on the way: the move ends before their space, as the rules say. The thinker is asked again without being told why. */
@@ -460,7 +462,7 @@ async function runStride(combat, id, i, step, tok) {
   for (const t of scene.tokens) if (t.id !== tok.id && t.actor?.isOfType?.("creature") && !known.has(t.id)) for (const [a, b] of footprintAt(squareOf(t, scene), sizeOf(t))) taken.add(`${a},${b}`);
   const route = cutShort(step.route, sizeOf(tok), (a, b) => taken.has(`${a},${b}`));
   if (route.length < 2) { await record({ started: true, moved: { to: squareOf(tok, scene), cost: 0 } }); await after(); return "next"; }
-  const px = scene.grid.size, d = scene.dimensions, action = tok.movementAction, waypoints = route.slice(1).map(([x, y]) => ({ x: d.sceneX + x * px, y: d.sceneY + y * px, action }));
+  const px = scene.grid.size, d = scene.dimensions, action = step.do === "crawl" ? "crawl" : tok.movementAction, waypoints = route.slice(1).map(([x, y]) => ({ x: d.sceneX + x * px, y: d.sceneY + y * px, action }));
   await record({ started: true });
   const charged = await watched(async () => {
     let got = null; const hook = Hooks.on("moveToken", (doc, mv) => { if (doc.id === tok.id) got = { cost: mv.passed?.cost ?? null, x: mv.destination?.x, y: mv.destination?.y }; });
@@ -475,27 +477,29 @@ async function runStride(combat, id, i, step, tok) {
   await after();
   return "next";
 }
-/** Stand: PF2e's own Stand action, which posts its card and removes Prone (PF2e 8.7.0, `StandActionVariant`), with no dialog. Never sent twice: one begun
-    before a reload counts as done if the monster is no longer prone, and the GM looks if it still is. One not begun with the monster no longer prone
-    (something stood it up first) is counted as done with no card, rather than posting a Stand that does nothing. Afterwards the monster's own conditions in `seen`
-    are taken again, so the look before the next action doesn't take its own Stand for a change. Not built: Reactive Strike and the like, which a Stand
-    can trigger at the end of the action (Rules ID 446). */
-async function runStand(combat, id, i, tok) {
-  const record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {}, actor = tok.actor;
-  /* only what the Stand took away is its own doing (Prone, and the Off-Guard it brings); anything a reaction added still counts as a change */
-  const after = async () => { const seen = request(combat, id).seen; if (!seen?.me) return; const now = new Set(conditionWords(actor));
-    await save(combat, id, { seen: { me: { conditions: (seen.me.conditions ?? []).filter(c => now.has(c)) } } }); };
-  const now = nextStand(get(), !!actor.hasCondition?.("prone"));
+/** Stand or Drop Prone: PF2e's own action (`StandActionVariant`, `DropProneActionVariant` in PF2e 8.7.0), which posts its card and then removes or adds
+    Prone, with no dialog. Never sent twice: one begun before a reload counts as done if the monster is already as the step leaves it, and the GM looks
+    otherwise; one not begun with the monster already like that posts nothing. Afterwards the look-before baseline takes in what the action itself changed
+    (`absorbOwn`: Prone and the Off-Guard it brings), so it doesn't re-plan for its own doing, while anything a reaction added still counts. Not built:
+    Reactive Strike and the like, which these move actions can trigger at the end of the action (Rules ID 446). */
+const PRONE_SET = ["prone", "off-guard"];
+async function runPosture(combat, id, i, kind, tok) {
+  const record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {}, actor = tok.actor, wantProne = POSTURES[kind];
+  const already = () => !!actor.hasCondition?.("prone") === wantProne, words = kind === "stand" ? "Stand" : "Drop Prone";
+  const take = async (before, own) => { const seen = request(combat, id).seen; if (!seen?.me) return;
+    await save(combat, id, { seen: { me: { conditions: absorbOwn(seen.me.conditions ?? [], before, situationOf({ me: { conditions: conditionWords(actor) } }).me.conditions, own) } } }); };
+  const now = nextPosture(get(), already());
   if (now === "next") return "next";
-  if (now === "stood") { await record({ stood: { message: null } }); await after(); return "next"; }
-  if (now === "ask") { await save(combat, id, { note: `${tok.name} started to Stand and is still prone.` }); return "ask"; }
-  if (!stepGate("stand", id)) return "stopped";
+  if (now === "already") { await record({ changed: { message: null } }); await take(request(combat, id).seen?.me?.conditions ?? [], PRONE_SET); return "next"; }
+  if (now === "ask") { await save(combat, id, { note: `${tok.name} started to ${words} and is ${wantProne ? "not" : "still"} prone.` }); return "ask"; }
+  if (!stepGate(kind, id)) return "stopped";
+  const before = situationOf({ me: { conditions: conditionWords(actor) } }).me.conditions;
   await record({ started: true });
-  const out = await watched(() => game.pf2e.actions.get("stand").use({ actors: [actor] }));
-  for (let t = 0; t < 2000 && actor.hasCondition?.("prone"); t += 100) await new Promise(res => setTimeout(res, 100));   /* PF2e awaits its toggle, but give the update a moment */
-  if (actor.hasCondition?.("prone")) { await save(combat, id, { note: `${tok.name} used Stand but is still prone.` }); return "ask"; }
-  await record({ stood: { message: out?.[0]?.message?.id ?? null } });
-  await after();
+  const out = await watched(() => game.pf2e.actions.get(kind).use({ actors: [actor] }));
+  for (let t = 0; t < 2000 && !already(); t += 100) await new Promise(res => setTimeout(res, 100));   /* PF2e awaits its toggle, but give the update a moment */
+  if (!already()) { await save(combat, id, { note: `${tok.name} used ${words} but is ${wantProne ? "not" : "still"} prone.` }); return "ask"; }
+  await record({ changed: { message: out?.[0]?.message?.id ?? null } });
+  await take(before, PRONE_SET);
   return "next";
 }
 /* what PF2e's own Damage button does, for a named target rather than the selected tokens. Effects that only count for this one hit aren't read. */
@@ -544,12 +548,12 @@ async function runTurn(combat, requestId) {
       const target = combat.scene.tokens.get(r.labels[step.target]); if (!target) return save(combat, requestId, { state: "stopped", note: `${step.targetName} is gone.` });
       work = () => runStrike(combat, requestId, i, step, tok, target);
     } else if (isMove(step)) work = () => runStride(combat, requestId, i, step, tok);
-    else if (step.do === "stand") work = () => runStand(combat, requestId, i, tok);
+    else if (step.do in POSTURES) work = () => runPosture(combat, requestId, i, step.do, tok);
     if (work) {
       let result; try { result = await work(); } catch (e) { console.error(e); result = "ask"; await save(combat, requestId, { note: e.message }); }
       if (result === "stopped") return save(combat, requestId, { state: "stopped" });
-      if (result === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} may not have finished. ${isMove(step) ? "Put the monster where it should be" : step.do === "stand" ? "Check whether it is still prone" : "Check the chat and HP"}, then play the rest yourself.`.trim() });
-      /* a Stride or Step that ended short of its square: the rest was planned from there, so ask again (the reason names the square, never what stopped it) */
+      if (result === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} may not have finished. ${isMove(step) ? "Put the monster where it should be" : step.do in POSTURES ? "Check whether it is prone" : "Check the chat and HP"}, then play the rest yourself.`.trim() });
+      /* a Stride, Step or Crawl that ended short of its square: the rest was planned from there, so ask again (the reason names the square, never what stopped it) */
       const at = squareOf(tok, combat.scene);
       if (isMove(step) && !same(at, step.to) && i + 1 < r.steps.length && request(combat, requestId).state !== "manual") return replan(combat, { ...request(combat, requestId), id: requestId }, i + 1, [{ who: "me", what: "stopped", at }], tok);
     }

@@ -114,16 +114,16 @@ export function cutShort(route = [], size = 1, unknown = () => false) {
 }
 
 /** A route's failure in words, for the thinker and the card. Squares stay squares, which is what the thinker plans with. */
-export function routeWords(r, to, speed) {
-  const sq = `[${to[0]}, ${to[1]}]`;
+export function routeWords(r, to, speed, kind = "stride") {
+  const sq = `[${to[0]}, ${to[1]}]`, word = { stride: "Stride", step: "Step", crawl: "Crawl" }[kind] ?? "Stride";
   switch (r.why) {
     case "same": return `it is already at ${sq}.`;
     case "off": return `${sq} is off the map.`;
     case "blocked": return `it can't stand at ${sq}: something solid is there.`;
-    case "terrain": return `${sq} is deep water: it would have to Swim, which a Stride or Step isn't.`;
+    case "terrain": return `${sq} is deep water: it would have to Swim, which a ${word} isn't.`;
     case "occupied": return `another creature is at ${sq}.`;
-    case "notNext": return `[${to[0]}, ${to[1]}] isn't next to it: a Step moves one square (5 ft).`;
-    case "difficult": return `[${to[0]}, ${to[1]}] is difficult terrain, and a Step can't go into difficult terrain.`;
+    case "notNext": return `[${to[0]}, ${to[1]}] isn't next to it: a ${word} moves one square (5 ft).`;
+    case "difficult": return kind === "crawl" ? `[${to[0]}, ${to[1]}] is difficult terrain, which would take 10 ft, and a Crawl moves only 5 ft.` : `[${to[0]}, ${to[1]}] is difficult terrain, and a Step can't go into difficult terrain.`;
     case "wall": return `a wall is between it and [${to[0]}, ${to[1]}].`;
     case "far": return r.cost == null ? `${sq} is far beyond its Speed of ${speed} ft.` : `getting to ${sq} takes ${r.cost} ft, more than its Speed of ${speed} ft.`;
     default: return `there's no way to ${sq} from where it is.`;
