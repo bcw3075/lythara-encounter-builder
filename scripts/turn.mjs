@@ -1,8 +1,11 @@
 /* A monster's turn as plain data: what a plan means, whether it's legal, and where a step stands. Pure: no Foundry globals.
-   The glue gathers live values first. Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover and abilities so far; the other step kinds come as step 2 goes on. */
+   The glue gathers live values first. Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities and spells so far; the other step kinds come as step 2 goes on. */
 import { distanceBetween, headingOf } from "./move.mjs";
 /** What each step kind costs. An ability's cost is its own (0 for a free action); 1 here is only the fallback. */
-export const COSTS = { strike: 1, stride: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, none: 0 };
+export const COSTS = { strike: 1, stride: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, none: 0 };
+/** A basic save's damage by the target's degree of success, 0 critical failure to 3 critical success: double, full, half, none. Rules: Basic Saving Throws
+    (https://2e.aonprd.com/Rules.aspx?ID=2297). */
+export const SAVE_MULT = [2, 1, 0.5, 0];
 /** Abilities that follow a Strike (Rhea, 2026-11-07: run for real). Each needs the monster's last action to be a successful Strike that lists it, and is an
     Athletics check that neither applies nor counts toward the multiple attack penalty. Rules: Grab, Knockdown, Push, Pull, and the Improved ones as free
     actions (https://2e.aonprd.com/MonsterAbilities.aspx: IDs 45, 46, 47, 71, 66). Grapple https://2e.aonprd.com/Actions.aspx?ID=2376, Trip ID 2382,
@@ -30,14 +33,34 @@ const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
     when the reason goes to the thinker.
     Abilities: abilities ([{ id, name, kind: "action" | "free" | "reaction" | "passive", cost, traits, usesLeft, followUp (a check from FOLLOW_UPS, or null),
     effect (the word a Strike's effects list for it) }]), strikes' `effects`, me.cat and each target's `cat` (size categories), `held` (it is grabbed or
-    restrained), and last (its last action this turn before the plan, from `lastAction`; null at the start of a turn). */
+    restrained), and last (its last action this turn before the plan, from `lastAction`; null at the start of a turn).
+    Spells (2026-11-07): spells ([{ id, name, ranks: [{ rank, pool, left }] (pool null for a cantrip or an at-will spell; several spells can share a pool,
+    such as a spontaneous caster's slots of one rank or the focus pool), minActions, maxActions (null: not castable on a turn, such as a reaction or one
+    taking minutes), range (feet, or null for none or unlimited), touch, targets (how many creatures it targets; 0 for none or only itself), area
+    ({ type, size } or null), attack (a spell attack roll), save ({ stat, basic } or null), damaging, traits, critText (its text lists what a critical
+    success does) }]), allies ({ label: { name, square, size, elev, depth } }: its allies and itself, which a spell may target), saveRows (Toolbelt's Target
+    Helper is on, so a save can be rolled from its rows) and reach (its longest melee reach, for touch spells). */
 export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
-  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {};
+  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {};
   const distanceTo = (t, reach) => here && t.square ? distanceBetween({ x: here[0], y: here[1], size: ctx.me.size ?? 1, elev: ctx.me.elev, depth: ctx.me.depth }, { x: t.square[0], y: t.square[1], size: t.size ?? 1, elev: t.elev, depth: t.depth }, { reach }) : t.distance;
   for (const [n, step] of plan.steps.entries()) {
     const at = `Step ${n + 1}`;
     if (!(step.do in COSTS)) return { ok: false, reason: `${at}: I can't do "${step.do}" yet.` };
+    if (step.do === "spell") {
+      if (ctx.cantAct) return { ok: false, reason: `${at}: ${ctx.cantAct}` };
+      const sp = (ctx.spells ?? []).find(s => s.id === step.item);
+      if (!sp) return { ok: false, reason: `${at}: it has no spell called "${step.item}" it can cast now${(ctx.abilities ?? []).some(a => a.id === step.item) ? ` (${step.item} is an ability: use an "ability" step)` : ""}.` };
+      const r = checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools });
+      if (!r.ok) return r;
+      if (r.step.actions > left) return { ok: false, reason: `${at}: no actions left${r.step.actions > 1 ? ` (${sp.name} takes ${r.step.actions})` : ""}.` };
+      left -= r.step.actions; if (r.pool) pools[r.pool] = (r.pool in pools ? pools[r.pool] : r.poolLeft) - (r.poolCost ?? 1);
+      steps.push(r.step);
+      if (r.step.mapCounts) attacks++;
+      if (r.step.attack) took = tookProne = false;
+      last = { do: "spell", item: sp.id, target: r.step.target ?? null };
+      continue;
+    }
     const ab = step.do === "ability" ? (ctx.abilities ?? []).find(a => a.id === step.item) : null;
     if (step.do === "ability") {
       if (!ab) return { ok: false, reason: `${at}: it has no ability called "${step.item}"${ctx.strikes?.some(s => s.id === step.item) ? ` (${step.item} is a Strike: use a "strike" step)` : ""}.` };
@@ -108,6 +131,94 @@ export function checkPlan(plan, ctx) {
   }
   return { ok: true, steps };
 }
+/** One spell step, checked. Rhea, 2026-11-07: a spell attack at one creature and a save spell at one creature run for real (the module casts, rolls the
+    attack or waits for the save, and applies the damage); anything else (an area, a spell with no attack or save, more than damage) is "card": the
+    module casts it, its card goes to chat and the GM applies it. Rules: Cast a Spell (https://2e.aonprd.com/Actions.aspx?ID=2287), spell attacks and
+    the multiple attack penalty (Player Core: a spell with the attack trait counts toward it), Restrained (no attack or manipulate actions). */
+function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools }) {
+  const no = reason => ({ ok: false, reason: `${at}: ${reason}` }), traits = sp.traits ?? [];
+  if (ctx.cantAttack && traits.includes("attack")) return no(ctx.cantAttack);
+  if (ctx.cantAttack && traits.includes("manipulate")) return no(`it is restrained, so it can't cast ${sp.name} (it has the manipulate trait).`);
+  if (sp.minActions == null || sp.maxActions == null) return no(`${sp.name} isn't cast as part of a turn (it's a reaction, or takes longer than a turn).`);
+  let actions = sp.minActions;
+  if (sp.minActions !== sp.maxActions) {
+    if (step.actions == null) return no(`${sp.name} can be cast with ${sp.minActions} to ${sp.maxActions} actions: say how many with "actions".`);
+    if (step.actions < sp.minActions || step.actions > sp.maxActions) return no(`${sp.name} takes ${sp.minActions} to ${sp.maxActions} actions, not ${step.actions}.`);
+    actions = step.actions;
+  } else if (step.actions != null && step.actions !== sp.minActions) return no(`${sp.name} always takes ${sp.minActions} action${sp.minActions === 1 ? "" : "s"}.`);
+  /* the rank: the one asked for, or the lowest it still has a use or slot for */
+  const leftIn = r => r.pool == null ? Infinity : r.pool in pools ? pools[r.pool] : r.left;
+  const ranks = sp.ranks ?? [], open = ranks.filter(r => leftIn(r) > 0), list = ranks.map(r => r.rank).join(", ");
+  const at_ = step.rank != null ? ranks.find(r => r.rank === step.rank) : open[0];
+  if (step.rank != null && !at_) return no(`it can't cast ${sp.name} at rank ${step.rank} (it can at ${list || "no rank"}).`);
+  if (!at_ || leftIn(at_) <= 0) return no(`${sp.name} has no ${step.rank != null ? `rank ${step.rank} ` : ""}uses or slots left.`);
+  /* the target: a creature it perceives, or one of its allies or itself */
+  let t = null, tLabel = null;
+  if (step.target) {
+    if (!sp.targets && !sp.area) return no(`${sp.name} doesn't target a creature, so leave "target" out.`);
+    t = ctx.targets?.[step.target] ?? ctx.allies?.[step.target] ?? null; if (!t) return no(`it doesn't know of "${step.target}".`);
+    tLabel = step.target;
+  } else if (sp.targets && !sp.area) return no(`${sp.name} needs a target: give "target", a label.`);
+  if (t && (sp.range != null || sp.touch) && !sp.area) {
+    const reach = sp.touch ? Math.max(5, ctx.reach ?? 5) : sp.range, d = distanceTo(t, sp.touch ? reach : null);
+    if (d > reach) return no(`${t.name ?? tLabel} is ${d} ft away, out of ${sp.touch ? "reach for" : "range of"} ${sp.name} (${reach} ft).`);
+  }
+  if (t && sp.area && sp.range != null) { const d = distanceTo(t, null); if (d > sp.range) return no(`${t.name ?? tLabel} is ${d} ft away, beyond ${sp.name}'s range (${sp.range} ft).`); }
+  const one = !sp.area && (sp.targets ?? 0) === 1 && !!t;
+  const mode = one && sp.attack ? "attack" : one && sp.save && ctx.saveRows ? "save" : "card";
+  const isAttack = traits.includes("attack");
+  const out = { do: "spell", item: sp.id, itemName: sp.name, ...(sp.entryId ? { entryId: sp.entryId, spellId: sp.spellId } : {}), rank: at_.rank, actions, mode, ...(t ? { target: tLabel, targetName: t.name ?? tLabel, flat: t.flat ?? 0 } : {}),
+    ...(isAttack ? { attack: true, mapCounts: true, variant: Math.min(attacks, 2) } : {}), ...(sp.area ? { area: { ...sp.area } } : {}),
+    ...(mode === "save" ? { save: sp.save.stat, basic: !!sp.save.basic } : {}), damaging: !!sp.damaging, ...(sp.critText ? { critText: true } : {}) };
+  return { ok: true, step: out, pool: at_.pool, poolLeft: at_.left, poolCost: at_.cost ?? 1 };
+}
+/** What to do next with a spell step, from its record. Never repeated: when the record can't tell whether a stage finished, "ask". The spell is cast first
+    (its slot or use is spent and its card posted), then a flat check for a concealed or hidden target, then by mode: "attack" rolls the spell attack and,
+    for a damaging spell that hits, its damage; "save" waits for the target's save ("wait") and, for a basic save, rolls the damage and applies it by
+    degree; "card", and anything a non-damaging or non-basic spell does, is the GM's ("gm"). */
+export function nextSpell(rec = {}, { mode = "card", flat = 0, apply = false, damaging = false, basic = false } = {}) {
+  if (!rec.castStarted) return "cast";
+  if (!rec.cast) return "ask";
+  if (mode === "card") return "gm";
+  if (flat) { if (!rec.flatStarted) return "flat"; if (!rec.flat) return "ask"; if (!rec.flat.ok) return "next"; }
+  if (mode === "attack") {
+    if (!rec.started) return "attack";
+    if (!rec.attack) return "ask";
+    if (rec.attack.degree < 2) return "next";
+    if (!damaging) return "gm";
+  } else {
+    if (!rec.save) return "save";
+    if (!damaging || !basic) return "gm";
+    if (SAVE_MULT[rec.save.degree] === 0) return "next";
+  }
+  if (!rec.damageStarted) return "damage";
+  if (!rec.damage) return "ask";
+  if (!apply && !rec.applying) return "next";
+  if (!rec.applying) return "apply";
+  return rec.applied ? "next" : "ask";
+}
+/** The damage multiplier a spell step applies: double on a spell attack's critical hit; by degree for a basic save. */
+export const spellMultiplier = (step, rec = {}) => step.mode === "attack" ? (rec.attack?.degree === 3 ? 2 : 1) : SAVE_MULT[rec.save?.degree] ?? 1;
+/** A spell's actions from PF2e's "time": "2", "1 to 3", "1 or 2", "free"; null for a reaction or anything longer than a turn. */
+export function spellActions(time = "") {
+  const t = String(time).trim().toLowerCase();
+  if (t === "free") return { min: 0, max: 0 };
+  const one = t.match(/^([1-3])$/); if (one) return { min: +one[1], max: +one[1] };
+  const span = t.match(/^([1-3])\s*(?:to|or)\s*([1-3])$/); if (span) return { min: +span[1], max: +span[2] };
+  return { min: null, max: null };
+}
+/** A spell's range in feet from PF2e's text: "30 feet" is 30, "touch" is reach (touch: true), anything else ("", "planetary", "see text") is null. */
+export function spellRange(range = "") {
+  const t = String(range).trim().toLowerCase();
+  if (t === "touch") return { range: 0, touch: true };
+  const m = t.match(/^(\d+)\s*(?:feet|foot|ft\.?)$/); return { range: m ? +m[1] : null, touch: false };
+}
+/** How many creatures a spell targets, from PF2e's target text: "1 creature" 1, "up to 3 creatures" 3; 0 for none, "you", or only objects. */
+export function spellTargets(target = "") {
+  const t = String(target).trim().toLowerCase();
+  if (!t || t === "you" || !/creature|ally|allies|enemy|enemies|you and/.test(t)) return 0;
+  const n = t.match(/(\d+)/); return n ? Math.max(1, +n[1]) : 1;
+}
 /** Actions an ability takes: its own count, 0 for a free action. */
 export const abilityCost = ab => ab.kind === "free" ? 0 : Number.isInteger(ab.cost) && ab.cost > 0 ? ab.cost : 1;
 const sizeRank = c => SIZES.indexOf(c);
@@ -167,7 +278,7 @@ export function strikeIds(strikes) {
 }
 /** What resolved steps used of the turn: actions, and attacks for the multiple attack penalty. */
 export function spentBy(steps = []) {
-  let actions = 0, attacks = 0; for (const s of steps) { actions += s.do === "ability" ? (s.actions ?? 1) : COSTS[s.do] ?? 0; if (s.do === "strike" || s.mapCounts) attacks++; } return { actions, attacks };
+  let actions = 0, attacks = 0; for (const s of steps) { actions += s.do === "ability" || s.do === "spell" ? (s.actions ?? 1) : COSTS[s.do] ?? 0; if (s.do === "strike" || s.mapCounts) attacks++; } return { actions, attacks };
 }
 export const OUTCOMES = ["critical miss", "miss", "hit", "critical hit"];
 export const CHECK_OUTCOMES = ["critical failure", "failure", "success", "critical success"];
@@ -177,8 +288,18 @@ export function doneStep(step, rec = {}) {
   if (step.do in POSTURES) return { do: step.do, result: rec.changed || rec.stood ? (step.do === "stand" ? "stood" : "dropped") : "unknown" };
   if (step.do === "take-cover") return { do: "take-cover", result: rec.covered ? "took cover" : "unknown" };
   if (step.do === "ability") return { do: "ability", item: step.item, ...(step.target ? { target: step.target } : {}), result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.check ? CHECK_OUTCOMES[rec.check.degree] ?? "unknown" : rec.posted ? (step.mode === "hold" ? "kept hold" : "card posted for the GM to apply") : "unknown" };
+  if (step.do === "spell") return { do: "spell", item: step.item, rank: step.rank, ...(step.target ? { target: step.target } : {}), result: spellResult(step, rec) };
   if (step.do !== "strike") return { do: step.do };
   return { do: "strike", item: step.item, target: step.target, result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.attack ? OUTCOMES[rec.attack.degree] ?? "unknown" : "unknown" };
+}
+
+/** How a spell step came out, in words the thinker and the GM read. */
+function spellResult(step, rec = {}) {
+  if (!rec.cast) return "unknown";
+  if (step.mode === "card") return "card posted for the GM to apply";
+  if (rec.flat && !rec.flat.ok) return "flat check failed";
+  if (step.mode === "attack") return rec.attack ? OUTCOMES[rec.attack.degree] ?? "unknown" : "unknown";
+  return rec.save ? `target's save: ${CHECK_OUTCOMES[rec.save.degree] ?? "unknown"}` : "waiting for the save";
 }
 
 /* ---------- one action at a time: look again before each ---------- */
@@ -238,6 +359,12 @@ export function describeStep(s) {
     if (s.mode === "check") return `${s.itemName} at ${s.targetName}: a ${CHECK_WORD[s.check]} check, no attack penalty${flat}${s.actions ? "" : " (free action)"}.`;
     if (s.mode === "hold") return `${s.itemName}: keeps hold of ${s.targetName}.`;
     return `${s.itemName}${s.targetName ? ` at ${s.targetName}` : ""}${s.variant ? `, attack ${s.variant + 1}` : ""}: its card goes to chat for you to apply${s.flat ? ` (a DC ${s.flat} flat check if it targets)` : ""}.`;
+  }
+  if (s.do === "spell") {
+    const head = `Casts ${s.itemName} (rank ${s.rank}${s.actions !== 2 ? `, ${s.actions} action${s.actions === 1 ? "" : "s"}` : ""})`, flat = s.flat ? `, after a DC ${s.flat} flat check` : "";
+    if (s.mode === "attack") return `${head} at ${s.targetName}: a spell attack${s.variant ? `, attack ${s.variant + 1}` : ""}${flat}.`;
+    if (s.mode === "save") return `${head} at ${s.targetName}: a ${s.basic ? "basic " : ""}${s.save[0].toUpperCase() + s.save.slice(1)} save${flat}${s.damaging && s.basic ? "" : ", then you apply its effects"}.`;
+    return `${head}${s.targetName ? `${s.area ? " aimed at" : " at"} ${s.targetName}` : ""}: its card goes to chat for you to apply${s.area ? ` (place its ${s.area.size}-foot ${s.area.type})` : ""}.`;
   }
   if (s.do === "take-cover") return s.why === "prone" ? "Takes Cover while prone." : s.why === "near" ? "Takes Cover by the wall or trunk next to it." : `Takes Cover behind its cover from ${s.from}.`;
   return `${s.itemName} at ${s.targetName}${s.variant ? `, attack ${s.variant + 1}` : ""}${s.flat ? `, after a DC ${s.flat} flat check` : ""}.`;
@@ -326,6 +453,7 @@ export function endsCover(steps = [], log = {}, upto = steps.length, from = 0) {
   for (let k = Math.max(k0, from); k < upto; k++) {
     const s = steps[k], rec = log?.[k] ?? {};
     if ((s?.do === "strike" || (s?.do === "ability" && s.attack)) && (rec.started || rec.flatStarted)) return true;
+    if (s?.do === "spell" && s.attack && rec.castStarted) return true;
     if (isMove(s) && rec.moved?.to && !same(rec.moved.to, s.from)) return true;
   }
   return false;

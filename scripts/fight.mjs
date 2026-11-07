@@ -1,13 +1,13 @@
 /* A fight's turns. One named account does the work (the runner: the Claude Bridge unless the setting says otherwise), on its own page with the
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
-   summarised chat loses nothing. For now it runs Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover and abilities; see claude/encounter-builder-plan.md for the rest of step 2. */
-import { CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, POSTURES, WORD, absorbOwn, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "./turn.mjs";
+   summarised chat loses nothing. For now it runs Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities and spells; see claude/encounter-builder-plan.md for the rest of step 2. */
+import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES, WORD, absorbOwn, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "./turn.mjs";
 import { cutShort, diagonalsIn, featureNear, findRoute, findStep, footprintAt, routeWords } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap } from "./builder.mjs";
 import { MAX_TRIES, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "./brain.mjs";
 
-const ID = "lythara-encounter-builder", WORKBENCH = "xdy-pf2e-workbench", TOOLBELT = "pf2e-toolbelt", VISIONER = "pf2e-visioner", GROUND_RADIUS = 10, STEP_MS = 20000, SETTLE_MS = 400, SCENE_MS = 30000, RESUMABLE = ["ready", "running", "held", "stopped"];
+const ID = "lythara-encounter-builder", WORKBENCH = "xdy-pf2e-workbench", TOOLBELT = "pf2e-toolbelt", VISIONER = "pf2e-visioner", GROUND_RADIUS = 10, STEP_MS = 20000, SETTLE_MS = 400, SCENE_MS = 30000, RESUMABLE = ["ready", "running", "held", "stopped", "saves"];
 export const runnerName = () => game.settings.get(ID, "runner");
 const runner = () => game.users.getName(runnerName());
 const isRunner = () => game.user.isGM && runner()?.id === game.user.id;
@@ -115,6 +115,55 @@ function abilitiesOf(actor) {
   return abilityList(actor).map(a => ({ id: a.id, name: a.name, kind: a.kind, cost: a.cost, ...(a.traits.length ? { traits: a.traits } : {}), ...(a.usesLeft != null ? { usesLeft: a.usesLeft } : {}),
     ...(a.followUp ? { followUp: `${CHECK_WORD[a.followUp]} check, right after a Strike that lists ${a.effect} and hits` } : {}), text: a.item ? plainText(a.item.system.description?.value, localize) : "" }));
 }
+/* ---------- spells ---------- */
+/* What it can cast now, from PF2e's own spellcasting sheet data (the list a sheet shows: prepared slots not yet expended, a spontaneous caster's known and
+   signature spells by rank with the slots it has left, innate spells with their uses, focus spells and the focus pool, cantrips). One entry per spell per
+   spellcasting entry, with the ranks it can be cast at and the pool each rank spends from: a spontaneous caster's slots of a rank are one pool shared by
+   every spell of that rank, a prepared caster's copies of one spell at one rank are one pool, an innate spell's uses its own, focus spells the focus pool.
+   Cantrips and at-will spells have none. Rituals and staffs, wands and scrolls aren't here. */
+const CASTERS = ["prepared", "spontaneous", "innate", "focus"];
+async function spellBook(actor) {
+  const book = new Map(), counts = {}, slugs = new Map(), focus = Number(actor.system.resources?.focus?.value) || 0;
+  for (const e of (actor.spellcasting?.regular ?? []).filter(e => e.statistic && !e.isRitual && CASTERS.includes(e.category))) {
+    let sd; try { sd = await e.getSheetData(); } catch (x) { console.warn(`${ID} | spells`, x); continue; }
+    for (const g of sd.groups ?? []) {
+      const cantrips = g.id === "cantrips", groupRank = Number(g.id);
+      for (const x of g.active ?? []) {
+        const sp = x?.spell; if (!sp || x.expended) continue;
+        const base = sp.original ?? sp, rank = cantrips || !Number.isInteger(groupRank) ? sp.rank : groupRank, fp = Number(base.system.cast?.focusPoints) || 0;
+        let pool = null, left = null, cost = 1;
+        if (fp > 0 || (e.isFocusPool && !base.isCantrip)) { pool = "focus"; left = focus; cost = Math.max(1, fp); }
+        else if (cantrips || base.isCantrip) { /* at will */ }
+        else if (e.isInnate) { const u = x.uses ?? base.system.location?.uses; if (!sp.atWill && u?.max > 0) { pool = `innate:${e.id}:${base.id}:${rank}`; left = Number(u.value) || 0; } }
+        else if (e.isPrepared && !e.isFlexible) { pool = `prep:${e.id}:${rank}:${base.id}`; left = counts[pool] = (counts[pool] ?? 0) + 1; }
+        else { pool = `slots:${e.id}:${rank}`; left = Number(g.uses?.value) || 0; }
+        const key = `${e.id}:${base.id}`;
+        if (!book.has(key)) {
+          const slug = base.slug ?? game.pf2e.system.sluggify(base.name), n = (slugs.get(slug) ?? 0) + 1; slugs.set(slug, n);
+          const act = spellActions(base.system.time?.value), rng = spellRange(base.system.range?.value), save = base.system.defense?.save, text = plainText(base.system.description?.value, localize);
+          book.set(key, { id: n === 1 ? slug : `${slug}-${n}`, name: base.name, entryId: e.id, spellId: base.id, ranks: [], minActions: act.min, maxActions: act.max, time: base.system.time?.value ?? "",
+            range: rng.range, touch: rng.touch, rangeText: base.system.range?.value ?? "", targets: spellTargets(base.system.target?.value), targetText: base.system.target?.value ?? "",
+            area: base.system.area?.type ? { type: base.system.area.type, size: base.system.area.value } : null, attack: !!base.isAttack, save: save?.statistic ? { stat: save.statistic, basic: !!save.basic } : null,
+            damaging: Object.keys(base.system.damage ?? {}).length > 0, damage: Object.values(base.system.damage ?? {}).map(d => `${d.formula} ${d.type ?? ""}`.trim()).join(" + "),
+            traits: [...(base.system.traits?.value ?? [])], critText: /critical success/i.test(text), dc: e.statistic.dc?.value ?? null, attackMod: e.statistic.check?.mod ?? null, text });
+        }
+        const s = book.get(key), had = s.ranks.find(r => r.rank === rank);
+        if (had) { if (pool?.startsWith("prep:")) had.left = left; } else s.ranks.push({ rank, pool, left, cost });
+      }
+    }
+  }
+  return [...book.values()].map(s => ({ ...s, ranks: s.ranks.sort((a, b) => a.rank - b.rank) }));
+}
+/** For the packet: each spell in plain words, with the ranks it can be cast at and what each has left. */
+function spellsOf(book) {
+  const cap = (t, n) => t.length > n ? `${t.slice(0, n - 1)}…` : t;
+  return book.map(s => ({ id: s.id, name: s.name, ranks: Object.fromEntries(s.ranks.map(r => [r.rank, r.pool == null ? "at will" : r.pool === "focus" ? `${r.left} focus point${r.left === 1 ? "" : "s"} (costs ${r.cost})` : r.left])),
+    actions: s.time, ...(s.rangeText ? { range: s.rangeText } : {}), ...(s.targetText ? { targets: s.targetText } : {}), ...(s.area ? { area: `${s.area.size}-foot ${s.area.type}` } : {}),
+    ...(s.attack ? { defense: "AC", attackMod: s.attackMod } : s.save ? { defense: `${s.save.basic ? "basic " : ""}${s.save.stat[0].toUpperCase()}${s.save.stat.slice(1)} save`, dc: s.dc } : {}),
+    ...(s.damage ? { damage: s.damage } : {}), traits: s.traits, text: cap(s.text, 900) }));
+}
+/** The spell a step casts, found again by its entry and item. */
+const spellFor = (actor, step) => { const entry = actor.spellcasting?.get(step.entryId); const spell = entry?.spells?.get(step.spellId) ?? actor.items.get(step.spellId); return entry && spell ? { entry, spell } : null; };
 const isHeld = actor => ["grabbed", "restrained"].some(c => actor?.hasCondition?.(c));
 function tacticsOf(scene, tok) { const page = game.journal.get(scene.getFlag(ID, "build")?.entry)?.pages.find(p => p.name === "Tactics"); return page ? tacticsFor(page.text?.content, tok.getFlag(ID, "group"), localize) : null; }
 /* Allies know where each other are, by default. */
@@ -130,6 +179,7 @@ async function buildPacket(combat, tok, turn = {}) {
   const { model } = await readMap(scene), a = tok.actor, h = a.hitPoints, square = squareOf(tok, scene);
   const speeds = a.system.movement?.speeds ?? {}, extra = Object.fromEntries(["fly", "swim", "climb", "burrow"].filter(k => speeds[k]?.value).map(k => [k, speeds[k].value]));
   const you = { label: labels[tok.id], name: tok.name, square, size: a.size, nextDiagonal: nextDiagonalFt(tok, scene), actionsLeft: Math.max(0, actionsOf(a, combat) - (turn.spent ?? 0)), attacksMade: turn.attacks ?? 0, hp: `${h.value}/${h.max}`, speed: speeds.land?.value ?? 0, ...(Object.keys(extra).length ? { speeds: extra } : {}), conditions: (a.conditions?.active ?? []).map(c => c.value ? `${c.slug} ${c.value}` : c.slug), strikes: await strikesOf(a), abilities: abilitiesOf(a), tactics: tacticsOf(scene, tok) };
+  const book = await spellBook(a); if (book.length) you.spells = spellsOf(book);
   const cover = visionerApi();
   you.takeCover = { taking: takingCover(tok), nextToCover: nearCoverFor(scene)(square, sizeOf(tok)), standardCoverFrom: cover ? others.filter(o => SEES.includes(o.state) && labels[o.id] && STANDARD.includes(coverOf(cover, o.token, tok))).map(o => labels[o.id]) : [] };
   const packet = packetOf({ you, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], ground: groundAround(model, square, GROUND_RADIUS),
@@ -216,11 +266,12 @@ export async function onRunnerReady() {
     const r = currentRequest(combat);
     if (r?.state === "running" && !running.has(r.id)) await save(combat, r.id, { state: "stopped", go: false, note: `${game.user.name}'s page reloaded during this turn. Check the chat and HP, then Do it carries on from where it stopped.` });
     await onTurnChange(combat); act(combat);
+    if (r?.state === "saves") doIt(combat, r.id).catch(e => console.error(`${ID} | turn`, e));   /* a save rolled while this page was away */
   }
 }
 /** Live values for the legality check. Reach, distance and moves need the canvas on the fight scene. used: what this request's finished steps took. Names
     are labels, because a refusal's reason goes back to the thinker; the card puts names in. */
-async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = true, before = null } = {}) {
+async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = true, before = null, spells = false } = {}) {
   const scene = combat.scene, tok = scene.tokens.get(req.tokenId), actor = tok.actor;
   const strikes = strikesWithIds(actor).map(({ id, strike: a }) => ({ id, name: a.label, reach: actor.getReach({ action: "attack", weapon: a.item }), ranged: !!a.item?.isRanged, maxRange: a.item?.range?.max ?? null, effects: [...(a.item?.system?.attackEffects?.value ?? [])] }));
   /* only what it perceived when asked, and still does: a plan can't name anything else */
@@ -236,13 +287,26 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
     me: { square: squareOf(tok, scene), size: sizeOf(tok), ...heightOf(tok), cat: actor.size ?? null }, speed, cantAct: cantAct(actor), cantMove: cantMove(actor), cantAttack: cantAttack(actor), prone: !!actor.hasCondition?.("prone"), route,
     tookCover: takingCover(tok), coverFrom, nearCover: nearCoverFor(scene),
     /* abilities, and its last action before this plan (a Grab or Knockdown needs it): the step just done, or the last thing done before a re-plan */
-    abilities: abilityList(actor).map(({ item, ...a }) => a), last: lastAction({ ...(before ?? { done: req.done?.at(-1) ?? null }), strikes }) };
+    abilities: abilityList(actor).map(({ item, ...a }) => a), last: lastAction({ ...(before ?? { done: req.done?.at(-1) ?? null }), strikes }),
+    /* spells: what it can cast now, and for a spell at a friend its allies (not hidden by the GM) and itself, by their labels */
+    ...(spells ? { spells: await spellBook(actor), allies: alliesByLabel(combat, tok), saveRows: targetHelperOn(), reach: Math.max(5, ...strikes.filter(s => !s.ranged).map(s => s.reach ?? 5)) } : {}) };
 }
+/** Its allies the GM hasn't hidden, and itself, by label, for a spell aimed at a friend. */
+function alliesByLabel(combat, tok) {
+  const labels = turns(combat).labels ?? {}, scene = combat.scene, out = {};
+  for (const t of [tok, ...alliesOf(scene, tok).filter(a => !a.hidden)]) { const l = labels[t.id]; if (l) out[l] = { name: l, square: squareOf(t, scene), size: sizeOf(t), ...heightOf(t), flat: 0, ally: true }; }
+  return out;
+}
+/** A label's token: the creatures it perceived when asked, then its allies and itself. */
+const tokenIdOf = (combat, r, label) => r.labels?.[label] ?? Object.entries(turns(combat).labels ?? {}).find(([, l]) => l === label)?.[0] ?? null;
+/** Toolbelt's Target Helper puts a row per target on a spell's card, where a player rolls their own save (Rhea, 2026-11-07). Without it, a save spell is the GM's. */
+const targetHelperOn = () => { try { return !!game.modules.get(TOOLBELT)?.active && !!game.settings.get(TOOLBELT, "targetHelper.enabled"); } catch { return false; } };
 
 /* ---------- moving ---------- */
 /** Height for distances: PF2e counts the vertical gap when two creatures stand at different elevations. */
 const heightOf = tok => ({ elev: Number(tok.elevation) || 0, depth: Number(tok.depth) || sizeOf(tok) });
 const hasMove = steps => (steps ?? []).some(isMove);
+const hasSpell = steps => (steps ?? []).some(s => s?.do === "spell");
 /** The creatures a monster knows are there: allies (not hidden by the GM), and those it perceives well enough to know their square. Only these shape
     the routes it's told about, so a refusal never gives away a creature it can't perceive. others: what `sense` gave. */
 function knownTo(combat, tok, others) {
@@ -324,7 +388,7 @@ async function judgeNow(combat, requestId) {
   if (!await ensureScene(combat)) { await save(combat, requestId, { state: "requested", verdict: cantOpen() }); return { state: "requested", reason: cantOpen() }; }
   const r = request(combat, requestId), clean = cleanPlan(r.plan);
   if (!clean.ok) return reject(combat, requestId, clean.reason);
-  const c = checkPlan(clean.plan, await gather(combat, r, undefined, { moves: hasMove(clean.plan.steps) }));
+  const c = checkPlan(clean.plan, await gather(combat, r, undefined, { moves: hasMove(clean.plan.steps), spells: hasSpell(clean.plan.steps) }));
   if (!c.ok) return reject(combat, requestId, c.reason);
   await save(combat, requestId, { state: "ready", plan: whole(clean.plan), steps: c.steps, verdict: null });
   const tok = combat.scene.tokens.get(r.tokenId);
@@ -409,9 +473,11 @@ export function fightState(combat = game.combat) {
 /* Workbench's own auto-damage would open the damage dialog and roll in its own time, so a card this module makes opts out, with Workbench's own
    flag. It only ever fires on the card's author's browser, and this module always rolls the damage itself: one roller, one card. */
 let pending = null;
-export function onPreCreateMessage(message) { if (pending && message.speaker?.token === pending.tokenId && message.flags?.pf2e?.context?.type === "attack-roll") message.updateSource({ [`flags.${WORKBENCH}.noAutoDamageRoll`]: true }); }
-export function onCreateMessage(message) { if (!pending || message.author?.id !== game.user.id || message.speaker?.token !== pending.tokenId) return; const type = message.flags?.pf2e?.context?.type; pending.waiters.get(type)?.(message); }
+export function onPreCreateMessage(message) { if (pending && message.speaker?.token === pending.tokenId && (pending.all || message.flags?.pf2e?.context?.type === "attack-roll")) message.updateSource({ [`flags.${WORKBENCH}.noAutoDamageRoll`]: true }); }   /* a spell's cards all opt out: its cast card too, which Workbench reads for save spells */
+export function onCreateMessage(message) { if (!pending || message.author?.id !== game.user.id || message.speaker?.token !== pending.tokenId) return; const type = message.flags?.pf2e?.context?.type; (pending.waiters.get(type) ?? pending.waiters.get("*"))?.(message, type); }
 const waitFor = type => { const p = new Promise((res, rej) => { const t = setTimeout(() => { pending?.waiters.delete(type); rej(new Error(`No ${type} card came.`)); }, STEP_MS); pending.waiters.set(type, m => { clearTimeout(t); pending.waiters.delete(type); res(m); }); }); p.catch(() => {}); return p; };
+/* the first of several card types: a spell attack's card type isn't pinned down, so take the first attack card that comes */
+const waitForAny = types => { const p = new Promise((res, rej) => { const t = setTimeout(() => { pending?.waiters.delete("*"); rej(new Error(`No ${types.join(" or ")} card came.`)); }, STEP_MS); pending.waiters.set("*", (m, type) => { if (!types.includes(type)) return; clearTimeout(t); pending.waiters.delete("*"); res(m); }); }); p.catch(() => {}); return p; };
 const clickWith = key => new MouseEvent("click", { shiftKey: !!game.user.settings?.[key] });   /* PF2e flips the dialog on Shift */
 /* Nobody can click a window on the runner's page, and a roll waits for its dialog for ever. So a stage gets a time limit, and a dialog ends it at once:
    closing it lets the roll give up, and the record says the stage may not have finished, so it goes to Rhea and nothing is repeated. */
@@ -646,7 +712,7 @@ async function endTakeCover(tok, reason) {
     add the note twice. Run like a stage: a time limit, and a window it opens is closed. */
 async function settleCover(combat, id, upto, tok, from = request(combat, id)?.coverSettled ?? 0) {
   const r = request(combat, id); if (!r?.steps || !endsCover(r.steps, r.log, upto, from) || !(takingCover(tok) || ownCover(tok).length)) return;
-  let last = null; for (let k = upto - 1; k >= 0 && !last; k--) if (r.steps[k]?.do === "strike" || (r.steps[k]?.do === "ability" && r.steps[k].attack) || isMove(r.steps[k])) last = r.steps[k];
+  let last = null; for (let k = upto - 1; k >= 0 && !last; k--) if (r.steps[k]?.do === "strike" || (["ability", "spell"].includes(r.steps[k]?.do) && r.steps[k].attack) || isMove(r.steps[k])) last = r.steps[k];
   let note; try { note = await watched(() => endTakeCover(tok, isMove(last) ? "movement" : "attack")); } catch (e) { console.error(`${ID} | take cover`, e); note = `I couldn't end ${tok.name}'s Take Cover (${e.message}): check Visioner's card.`; }
   await save(combat, id, { coverSettled: upto, ...(note ? { note: [request(combat, id).note, note].filter(Boolean).join(" ") } : {}) });
 }
@@ -713,11 +779,131 @@ async function runAbility(combat, id, i, step, tok, target) {
   }
   return "ask";
 }
-/* what PF2e's own Damage button does, for a named target rather than the selected tokens. Effects that only count for this one hit aren't read. */
-async function applyFromCard(message, roll, target) {
+/* ---------- spells ---------- */
+/* Rhea, 2026-11-07. The module casts with the entry's own cast (the slot or use is spent and the card posted, as a sheet's Cast does), then: a spell attack
+   rolls like a Strike (the attack penalty, the flat check, real targets) and a damaging one's damage is applied, doubled on a critical hit (PF2e rolls a
+   spell attack's damage as a hit; its DOUBLE button is the critical); a save spell waits for the target's save on Toolbelt's row on the spell card: a
+   player rolls their own and the turn waits with no timer, while a creature no player owns, or one whose player is offline, is rolled by the module
+   through Toolbelt's own buttons. A basic save's damage is applied by degree. Anything else a spell does is the GM's, from its card. */
+const ownerOnline = actor => game.users.some(u => !u.isGM && u.active && actor?.testUserPermission?.(u, "OWNER"));
+/** The degree of a creature's save on a spell's card, from Toolbelt's row (its flag, which Workbench reads too), or null. */
+function savedDegree(message, tokenId) {
+  for (const v of Object.values(message?.flags?.[TOOLBELT]?.targetHelper?.saveVariants ?? {})) { const s = v?.saves?.[tokenId]; if (s?.success in DEGREE) return DEGREE[s.success]; }
+  return null;
+}
+/** Toolbelt's button that rolls this creature's save on the card in this page's chat log: the d20 for creatures no player owns, otherwise its row's own.
+    Rows carry no token id, so they're matched in Toolbelt's own order for a GM (no player owner first, then by name; its createTargetsRows) and the name
+    is checked. Null if it can't be found. */
+async function saveButton(message, target, npc) {
+  let el = null; for (let t = 0; t < 3000 && !(el = ui.chat?.element?.querySelector?.(`[data-message-id="${message.id}"]`)); t += 200) await new Promise(r => setTimeout(r, 200));
+  if (!el) return null;
+  if (npc) { const b = el.querySelector(".pf2e-toolbelt-target-rollSaves"); if (b) return b; }
+  const toks = (message.flags?.[TOOLBELT]?.targetHelper?.targets ?? []).map(u => fromUuidSync(u)).filter(Boolean);
+  const order = toks.map((t, k) => ({ t, k })).sort((a, b) => (a.t.hasPlayerOwner - b.t.hasPlayerOwner) || (a.t.name < b.t.name ? -1 : a.t.name > b.t.name ? 1 : a.k - b.k)).map(x => x.t);
+  const rows = [...el.querySelectorAll(".pf2e-toolbelt-target-targetRows .target-row")], nameOf = r => r.querySelector(".name")?.textContent.trim() ?? "";
+  let row = rows[order.findIndex(t => t.id === target.id)];
+  if (!row || nameOf(row) !== target.name) { const same = rows.filter(r => nameOf(r) === target.name); row = same.length === 1 ? same[0] : null; }
+  return row?.querySelector("[data-action=roll-save]") ?? null;
+}
+/** Roll a creature's save on the card through Toolbelt's own button, with the user's dialog rule (Shift flips it, as for Strikes), and wait for the result. */
+async function rollSaveOnCard(message, target) {
+  const npc = !target.actor?.hasPlayerOwner, button = await saveButton(message, target, npc);
+  if (!button) throw new Error(`I couldn't find Toolbelt's save button for ${target.name} on the spell's card.`);
+  button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, shiftKey: !!game.user.settings?.showCheckDialogs }));
+  for (let t = 0; t < 12000; t += 250) { await new Promise(r => setTimeout(r, 250)); const d = savedDegree(game.messages.get(message.id), target.id); if (d != null) return d; }
+  return null;
+}
+const SAVE_WORD = s => s[0].toUpperCase() + s.slice(1);
+/** The save stage: the target's save from its row, rolled by the module for a creature no player owns, one whose player is offline, or when the GM pressed
+    Roll it for them; otherwise "wait" for the player. "saved" once it's in. */
+async function awaitSave(combat, id, i, step, tok, target) {
+  const get = () => request(combat, id).log?.[i] ?? {}, card = game.messages.get(get().cast?.message);
+  if (!card) { await addNote(combat, id, `${step.itemName}'s card is gone, so I can't read ${step.target}'s save.`); return "ask"; }
+  if (!card.flags?.[TOOLBELT]?.targetHelper) { await addNote(combat, id, `${step.itemName}'s card has no target rows (is Toolbelt's Target Helper on?): roll ${step.target}'s save and apply it yourself.`); return "gm"; }
+  let degree = savedDegree(card, target.id);
+  if (degree == null) {
+    const asked = !!request(combat, id).rollFor?.[target.id], npc = !target.actor?.hasPlayerOwner, rolled = get().rollStarted ?? 0;
+    if (asked || (!rolled && (npc || !ownerOnline(target.actor)))) {
+      if (!stepGate("save", id)) return "stopped";
+      if (!(await ensureScene(combat) && tok.object)) throw new Error(cantOpen());
+      await saveTurns(combat, { [`requests.${id}.log.${i}.rollStarted`]: rolled + 1, [`requests.${id}.log.${i}.waiting`]: [target.id], ...(asked ? { [`requests.${id}.rollFor.${target.id}`]: null } : {}) });
+      degree = await watched(() => rollSaveOnCard(card, target));
+    }
+  }
+  if (degree == null) { if (!get().waiting) await save(combat, id, { log: { [i]: { waiting: [target.id] } } }); return "wait"; }
+  const gm = !step.damaging || !step.basic ? `Apply ${step.itemName} for ${step.target}'s ${CHECK_OUTCOMES[degree]} ${SAVE_WORD(step.save)} save from its card.` : null;
+  await save(combat, id, { log: { [i]: { save: { degree }, waiting: null } }, ...(gm ? { note: joinNote(combat, id, gm) } : {}) });
+  return "saved";
+}
+const cardWords = (step) => `Apply ${step.itemName}${step.area ? `: place its ${step.area.size}-foot ${step.area.type}${step.target ? ` aimed at ${step.target}` : ""} from its card and resolve it` : `${step.target ? ` at ${step.target}` : ""} from its card`}.`;
+async function runSpell(combat, id, i, step, tok, target) {
+  const record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {};
+  const found = spellFor(tok.actor, step); if (!found) throw new Error(`${tok.name} has no ${step.itemName} now.`);
+  const { entry, spell } = found;
+  for (let guard = 0; guard < 12; guard++) {
+    const now = nextSpell(get(), { mode: step.mode, flat: step.flat ?? 0, apply: applySetting(), damaging: step.damaging, basic: step.basic });
+    if (now === "next" || now === "gm" || now === "ask") return now;
+    if (now === "save") { const s = await awaitSave(combat, id, i, step, tok, target); if (s === "saved") continue; return s; }
+    if (!stepGate(now, id)) return "stopped";
+    if (now !== "apply" && !(await ensureScene(combat) && tok.object && (!target || target.object))) throw new Error(cantOpen());   /* applying needs no canvas */
+    pending = { tokenId: tok.id, waiters: new Map(), all: true };
+    try {
+      if (now === "cast") {
+        if (target) aimAt(target); else stopAiming();   /* Toolbelt puts a row on the card for each of the runner's targets */
+        await record({ castStarted: true });
+        const message = await watched(async () => { const card = waitFor("spell-cast"); await entry.cast(spell, { rank: step.rank, consume: true }); return card; });
+        /* the record and the GM's instruction in one save, so a reload can't keep one without the other */
+        await save(combat, id, { log: { [i]: { cast: { message: message.id } } }, ...(step.mode === "card" ? { note: joinNote(combat, id, cardWords(step)) } : {}) });
+      } else if (now === "flat") {
+        await record({ flatStarted: true });
+        const roll = await watched(async () => { const r = await new Roll("1d20").evaluate(); await r.toMessage({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), flavor: `Flat check, DC ${step.flat}` }); return r; });
+        await record({ flat: { dc: step.flat, total: roll.total, ok: roll.total >= step.flat } });
+        if (roll.total < step.flat) await addNote(combat, id, `${step.itemName} at ${step.target} failed its DC ${step.flat} flat check (${roll.total}): it doesn't affect them.`);
+      } else if (now === "attack") {
+        aimAt(target); await record({ started: true });
+        const { message, roll } = await watched(async () => { const card = waitForAny(["spell-attack-roll", "attack-roll"]), roll = await spell.rollAttack(clickWith("showCheckDialogs"), (step.variant ?? 0) + 1); return { message: await card, roll }; });
+        const degree = roll?.degreeOfSuccess ?? message.rolls?.[0]?.degreeOfSuccess ?? 0;
+        const gm = degree >= 2 && !step.damaging ? `Apply ${step.itemName}'s ${OUTCOMES[degree]} at ${step.target} from its card.` : degree === 3 && step.critText ? `${step.itemName} critically hit ${step.target}: its damage is doubled; anything else its critical success adds is yours to apply from its card.` : null;
+        await save(combat, id, { log: { [i]: { attack: { message: message.id, degree } } }, ...(gm ? { note: joinNote(combat, id, gm) } : {}) });
+      } else if (now === "damage") {
+        aimAt(target); await record({ damageStarted: true });
+        /* the damage at the rank it was cast at (PF2e reads that from the card's button, which a script has none of) */
+        const message = await watched(async () => { const card = waitFor("damage-roll"); const v = (step.rank !== spell.rank ? spell.loadVariant?.({ castRank: step.rank }) : null) ?? spell; await v.rollDamage(clickWith("showDamageDialogs"), step.mode === "attack" ? step.variant ?? 0 : undefined); return card; });
+        await record({ damage: { message: message.id } });
+        if (applySetting()) await markApplied(message);
+      } else if (now === "apply") {
+        const message = game.messages.get(get().damage.message), roll = message?.rolls?.[0]; if (!roll) return "ask";
+        await record({ applying: true });
+        await watched(() => applyFromCard(message, roll, target, spellMultiplier(step, get())));
+        await record({ applied: true });
+        if (target.actor?.isOfType?.("character") && target.actor.hitPoints?.value === 0) await addNote(combat, id, `${target.name} is at 0 HP. If you undo this, PF2e restores the HP but you still need to remove Wounded and Prone and put their initiative back.`);
+      }
+    } finally { pending = null; }
+  }
+  return "ask";
+}
+/** Roll it for them (the card's button for a save still waiting): from any GM's browser; the runner rolls it on the card through Toolbelt. */
+export async function rollFor(combat, requestId, tokenId) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  const r = request(combat, requestId); if (r?.state !== "saves") throw new Error("That turn isn't waiting for a save.");
+  await save(combat, requestId, { rollFor: { [tokenId]: true } });
+  return doIt(combat, requestId);
+}
+/** A spell's card changed: a save on its Toolbelt row may be what a waiting turn needs. Runner only. */
+export function onMessageUpdate(message, change) {
+  if (!isRunner() || !foundry.utils.hasProperty(change, `flags.${TOOLBELT}`)) return;
+  for (const combat of game.combats.filter(c => c.started)) {
+    const r = currentRequest(combat);
+    if (r?.state === "saves" && Object.values(r.log ?? {}).some(l => l?.cast?.message === message.id)) doIt(combat, r.id).catch(e => console.error(`${ID} | turn`, e));
+  }
+}
+/* what PF2e's own Damage, Half and Double buttons do (applyDamageFromMessage, 8.7.0), for a named target rather than the selected tokens: the roll
+   altered by the multiplier, and the target told whether the damage comes from an ally or an enemy. Effects that only count for this one hit aren't read. */
+async function applyFromCard(message, roll, target, multiplier = 1) {
   const context = message.flags.pf2e?.context ?? {}, { origin, keep } = damageOptions(context.options ?? []), actor = target.actor.getContextualClone(origin, []);
-  const rollOptions = new Set([...keep, ...origin, ...actor.getSelfRollOptions()]);
-  await actor.applyDamage({ damage: roll, token: target, item: message.item, rollOptions, shieldBlockRequest: false, outcome: context.outcome });
+  const side = target.actor.alliance && message.actor ? [`origin:${target.actor.alliance === message.actor.alliance ? "ally" : "enemy"}`] : [];
+  const rollOptions = new Set([...keep, ...side, ...origin, ...actor.getSelfRollOptions()]);
+  await actor.applyDamage({ damage: multiplier === 1 ? roll : roll.alter(multiplier, 0), token: target, item: message.item, rollOptions, shieldBlockRequest: false, outcome: context.outcome });
 }
 /** Do it (and Next step): on the runner, carry the plan on from where it stands. Without Auto it does one action and waits for Next step; with Auto it
     goes on by itself, with a pause between actions. Safe to call again after a reload: finished work is never repeated. From anyone else's browser it
@@ -767,11 +953,16 @@ async function runTurn(combat, requestId) {
     else if (step.do === "ability") {
       const target = step.target ? combat.scene.tokens.get(r.labels[step.target]) : null; if (step.target && !target) return save(combat, requestId, { state: "stopped", note: `${step.targetName} is gone.` });
       work = () => runAbility(combat, requestId, i, step, tok, target);
+    } else if (step.do === "spell") {
+      const tid = step.target ? tokenIdOf(combat, r, step.target) : null, target = tid ? combat.scene.tokens.get(tid) : null; if (step.target && !target) return save(combat, requestId, { state: "stopped", note: `${step.targetName} is gone.` });
+      work = () => runSpell(combat, requestId, i, step, tok, target);
     }
     if (work) {
       let result; try { result = await work(); } catch (e) { console.error(e); result = "ask"; await save(combat, requestId, { note: e.message }); }
       if (result === "stopped") return save(combat, requestId, { state: "stopped" });
-      if (result === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} may not have finished. ${isMove(step) ? "Put the monster where it should be" : step.do in POSTURES ? "Check whether it is prone" : step.do === "take-cover" ? "Check whether it is Taking Cover" : step.do === "ability" ? "Check the chat, HP and conditions" : "Check the chat and HP"}, then play the rest yourself.`.trim() });
+      /* a save the player rolls: the turn waits, with no timer, until their row on the spell's card has it (or the GM presses Roll it for them) */
+      if (result === "wait") return save(combat, requestId, { state: request(combat, requestId).state === "manual" ? "manual" : "saves" });
+      if (result === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} may not have finished. ${isMove(step) ? "Put the monster where it should be" : step.do in POSTURES ? "Check whether it is prone" : step.do === "take-cover" ? "Check whether it is Taking Cover" : step.do === "ability" ? "Check the chat, HP and conditions" : step.do === "spell" ? "Check the chat, the spell's slot or use, HP and conditions" : "Check the chat and HP"}, then play the rest yourself.`.trim() });
       await settleCover(combat, requestId, i + 1, tok, i);   /* its own attack or move ends a Take Cover */
       /* a Stride, Step or Crawl that ended short of its square: the rest was planned from there, so ask again (the reason names the square, never what stopped it) */
       const at = squareOf(tok, combat.scene);
@@ -794,7 +985,7 @@ async function lookAgain(combat, r, i, tok) {
   if (!r.seen || !tok.object) return { changes: [] };   /* a request from before 0.4.0 has no baseline */
   const changes = changesSince(r.seen, situationNow(combat, tok, r.labels));
   if (changes.length) return { changes };
-  const left = (r.plan?.steps ?? []).slice(i), rest = checkPlan({ steps: left }, await gather(combat, r, spentBy(r.steps.slice(0, i)), { moves: hasMove(left), before: i > 0 ? { step: r.steps[i - 1], rec: r.log?.[i - 1] ?? {} } : null }));
+  const left = (r.plan?.steps ?? []).slice(i), rest = checkPlan({ steps: left }, await gather(combat, r, spentBy(r.steps.slice(0, i)), { moves: hasMove(left), spells: hasSpell(left), before: i > 0 ? { step: r.steps[i - 1], rec: r.log?.[i - 1] ?? {} } : null }));
   return rest.ok ? { changes: [], next: rest.steps[0] } : { changes: [{ who: "plan", what: "illegal", reason: rest.reason }] };
 }
 /** Drop the rest of the plan and ask again, for the same turn: a new request with a fresh packet, what's done so far, and why. The old one ends there. */

@@ -2,7 +2,7 @@
 import { ID, build, clear, findCreatures, markDrawn, markReady, nextToParty, place, prepare, readMap, submitBrief, summary } from "./builder.mjs";
 import { BuildApp, askClear, askReplace } from "./ui/build.mjs";
 import { TurnsApp } from "./ui/turns.mjs";
-import { busy, checkOnly, keepTurn, saveTurn, currentRequest, doIt, fightState, hold, onCombatUpdate, onCreateMessage, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, perceived, playMyself, reportFailure, submitPlan, waitForEvent } from "./fight.mjs";
+import { busy, checkOnly, keepTurn, saveTurn, currentRequest, doIt, fightState, hold, onCombatUpdate, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent } from "./fight.mjs";
 
 const CONTROL = "encounters", apps = new Map(); let turnsApp = null;
 /* The Monster Turns window shows the fight on the scene this browser is looking at, so it redraws when that scene, its fight or a ticked box changes. */
@@ -49,6 +49,7 @@ Hooks.on("activateNote", note => {
 /* the fight */
 Hooks.on("preCreateChatMessage", message => { onPreCreateMessage(message); });
 Hooks.on("createChatMessage", message => { onCreateMessage(message); });
+Hooks.on("updateChatMessage", (message, change) => { onMessageUpdate(message, change); });
 Hooks.on("preUpdateCombatant", (combatant, change, options) => { keepTurn(combatant, change, options); });
 Hooks.on("updateCombatant", (combatant, change, options, userId) => { saveTurn(combatant, options, userId); });
 Hooks.on("renderChatMessageHTML", (message, html) => { onRenderMessage(message, html); });
@@ -57,5 +58,5 @@ Hooks.on("updateToken", (tok, change) => { if (foundry.utils.hasProperty(change,
 Hooks.on("userConnected", () => { redrawTurns(); });
 Hooks.once("ready", () => {
   onRunnerReady().catch(e => console.error(`${ID} | runner`, e));
-  game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty, fight: { current: currentRequest, busy, perceived, submitPlan, doIt, hold, playMyself, waitForEvent, checkPlan: checkOnly, reportFailure, state: fightState } };
+  game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty, fight: { current: currentRequest, busy, perceived, submitPlan, doIt, hold, playMyself, rollFor, waitForEvent, checkPlan: checkOnly, reportFailure, state: fightState } };
 });

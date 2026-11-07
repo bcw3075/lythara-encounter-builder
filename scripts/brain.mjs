@@ -32,6 +32,9 @@ export function cleanPlan(raw) {
     if (s.item != null) { if (typeof s.item !== "string" || !ITEM.test(s.item)) return bad(`${at}: "${text(String(s.item), 30)}" isn't an id.`); out.item = s.item; }
     if (s.target != null) { if (typeof s.target !== "string" || !LABEL.test(s.target)) return bad(`${at}: "${text(String(s.target), 30)}" isn't a label like E1.`); out.target = s.target; }
     if (s.to != null) { if (!Array.isArray(s.to) || s.to.length !== 2 || !s.to.every(v => Number.isInteger(v) && v >= 0 && v < 1000)) return bad(`${at}: "to" is a square, [x, y].`); out.to = [...s.to]; }
+    /* a spell's rank (0 is never a rank, but a cantrip's own rank is given as is) and, for a spell cast with a choice of actions, how many */
+    if (s.rank != null) { if (!Number.isInteger(s.rank) || s.rank < 1 || s.rank > 10) return bad(`${at}: "rank" is a spell rank, 1 to 10.`); out.rank = s.rank; }
+    if (s.actions != null) { if (!Number.isInteger(s.actions) || s.actions < 0 || s.actions > 3) return bad(`${at}: "actions" is 0 to 3.`); out.actions = s.actions; }
     steps.push(out);
   }
   return { ok: true, plan: { schema: PLAN_SCHEMA, reason: text(p.reason, 300), steps, ifBlocked: text(p.ifBlocked, 100) || null, suggestOpus: p.suggestOpus === true } };

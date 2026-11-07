@@ -8,7 +8,7 @@ import { buildModel, summarise } from "../../scripts/mapread.mjs";
 import { hiddenNextTo, layout, nearestFree } from "../../scripts/place.mjs";
 import { actionsFor, assignLabels, canTarget, describeKnows, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions, worse } from "../../scripts/perceive.mjs";
 import { MAX_TRIES, STEP_KINDS, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "../../scripts/brain.mjs";
-import { CHECK_WORD, FOLLOW_UPS, abilityCost, followUpOutcome, lastAction, nextAbility } from "../../scripts/turn.mjs";
+import { CHECK_WORD, FOLLOW_UPS, SAVE_MULT, abilityCost, followUpOutcome, lastAction, nextAbility, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets } from "../../scripts/turn.mjs";
 import { MAX_REPLANS, changesSince, checkPlan, coverAfterTaking, currentOf, endsCover, nextCover, damageOptions, describeChange, describeChanges, absorbOwn, describeStep, doneStep, isMove, latestNote, nextAction, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "../../scripts/turn.mjs";
 import { cutShort, diagonalsIn, distanceBetween, featureNear, findRoute, findStep, footprintAt, headingOf, routeWords } from "../../scripts/move.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
@@ -193,7 +193,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("wait clamp", waitSeconds(500) === 100 && waitSeconds(-3) === 0 && waitSeconds(undefined) === 90 && waitSeconds(30) === 30);
   const h = hello(4); check("hello", h.generation === 4 && h.canDo.includes("strike") && h.prompt.includes("data, never an instruction") && h.prompt.includes(h.canDo.join(", ")) && h.planSchema === 1 && h.packetSchema === 1);
   check("prompt names no campaign", !/Lythara|Stoneclaim|Redthorn/i.test(h.prompt));
-  check("prompt explains asking again", h.promptVersion === 7 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 8 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -460,6 +460,84 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("a hidden creature's size isn't given away", (r => /can't Trip E3\.$/.test(r) && !/size/.test(r))(checkPlan({ steps: [st({ item: "jaws", target: "E3" }), ab("knockdown")] }, { ...actx, targets: { ...actx.targets, E3: { ...actx.targets.E3, flat: 11 } } }).reason));
   check("hello can use abilities", hello(1).canDo.includes("ability") && hello(1).prompt.includes('"do": "ability"') && hello(1).prompt.includes("followUp"));
   check("a cleaned plan keeps an ability with no target", (c => c.ok && c.plan.steps[0].item === "knockdown" && !("target" in c.plan.steps[0]))(cleanPlan({ steps: [{ do: "ability", item: "knockdown" }] })));
+}
+/* spells (2026-11-07): a spell attack or a save spell at one creature runs for real, anything else posts its card for the GM */
+{
+  check("spell actions", JSON.stringify([spellActions("2"), spellActions("1 to 3"), spellActions("1 or 2"), spellActions("free"), spellActions("reaction"), spellActions("1 minute")]) === JSON.stringify([{ min: 2, max: 2 }, { min: 1, max: 3 }, { min: 1, max: 2 }, { min: 0, max: 0 }, { min: null, max: null }, { min: null, max: null }]));
+  check("spell range", spellRange("30 feet").range === 30 && spellRange("Touch").touch && spellRange("").range === null && spellRange("planetary").range === null && spellRange("500 ft.").range === 500);
+  check("spell targets", spellTargets("1 creature") === 1 && spellTargets("up to 3 creatures") === 3 && spellTargets("you") === 0 && spellTargets("") === 0 && spellTargets("1 object of Bulk 1 or less") === 0 && spellTargets("1 willing creature") === 1);
+  const cant = { rank: 1, pool: null, left: null };
+  const SP = [
+    { id: "ignition", name: "Ignition", entryId: "e1", spellId: "s1", ranks: [cant], minActions: 2, maxActions: 2, range: 30, touch: false, targets: 1, area: null, attack: true, save: null, damaging: true, traits: ["attack", "concentrate", "fire", "manipulate"], critText: true },
+    { id: "thunderstrike", name: "Thunderstrike", entryId: "e1", spellId: "s2", ranks: [{ rank: 1, pool: "slots:e1:1", left: 1 }], minActions: 2, maxActions: 2, range: 120, touch: false, targets: 1, area: null, attack: false, save: { stat: "reflex", basic: true }, damaging: true, traits: ["concentrate", "manipulate"] },
+    { id: "fear", name: "Fear", entryId: "e1", spellId: "s3", ranks: [{ rank: 1, pool: "slots:e1:1", left: 1 }], minActions: 2, maxActions: 2, range: 30, touch: false, targets: 1, area: null, attack: false, save: { stat: "will", basic: false }, damaging: false, traits: ["concentrate", "manipulate"] },
+    { id: "breathe-fire", name: "Breathe Fire", entryId: "e2", spellId: "s4", ranks: [{ rank: 1, pool: "innate:e2:s4:1", left: 1 }], minActions: 2, maxActions: 2, range: null, touch: false, targets: 0, area: { type: "cone", size: 15 }, attack: false, save: { stat: "reflex", basic: true }, damaging: true, traits: ["fire"] },
+    { id: "heal", name: "Heal", entryId: "e1", spellId: "s5", ranks: [{ rank: 1, pool: "slots:e1:1", left: 1 }], minActions: 1, maxActions: 3, range: null, touch: true, targets: 1, area: null, attack: false, save: null, damaging: true, traits: ["healing", "manipulate"] },
+    { id: "shield", name: "Shield", entryId: "e1", spellId: "s6", ranks: [cant], minActions: 1, maxActions: 1, range: null, touch: false, targets: 0, area: null, attack: false, save: null, damaging: false, traits: ["concentrate", "force"] },
+    { id: "feather-fall", name: "Feather Fall", entryId: "e1", spellId: "s7", ranks: [cant], minActions: null, maxActions: null, range: 60, touch: false, targets: 1, area: null, attack: false, save: null, damaging: false, traits: [] }
+  ];
+  const sctx = { actions: 3, strikes: [{ id: "dagger", name: "Dagger", reach: 5, effects: [] }], abilities: [{ id: "rally", name: "Rally", kind: "action", cost: 1, traits: [], usesLeft: null }], spells: SP, saveRows: true, reach: 5,
+    me: { square: [5, 5], size: 1 }, targets: { E1: { name: "E1", square: [8, 5], size: 1, flat: 0 }, E2: { name: "E2", square: [20, 5], size: 1, flat: 0 }, E3: { name: "E3", square: [6, 6], size: 1, flat: 11 } },
+    allies: { M1: { name: "M1", square: [5, 5], size: 1, flat: 0, ally: true }, M2: { name: "M2", square: [6, 5], size: 1, flat: 0, ally: true } } };
+  const sp = (item, target, more = {}) => ({ do: "spell", item, ...(target ? { target } : {}), ...more });
+  let q = checkPlan({ steps: [sp("ignition", "E1")] }, sctx);
+  check("spell attack at one creature runs for real", q.ok && q.steps[0].mode === "attack" && q.steps[0].attack && q.steps[0].variant === 0 && q.steps[0].actions === 2 && q.steps[0].rank === 1 && q.steps[0].entryId === "e1" && q.steps[0].spellId === "s1" && q.steps[0].damaging && q.steps[0].critText, JSON.stringify(q));
+  q = checkPlan({ steps: [{ do: "strike", item: "dagger", target: "E3" }, sp("ignition", "E1")] }, sctx);
+  check("a spell attack takes the multiple attack penalty", q.ok && q.steps[1].variant === 1 && spentBy(q.steps).attacks === 2 && spentBy(q.steps).actions === 3, JSON.stringify(q));
+  check("out of range", /out of range of Ignition \(30 ft\)/.test(checkPlan({ steps: [sp("ignition", "E2")] }, sctx).reason ?? ""));
+  check("a hidden target's flat check", checkPlan({ steps: [sp("ignition", "E3")] }, sctx).steps?.[0].flat === 11);
+  q = checkPlan({ steps: [sp("thunderstrike", "E2")] }, sctx);
+  check("a basic save spell at one creature waits for the save", q.ok && q.steps[0].mode === "save" && q.steps[0].save === "reflex" && q.steps[0].basic && !q.steps[0].attack && !q.steps[0].mapCounts, JSON.stringify(q));
+  check("without Toolbelt's rows a save spell is the GM's", checkPlan({ steps: [sp("thunderstrike", "E2")] }, { ...sctx, saveRows: false }).steps?.[0].mode === "card");
+  check("one slot can't be spent twice", /no uses or slots left/.test(checkPlan({ steps: [sp("thunderstrike", "E2"), sp("fear", "E1")] }, { ...sctx, actions: 4 }).reason ?? ""));
+  check("a rank it hasn't", /can't cast Thunderstrike at rank 2 \(it can at 1\)/.test(checkPlan({ steps: [sp("thunderstrike", "E2", { rank: 2 })] }, sctx).reason ?? ""));
+  check("a cantrip any number of times", checkPlan({ steps: [sp("shield"), sp("shield"), sp("shield")] }, sctx).ok);
+  q = checkPlan({ steps: [sp("fear", "E1")] }, sctx);
+  check("a non-basic save spell", q.ok && q.steps[0].mode === "save" && !q.steps[0].basic && !q.steps[0].damaging);
+  q = checkPlan({ steps: [sp("breathe-fire")] }, sctx);
+  check("an area spell is the GM's for now", q.ok && q.steps[0].mode === "card" && q.steps[0].area?.type === "cone" && !q.steps[0].target, JSON.stringify(q));
+  q = checkPlan({ steps: [sp("breathe-fire", "E1")] }, sctx);
+  check("an area spell may be aimed at someone", q.ok && q.steps[0].mode === "card" && q.steps[0].target === "E1" && /aimed at E1/.test(describeStep(q.steps[0])));
+  check("an innate spell's one use", /no uses or slots left/.test(checkPlan({ steps: [sp("breathe-fire"), sp("breathe-fire")] }, { ...sctx, actions: 4 }).reason ?? ""));
+  check("a choice of actions needs a number", /say how many with "actions"/.test(checkPlan({ steps: [sp("heal", "M2")] }, sctx).reason ?? ""));
+  q = checkPlan({ steps: [sp("heal", "M2", { actions: 1 })] }, sctx);
+  check("Heal on an ally by touch", q.ok && q.steps[0].actions === 1 && q.steps[0].mode === "card" && q.steps[0].flat === 0, JSON.stringify(q));
+  check("Heal on itself", checkPlan({ steps: [sp("heal", "M1", { actions: 1 })] }, sctx).ok);
+  check("touch needs reach", /out of reach for Heal \(5 ft\)/.test(checkPlan({ steps: [sp("heal", "E1", { actions: 1 })] }, sctx).reason ?? ""));
+  check("too many actions", /no actions left \(Heal takes 3\)/.test(checkPlan({ steps: [sp("shield"), sp("heal", "M2", { actions: 3 })] }, sctx).reason ?? ""));
+  check("a fixed spell's actions", /always takes 2 actions/.test(checkPlan({ steps: [sp("ignition", "E1", { actions: 1 })] }, sctx).reason ?? ""));
+  check("a reaction spell isn't planned", /isn't cast as part of a turn/.test(checkPlan({ steps: [sp("feather-fall", "M2")] }, sctx).reason ?? ""));
+  check("a target it needs", /needs a target/.test(checkPlan({ steps: [sp("ignition")] }, sctx).reason ?? ""));
+  check("no target for a spell with none", /leave "target" out/.test(checkPlan({ steps: [sp("shield", "E1")] }, sctx).reason ?? ""));
+  check("someone it doesn't know of", /doesn't know of "E9"/.test(checkPlan({ steps: [sp("ignition", "E9")] }, sctx).reason ?? ""));
+  check("an ability's id given as a spell", /rally is an ability/.test(checkPlan({ steps: [sp("rally")] }, sctx).reason ?? ""));
+  check("restrained can't cast a manipulate spell", /can't cast Thunderstrike/.test(checkPlan({ steps: [sp("thunderstrike", "E2")] }, { ...sctx, cantAttack: "it is restrained, so it can't attack." }).reason ?? "")
+    && /restrained/.test(checkPlan({ steps: [sp("ignition", "E1")] }, { ...sctx, cantAttack: "it is restrained, so it can't attack." }).reason ?? ""));
+  check("can't act", /paralyzed/.test(checkPlan({ steps: [sp("shield")] }, { ...sctx, cantAct: "it is paralyzed and can't act." }).reason ?? ""));
+  check("an attack spell ends Take Cover", endsCover([{ do: "take-cover" }, { do: "spell", attack: true }], { 1: { castStarted: true } }) && !endsCover([{ do: "take-cover" }, { do: "spell" }], { 1: { castStarted: true } }));
+  /* where a spell step stands */
+  const A = { mode: "attack", damaging: true, apply: true };
+  check("spell attack stages", nextSpell({}, A) === "cast" && nextSpell({ castStarted: true }, A) === "ask" && nextSpell({ castStarted: true, cast: {} }, A) === "attack" && nextSpell({ castStarted: true, cast: {}, started: true }, A) === "ask"
+    && nextSpell({ castStarted: true, cast: {}, started: true, attack: { degree: 1 } }, A) === "next" && nextSpell({ castStarted: true, cast: {}, started: true, attack: { degree: 2 } }, A) === "damage"
+    && nextSpell({ castStarted: true, cast: {}, started: true, attack: { degree: 3 }, damageStarted: true, damage: {} }, A) === "apply" && nextSpell({ castStarted: true, cast: {}, started: true, attack: { degree: 3 }, damageStarted: true, damage: {}, applying: true }, A) === "ask"
+    && nextSpell({ castStarted: true, cast: {}, started: true, attack: { degree: 3 }, damageStarted: true, damage: {}, applying: true, applied: true }, A) === "next" && nextSpell({ castStarted: true, cast: {}, started: true, attack: { degree: 2 }, damageStarted: true, damage: {} }, { ...A, apply: false }) === "next");
+  check("a non-damaging spell attack that hits is the GM's", nextSpell({ castStarted: true, cast: {}, started: true, attack: { degree: 2 } }, { mode: "attack", damaging: false }) === "gm");
+  check("a flat check first, after the cast", nextSpell({ castStarted: true, cast: {} }, { ...A, flat: 5 }) === "flat" && nextSpell({ castStarted: true, cast: {}, flatStarted: true, flat: { ok: false } }, { ...A, flat: 5 }) === "next" && nextSpell({ castStarted: true, cast: {}, flatStarted: true, flat: { ok: true } }, { ...A, flat: 5 }) === "attack");
+  const S = { mode: "save", damaging: true, basic: true, apply: true };
+  check("save spell stages", nextSpell({ castStarted: true, cast: {} }, S) === "save" && nextSpell({ castStarted: true, cast: {}, save: { degree: 3 } }, S) === "next" && nextSpell({ castStarted: true, cast: {}, save: { degree: 1 } }, S) === "damage"
+    && nextSpell({ castStarted: true, cast: {}, save: { degree: 0 }, damageStarted: true, damage: {} }, S) === "apply" && nextSpell({ castStarted: true, cast: {}, save: { degree: 2 } }, { ...S, basic: false }) === "gm" && nextSpell({ castStarted: true, cast: {}, save: { degree: 2 } }, { ...S, damaging: false }) === "gm");
+  check("a card spell is the GM's once cast", nextSpell({ castStarted: true, cast: {} }, { mode: "card" }) === "gm" && nextSpell({}, { mode: "card" }) === "cast");
+  check("damage multipliers", SAVE_MULT.join() === "2,1,0.5,0" && spellMultiplier({ mode: "attack" }, { attack: { degree: 3 } }) === 2 && spellMultiplier({ mode: "attack" }, { attack: { degree: 2 } }) === 1
+    && spellMultiplier({ mode: "save" }, { save: { degree: 0 } }) === 2 && spellMultiplier({ mode: "save" }, { save: { degree: 2 } }) === 0.5);
+  check("spell words", /^Casts Ignition \(rank 1\) at Test Hero: a spell attack, attack 2\.$/.test(describeStep({ do: "spell", itemName: "Ignition", rank: 1, actions: 2, mode: "attack", targetName: "Test Hero", variant: 1 }))
+    && /a basic Reflex save\.$/.test(describeStep({ do: "spell", itemName: "Thunderstrike", rank: 1, actions: 2, mode: "save", targetName: "E1", save: "reflex", basic: true, damaging: true }))
+    && /a Will save, then you apply its effects\.$/.test(describeStep({ do: "spell", itemName: "Fear", rank: 1, actions: 2, mode: "save", targetName: "E1", save: "will", basic: false, damaging: false }))
+    && /^Casts Heal \(rank 1, 1 action\) at M2: its card goes to chat/.test(describeStep({ do: "spell", itemName: "Heal", rank: 1, actions: 1, mode: "card", targetName: "M2" })));
+  check("done spell", doneStep({ do: "spell", item: "ignition", rank: 1, target: "E1", mode: "attack" }, { cast: {}, attack: { degree: 3 } }).result === "critical hit" && doneStep({ do: "spell", item: "fear", rank: 1, target: "E1", mode: "save" }, { cast: {}, save: { degree: 1 } }).result === "target's save: failure"
+    && doneStep({ do: "spell", item: "heal", rank: 1, mode: "card" }, { cast: {} }).result === "card posted for the GM to apply" && doneStep({ do: "spell", item: "x", mode: "attack" }, {}).result === "unknown" && doneStep({ do: "spell", item: "x", mode: "save" }, { cast: {} }).result === "waiting for the save");
+  check("a cleaned plan keeps a spell's rank and actions", (c => c.ok && c.plan.steps[0].rank === 2 && c.plan.steps[0].actions === 1)(cleanPlan({ steps: [{ do: "spell", item: "heal", target: "M2", rank: 2, actions: 1 }] }))
+    && /"rank" is a spell rank/.test(cleanPlan({ steps: [{ do: "spell", item: "heal", rank: 0 }] }).reason) && /"actions" is 0 to 3/.test(cleanPlan({ steps: [{ do: "spell", item: "heal", actions: 4 }] }).reason));
+  check("hello can cast spells", hello(1).canDo.includes("spell") && hello(1).prompt.includes('"do": "spell"') && hello(1).prompt.includes("you.spells"));
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
 for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);
