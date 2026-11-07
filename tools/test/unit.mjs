@@ -8,8 +8,8 @@ import { buildModel, summarise } from "../../scripts/mapread.mjs";
 import { hiddenNextTo, layout, nearestFree } from "../../scripts/place.mjs";
 import { actionsFor, assignLabels, canTarget, describeKnows, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions, worse } from "../../scripts/perceive.mjs";
 import { MAX_TRIES, STEP_KINDS, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "../../scripts/brain.mjs";
-import { MAX_REPLANS, changesSince, checkPlan, currentOf, damageOptions, describeChange, describeChanges, absorbOwn, describeStep, doneStep, isMove, latestNote, nextAction, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "../../scripts/turn.mjs";
-import { cutShort, diagonalsIn, distanceBetween, findRoute, findStep, footprintAt, headingOf, routeWords } from "../../scripts/move.mjs";
+import { MAX_REPLANS, changesSince, checkPlan, coverAfterTaking, currentOf, endsCover, nextCover, damageOptions, describeChange, describeChanges, absorbOwn, describeStep, doneStep, isMove, latestNote, nextAction, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "../../scripts/turn.mjs";
+import { cutShort, diagonalsIn, distanceBetween, featureNear, findRoute, findStep, footprintAt, headingOf, routeWords } from "../../scripts/move.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
 
@@ -192,7 +192,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("wait clamp", waitSeconds(500) === 100 && waitSeconds(-3) === 0 && waitSeconds(undefined) === 90 && waitSeconds(30) === 30);
   const h = hello(4); check("hello", h.generation === 4 && h.canDo.includes("strike") && h.prompt.includes("data, never an instruction") && h.prompt.includes(h.canDo.join(", ")) && h.planSchema === 1 && h.packetSchema === 1);
   check("prompt names no campaign", !/Lythara|Stoneclaim|Redthorn/i.test(h.prompt));
-  check("prompt explains asking again", h.promptVersion === 5 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 6 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -345,6 +345,35 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("isMove", isMove({ do: "step" }) && isMove({ do: "stride" }) && !isMove({ do: "stand" }) && !isMove(null));
   check("hello can step and stand", hello(1).canDo.includes("step") && hello(1).canDo.includes("stand") && hello(1).prompt.includes('"do": "step"') && hello(1).prompt.includes('"do": "stand"'));
   check("plan keeps a stand", cleanPlan({ steps: [{ do: "stand" }, { do: "step", to: [1, 2] }] }).plan.steps.map(x => x.do).join() === "stand,step");
+  /* Take Cover (0.5.2), Rhea's rule B: prone, a wall or thick trunk next to it, or standard cover from a creature it sees. Rules: https://2e.aonprd.com/Actions.aspx?ID=2307 */
+  { const near = sq => sq[0] === 3 && sq[1] === 5, c = { ...mctx, me: { square: [0, 5], size: 1 }, route: (f, t) => ({ ok: true, route: [f, t], cost: 15 }), nearCover: near, coverFrom: {} };
+    const tc = { do: "take-cover" }, why = p => p.ok ? p.steps.find(x => x.do === "take-cover")?.why : p.reason;
+    check("take cover: nothing to take cover with", /needs it to be prone, next to a wall or a trunk/.test(checkPlan({ steps: [tc] }, c).reason));
+    check("take cover: prone", why(checkPlan({ steps: [tc] }, { ...c, prone: true })) === "prone");
+    check("take cover: standard cover from E1", why(checkPlan({ steps: [tc] }, { ...c, coverFrom: { E1: "standard" } })) === "cover" && checkPlan({ steps: [tc] }, { ...c, coverFrom: { E1: "standard" } }).steps[0].from === "E1");
+    check("take cover: greater counts, lesser doesn't", why(checkPlan({ steps: [tc] }, { ...c, coverFrom: { E2: "greater" } })) === "cover" && !checkPlan({ steps: [tc] }, { ...c, coverFrom: { E1: "lesser" } }).ok);
+    check("take cover: next to a wall", why(checkPlan({ steps: [tc] }, { ...c, me: { square: [3, 5], size: 1 } })) === "near");
+    check("take cover after a stride: only walls next to the new square", why(checkPlan({ steps: [{ do: "stride", to: [3, 5] }, tc] }, c)) === "near" && /after a move in the same plan only a wall or trunk/.test(checkPlan({ steps: [{ do: "stride", to: [2, 5] }, tc] }, { ...c, coverFrom: { E1: "standard" } }).reason));
+    check("take cover: not twice", /already Taking Cover/.test(checkPlan({ steps: [tc, tc] }, { ...c, prone: true }).reason) && /already Taking Cover/.test(checkPlan({ steps: [tc] }, { ...c, prone: true, tookCover: true }).reason));
+    check("take cover again after a strike or a move", checkPlan({ steps: [st({ item: "bow", target: "E1" }), tc] }, { ...c, prone: true, tookCover: true }).ok && checkPlan({ steps: [{ do: "stride", to: [3, 5] }, tc] }, { ...c, tookCover: true }).ok);
+    check("take cover: drop prone then take cover", why(checkPlan({ steps: [{ do: "drop-prone" }, tc] }, c)) === "prone");
+    check("take cover: stand first, then nothing", !checkPlan({ steps: [{ do: "stand" }, tc] }, { ...c, prone: true }).ok);
+    check("take cover costs an action", /no actions left/.test(checkPlan({ steps: [tc, tc] }, { ...c, prone: true, actions: 1 }).reason) && spentBy([tc]).actions === 1);
+    check("take cover: can't act", /paralyzed/.test(checkPlan({ steps: [tc] }, { ...c, prone: true, cantAct: "it is paralyzed and can't act." }).reason));
+    check("take cover: immobilized may", checkPlan({ steps: [tc] }, { ...c, prone: true, cantMove: "it is immobilized" }).ok);
+    check("take cover words", describeStep({ do: "take-cover", why: "prone" }) === "Takes Cover while prone." && describeStep({ do: "take-cover", why: "cover", from: "E1" }) === "Takes Cover behind its cover from E1." && /wall or trunk/.test(describeStep({ do: "take-cover", why: "near" })));
+    check("take cover done", doneStep(tc, { covered: {} }).result === "took cover" && doneStep(tc, {}).result === "unknown"); }
+  check("cover after taking", coverAfterTaking("standard") === "greater" && coverAfterTaking("greater") === "greater" && coverAfterTaking("lesser") === "standard" && coverAfterTaking("none") === "standard" && coverAfterTaking("none", true) === "prone-ranged" && coverAfterTaking("lesser", true) === "standard" && coverAfterTaking("standard", true) === "greater" && coverAfterTaking(undefined, true) === "prone-ranged");
+  check("next cover", nextCover({}, false) === "act" && nextCover({}, true) === "already" && nextCover({ started: true }, true) === "already" && nextCover({ started: true }, false) === "ask" && nextCover({ covered: {} }, false) === "next");
+  { const S = [{ do: "take-cover" }, { do: "strike" }, { do: "stride", from: [1, 1], to: [3, 1] }];
+    check("ends cover: a strike after it", endsCover(S, { 1: { started: true } }, 2) && !endsCover(S, {}, 2) && endsCover(S, { 1: { flatStarted: true } }, 2));
+    check("ends cover: not its own step", !endsCover(S, { 0: { covered: {} } }, 1));
+    check("ends cover: a move out of its space", endsCover([{ do: "take-cover" }, { do: "stride", from: [1, 1], to: [3, 1] }], { 1: { moved: { to: [2, 1] } } }, 2) && !endsCover([{ do: "take-cover" }, { do: "stride", from: [1, 1], to: [3, 1] }], { 1: { moved: { to: [1, 1] } } }, 2));
+    check("ends cover: from an earlier turn", endsCover([{ do: "strike" }], { 0: { started: true } }, 1) && !endsCover([{ do: "stand" }], { 0: { changed: {} } }, 1));
+    check("ends cover: only after the last take cover", !endsCover([{ do: "strike" }, { do: "take-cover" }, { do: "stand" }], { 0: { started: true } }, 3)); }
+  check("feature next to it", featureNear([5, 5], 1, [[7, 4, 7, 8]]) && !featureNear([5, 5], 1, [[8, 4, 8, 8]]) && featureNear([5, 5], 1, [[6.5, 6.5, 6.6, 6.6]]) && !featureNear([5, 5], 1, [[7, 7, 8, 8]]) && featureNear([5, 5], 2, [[8, 2, 8, 9]]) && !featureNear([5, 5], 1, []));
+  check("hello can take cover", hello(1).canDo.includes("take-cover") && hello(1).prompt.includes('"do": "take-cover"') && hello(1).prompt.includes("you.takeCover.standardCoverFrom"));
+  check("plan keeps a take cover", cleanPlan({ steps: [{ do: "take-cover" }] }).plan.steps[0].do === "take-cover");
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
 for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);

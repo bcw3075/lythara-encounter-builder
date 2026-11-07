@@ -135,3 +135,19 @@ export function headingOf(from, to) {
   const ns = Math.abs(dy) * 2 >= Math.abs(dx) ? (dy < 0 ? "north" : "south") : "", ew = Math.abs(dx) * 2 >= Math.abs(dy) ? (dx < 0 ? "west" : "east") : "";
   return ns && ew ? `${ns}-${ew}` : ns || ew;
 }
+
+/** Whether a wall or other solid feature runs through any square next to a creature (the ring around its footprint), for Take Cover's "near a feature that
+    allows you to take cover". segments: [[x1, y1, x2, y2]] in squares from the map's corner (a square's corner is a whole number), already narrowed by the
+    glue to what a creature could take cover behind. A wall on the ring's outer edge counts; one that only touches its outer corner doesn't. */
+export function featureNear([x, y], size = 1, segments = []) {
+  const e = 1e-6, lo = [x - 1 - e, y - 1 - e], hi = [x + size + 1 + e, y + size + 1 + e];
+  return segments.some(([x1, y1, x2, y2]) => {
+    /* Liang-Barsky: does the segment pass through the box? */
+    let t0 = 0, t1 = 1; const dx = x2 - x1, dy = y2 - y1;
+    for (const [p, q] of [[-dx, x1 - lo[0]], [dx, hi[0] - x1], [-dy, y1 - lo[1]], [dy, hi[1] - y1]]) {
+      if (p === 0) { if (q < 0) return false; continue; }
+      const r = q / p; if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; } else { if (r < t0) return false; if (r < t1) t1 = r; }
+    }
+    return t1 - t0 > 1e-9 && Math.hypot(dx, dy) * (t1 - t0) > 1e-3;   /* more than a touch */
+  });
+}

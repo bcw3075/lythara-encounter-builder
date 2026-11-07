@@ -1,7 +1,7 @@
 /* A monster's turn as plain data: what a plan means, whether it's legal, and where a step stands. Pure: no Foundry globals.
-   The glue gathers live values first. Strikes, Strides, Steps, Crawls, Stand and Drop Prone so far; the other step kinds come as step 2 goes on. */
+   The glue gathers live values first. Strikes, Strides, Steps, Crawls, Stand, Drop Prone and Take Cover so far; the other step kinds come as step 2 goes on. */
 import { distanceBetween, headingOf } from "./move.mjs";
-export const COSTS = { strike: 1, stride: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, none: 0 };
+export const COSTS = { strike: 1, stride: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, none: 0 };
 const MOVES = ["stride", "step", "crawl"], ONE_SQUARE = ["step", "crawl"];
 /** Steps that change only whether the monster is prone, and what they leave it. Rules: Prone (https://2e.aonprd.com/Conditions.aspx?ID=88). */
 export const POSTURES = { stand: false, "drop-prone": true };
@@ -16,11 +16,13 @@ const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
     cantMove (why it can't use any move action, Stand included: grabbed, immobilized, restrained; or null), cantAttack (why it can't Strike, or null), prone (whether it starts the plan prone),
     route(from, to, before, { step, kind }) → { ok, route, cost } or { ok: false, reason }, before being the routes of this plan's earlier moves (the diagonal count
     runs across the turn), step asking for a single 5-ft square (a Step or a Crawl, named by kind) rather than a Stride }. Only what the monster perceives is in
-    targets. A Stride, Step or Crawl moves where later steps are measured from; a Stand ends Prone for the rest of the plan and Drop Prone starts it. Names
-    here are labels when the reason goes to the thinker. */
+    targets. A Stride, Step or Crawl moves where later steps are measured from; a Stand ends Prone for the rest of the plan and Drop Prone starts it.
+    Take Cover (Rhea's rule B, 2026-11-07): tookCover (it is Taking Cover now), coverFrom ({ label: "standard" | "greater" }: the cover Visioner gives it now
+    against each creature it sees, observed or concealed), nearCover(square, size) (a wall or a thick trunk in a square next to it). Names here are labels
+    when the reason goes to the thinker. */
 export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
-  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, prone = !!ctx.prone; const steps = [], routes = [];
+  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, prone = !!ctx.prone, took = !!ctx.tookCover, moved = false; const steps = [], routes = [];
   const distanceTo = (t, reach) => here && t.square ? distanceBetween({ x: here[0], y: here[1], size: ctx.me.size ?? 1, elev: ctx.me.elev, depth: ctx.me.depth }, { x: t.square[0], y: t.square[1], size: t.size ?? 1, elev: t.elev, depth: t.depth }, { reach }) : t.distance;
   for (const [n, step] of plan.steps.entries()) {
     const at = `Step ${n + 1}`;
@@ -35,6 +37,15 @@ export function checkPlan(plan, ctx) {
       if (step.do === "drop-prone" && prone) return { ok: false, reason: `${at}: it is already prone.` };
       if (step.do === "drop-prone" && (ctx.me?.elev ?? 0) > 0) return { ok: false, reason: `${at}: it is ${Math.round(ctx.me.elev)} ft up, and a creature knocked or dropping prone in the air falls instead.` };
       steps.push({ do: step.do }); prone = POSTURES[step.do]; continue;
+    }
+    if (step.do === "take-cover") {
+      /* Rules: Take Cover (Player Core, https://2e.aonprd.com/Actions.aspx?ID=2307): standard cover, near a feature that allows it, or prone. It lasts until the
+         creature moves from its space or makes an attack, so a Stride or a Strike earlier in the plan ends one already taken. */
+      if (took) return { ok: false, reason: `${at}: it is already Taking Cover.` };
+      const from = moved ? null : Object.entries(ctx.coverFrom ?? {}).find(([, l]) => l === "standard" || l === "greater")?.[0] ?? null;
+      const why = prone ? "prone" : here && ctx.nearCover?.(here, ctx.me?.size ?? 1) ? "near" : from ? "cover" : null;
+      if (!why) return { ok: false, reason: `${at}: Take Cover needs it to be prone, next to a wall or a trunk thick enough to hide behind, or behind standard cover from a creature it sees${moved ? ` (after a move in the same plan only a wall or trunk next to its new square counts, because cover from a square it isn't on yet can't be read)` : ""}.` };
+      steps.push({ do: "take-cover", why, ...(why === "cover" ? { from } : {}) }); took = true; continue;
     }
     if (MOVES.includes(step.do)) {
       const word = WORD[step.do], small = ONE_SQUARE.includes(step.do);
@@ -51,7 +62,7 @@ export function checkPlan(plan, ctx) {
       if (small && way.cost > STEP_FT) return { ok: false, reason: `${at}: ${step.do === "crawl" ? "crawling" : "stepping"} to [${step.to[0]}, ${step.to[1]}] counts as ${way.cost} ft, and a ${word} moves only ${STEP_FT} ft${way.route?.length === 2 && way.route[0][0] !== way.route[1][0] && way.route[0][1] !== way.route[1][1] ? " (every second diagonal in a turn counts 10 ft)" : ""}.` };
       if (way.cost > ctx.speed) return { ok: false, reason: `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, more than its Speed of ${ctx.speed} ft.` };
       steps.push({ do: step.do, from: [...here], to: [...step.to], route: way.route, cost: way.cost }); routes.push(way.route);
-      here = [...step.to]; continue;
+      here = [...step.to]; moved = true; took = false; continue;
     }
     if (ctx.cantAttack) return { ok: false, reason: `${at}: ${ctx.cantAttack}` };
     const s = ctx.strikes.find(x => x.id === step.item); if (!s) return { ok: false, reason: `${at}: it has no attack called "${step.item}".` };
@@ -60,7 +71,7 @@ export function checkPlan(plan, ctx) {
     if (s.ranged) { const d = distanceTo(t, null); if (s.maxRange && d > s.maxRange) return { ok: false, reason: `${at}: ${t.name} is ${d} ft away${where}, out of range of ${s.name} (${s.maxRange} ft).` }; }
     else { const d = distanceTo(t, s.reach); if (d > s.reach) return { ok: false, reason: `${at}: ${t.name} is ${d} ft away${where}, out of reach of ${s.name} (${s.reach} ft).` }; }
     steps.push({ do: "strike", item: s.id, itemName: s.name, target: step.target, targetName: t.name ?? step.target, variant: Math.min(attacks, 2), flat: t.flat ?? 0 });
-    attacks++;
+    attacks++; took = false;
   }
   return { ok: true, steps };
 }
@@ -80,6 +91,7 @@ export const OUTCOMES = ["critical miss", "miss", "hit", "critical hit"];
 export function doneStep(step, rec = {}) {
   if (isMove(step)) { const got = rec.moved?.to; return { do: step.do, to: step.to, result: !got ? "unknown" : same(got, step.to) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]` }; }
   if (step.do in POSTURES) return { do: step.do, result: rec.changed || rec.stood ? (step.do === "stand" ? "stood" : "dropped") : "unknown" };
+  if (step.do === "take-cover") return { do: "take-cover", result: rec.covered ? "took cover" : "unknown" };
   if (step.do !== "strike") return { do: step.do };
   return { do: "strike", item: step.item, target: step.target, result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.attack ? OUTCOMES[rec.attack.degree] ?? "unknown" : "unknown" };
 }
@@ -136,6 +148,7 @@ export function describeStep(s) {
   if (isMove(s)) { const way = s.from ? headingOf(s.from, s.to) : ""; return `${WORD[s.do]}s ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}.`; }
   if (s.do === "stand") return "Stands up.";
   if (s.do === "drop-prone") return "Drops prone.";
+  if (s.do === "take-cover") return s.why === "prone" ? "Takes Cover while prone." : s.why === "near" ? "Takes Cover by the wall or trunk next to it." : `Takes Cover behind its cover from ${s.from}.`;
   return `${s.itemName} at ${s.targetName}${s.variant ? `, attack ${s.variant + 1}` : ""}${s.flat ? `, after a DC ${s.flat} flat check` : ""}.`;
 }
 /** What to do next with a Strike step, from what its record says already happened. Nothing is ever repeated: when the record can't tell
@@ -165,6 +178,28 @@ export function nextPosture(rec = {}, already = false) {
   if (rec.changed || rec.stood) return "next";   /* stood: a Stand recorded by 0.5.0 */
   if (!rec.started) return already ? "already" : "act";
   return already ? "already" : "ask";
+}
+/** What to do next with a Take Cover. Its cover is set in one go, so one begun before a reload is never sent again: if the monster is Taking Cover, it
+    counts as done; otherwise the GM looks. Not begun and already Taking Cover: done, with nothing posted. active: whether it is Taking Cover now. */
+export function nextCover(rec = {}, active = false) {
+  if (rec.covered) return "next";
+  if (!rec.started) return active ? "already" : "act";
+  return active ? "already" : "ask";
+}
+/** The cover Take Cover gives against one creature, from the cover it has against that creature now, as Visioner's own Take Cover works it out (8.14.17):
+    standard or greater becomes greater, anything less becomes standard; prone with none at all gives greater cover against ranged attacks only. */
+export const coverAfterTaking = (now = "none", prone = false) => now === "standard" || now === "greater" ? "greater" : prone && (!now || now === "none") ? "prone-ranged" : "standard";
+/** Whether this request's steps before `upto` ended a Take Cover: an attack made (or its flat check rolled: the action is spent either way) or a move out of
+    its space, after the last Take Cover among them (or from the start, for one taken on an earlier turn). Rules: it lasts until you move from your space,
+    make an attack, become unconscious, or end it. */
+export function endsCover(steps = [], log = {}, upto = steps.length) {
+  let k0 = 0; for (let k = 0; k < upto; k++) if (steps[k]?.do === "take-cover") k0 = k + 1;
+  for (let k = k0; k < upto; k++) {
+    const s = steps[k], rec = log?.[k] ?? {};
+    if (s?.do === "strike" && (rec.started || rec.flatStarted)) return true;
+    if (isMove(s) && rec.moved?.to && !same(rec.moved.to, s.from)) return true;
+  }
+  return false;
 }
 /** The monster's conditions in the look-before baseline after its own Stand or Drop Prone: what that action took away goes, what it added comes in, and
     nothing else changes, so a condition a reaction added still counts as a change. Lists of condition words; `own`, if given, limits what counts as the

@@ -1,8 +1,8 @@
 /* A fight's turns. One named account does the work (the runner: the Claude Bridge unless the setting says otherwise), on its own page with the
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
-   summarised chat loses nothing. For now it runs Strikes, Strides, Steps, Crawls, Stand and Drop Prone; see claude/encounter-builder-plan.md for the rest of step 2. */
-import { MAX_REPLANS, POSTURES, WORD, absorbOwn, changesSince, checkPlan, currentOf, damageOptions, describeChanges, doneStep, isMove, latestNote, nextAction, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "./turn.mjs";
-import { cutShort, diagonalsIn, findRoute, findStep, footprintAt, routeWords } from "./move.mjs";
+   summarised chat loses nothing. For now it runs Strikes, Strides, Steps, Crawls, Stand, Drop Prone and Take Cover; see claude/encounter-builder-plan.md for the rest of step 2. */
+import { MAX_REPLANS, POSTURES, WORD, absorbOwn, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "./turn.mjs";
+import { cutShort, diagonalsIn, featureNear, findRoute, findStep, footprintAt, routeWords } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap } from "./builder.mjs";
 import { MAX_TRIES, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "./brain.mjs";
@@ -106,7 +106,8 @@ async function buildPacket(combat, tok, turn = {}) {
   const { model } = await readMap(scene), a = tok.actor, h = a.hitPoints, square = squareOf(tok, scene);
   const speeds = a.system.movement?.speeds ?? {}, extra = Object.fromEntries(["fly", "swim", "climb", "burrow"].filter(k => speeds[k]?.value).map(k => [k, speeds[k].value]));
   const you = { label: labels[tok.id], name: tok.name, square, size: a.size, nextDiagonal: nextDiagonalFt(tok, scene), actionsLeft: Math.max(0, actionsOf(a, combat) - (turn.spent ?? 0)), attacksMade: turn.attacks ?? 0, hp: `${h.value}/${h.max}`, speed: speeds.land?.value ?? 0, ...(Object.keys(extra).length ? { speeds: extra } : {}), conditions: (a.conditions?.active ?? []).map(c => c.value ? `${c.slug} ${c.value}` : c.slug), strikes: await strikesOf(a), abilities: abilitiesOf(a), tactics: tacticsOf(scene, tok) };
-  const cover = game.modules.get(VISIONER)?.active ? game.modules.get(VISIONER).api : null;
+  const cover = visionerApi();
+  you.takeCover = { taking: takingCover(tok), nextToCover: nearCoverFor(scene)(square, sizeOf(tok)), standardCoverFrom: cover ? others.filter(o => SEES.includes(o.state) && labels[o.id] && STANDARD.includes(coverOf(cover, o.token, tok))).map(o => labels[o.id]) : [] };
   const packet = packetOf({ you, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], ground: groundAround(model, square, GROUND_RADIUS),
     allies: allies.map(x => ({ label: labels[x.id], name: x.name, square: squareOf(x, scene), healthWord: wordsFor(x.actor), conditions: visibleConditions(conditionsOn(x.actor)) })),
     others: others.map(o => ({ id: o.id, state: o.state, label: labels[o.id], square: o.square, size: o.token.actor.size, distance: o.distance, gear: gearOf(o.token.actor), conditions: visibleConditions(conditionsOn(o.token.actor)), healthWord: wordsFor(o.token.actor), cover: cover?.getAutoCoverState?.(tok.object, o.token.object) ?? "none" })) });
@@ -204,8 +205,12 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
   /* moves are worked out only for a plan that has a Stride, Step or Crawl, so trouble there can't stop a plan of Strikes */
   const speed = landSpeed(actor); let route = null;
   if (moves) { try { route = await mover(combat, tok, speed, knownTo(combat, tok, [...now.values()])); } catch (e) { console.error(`${ID} | moves`, e); const why = `I couldn't work out moves here (${e.message}).`; route = () => ({ ok: false, reason: why }); } }
+  /* Take Cover: the cover Visioner gives it now against each creature it sees and could name, and the walls and trunks next to a square */
+  const vis = visionerApi(), coverFrom = {};
+  if (vis) for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && SEES.includes(o.state)) { const l = coverOf(vis, o.token, tok); if (STANDARD.includes(l)) coverFrom[label] = l; } }
   return { actions: Math.max(0, actionsOf(actor, combat) - (req.spent ?? 0) - used.actions), attacksBefore: (req.attacks ?? 0) + used.attacks, strikes, targets,
-    me: { square: squareOf(tok, scene), size: sizeOf(tok), ...heightOf(tok) }, speed, cantAct: cantAct(actor), cantMove: cantMove(actor), cantAttack: cantAttack(actor), prone: !!actor.hasCondition?.("prone"), route };
+    me: { square: squareOf(tok, scene), size: sizeOf(tok), ...heightOf(tok) }, speed, cantAct: cantAct(actor), cantMove: cantMove(actor), cantAttack: cantAttack(actor), prone: !!actor.hasCondition?.("prone"), route,
+    tookCover: takingCover(tok), coverFrom, nearCover: nearCoverFor(scene) };
 }
 
 /* ---------- moving ---------- */
@@ -511,6 +516,100 @@ async function runPosture(combat, id, i, kind, tok) {
   await finish({ changed: { message: out?.[0]?.message?.id ?? null } }, before);
   return "next";
 }
+/* ---------- Take Cover ---------- */
+/* Rhea, 2026-11-07: rule B for when it's allowed (prone, a wall or thick trunk next to it, or standard cover from a creature it sees), and Visioner's own
+   per-creature cover for what it does, because that is how the rules work: standard cover from someone becomes greater, anything less becomes standard.
+   PF2e's own "Effect: Cover" gives one bonus against everyone, takes the higher of it and Visioner's wall cover rather than adding (tested: AC 15 behind a
+   thick trunk was 17 with it at standard), and never ends by itself. Visioner's public setCover with its takeCover option is what its own Take Cover
+   calls. Ending it, and its prone effect, aren't in its API, so those come from its own files; if an update moves them the module falls back: the GM
+   clicks Visioner's "Take Cover Should End" card, and a prone monster gets PF2e's effect. With Visioner off, PF2e's effect is used throughout. */
+const SEES = ["observed", "concealed"], STANDARD = ["standard", "greater"], VISIONER_FILES = `/modules/${VISIONER}/scripts/`;
+const COVER_EFFECT = "Compendium.pf2e.other-effects.I9lfZUiCwMiGogVi", COVER_BONUS = { standard: 2, greater: 4, "greater-prone": 4 };
+const visionerApi = () => game.modules.get(VISIONER)?.active ? game.modules.get(VISIONER).api ?? null : null;
+const coverOf = (vis, observer, target) => { try { return vis.getAutoCoverState(observer.id, target.id) ?? "none"; } catch { return "none"; } };
+async function visionerFile(name) { if (!visionerApi()) return null; try { return await import(`${VISIONER_FILES}${name}`); } catch (e) { console.warn(`${ID} | Visioner's ${name}`, e); return null; } }
+const TAKE_COVER_SOURCES = ["take_cover_action"];
+/** Whether it is Taking Cover now: Visioner's record of a Take Cover against anyone (as Visioner's own check reads it, a pending end included), Visioner's
+    prone effect, or the PF2e effect this module adds. */
+function takingCover(tok) {
+  const flags = tok.flags?.[VISIONER] ?? {};
+  if (Object.entries(flags).some(([k, f]) => k.startsWith("avs-override-from-") && (f?.coverOnly === true || TAKE_COVER_SOURCES.includes(f?.coverOverrideSource) || (TAKE_COVER_SOURCES.includes(f?.source) && f?.expectedCover)))) return true;
+  const prone = !!tok.actor?.hasCondition?.("prone");   /* the prone-only kind gives nothing once it stands (Visioner removes its own then) */
+  return (tok.actor?.itemTypes?.effect ?? []).some(e => e.flags?.[VISIONER]?.takeCoverProneRangedOnly === true || (e.getFlag?.(ID, "takeCover") && (prone || e.flags?.pf2e?.rulesSelections?.cover?.level !== "greater-prone")));
+}
+/** nearCover(square, size) for checkPlan: the scene's walls a creature could take cover behind, as segments in squares. A wall blocks movement or sight;
+    an open door doesn't count; neither does a wall Visioner is told gives lesser cover or none (Survey Sheet's thin trunks: Rhea's rule, under 3 ft
+    across is lesser cover, too thin to hide behind). */
+function nearCoverFor(scene) {
+  let segs = null;
+  return (square, size = 1) => {
+    if (!segs) { const px = scene.grid.size, d = scene.dimensions, NONE = 0, open = CONST.WALL_DOOR_STATES?.OPEN ?? 1;
+      segs = scene.walls.contents.filter(w => (w.move !== NONE || w.sight !== NONE) && !(w.door && w.ds === open) && !["lesser", "none"].includes(w.flags?.[VISIONER]?.coverOverride))
+        .map(w => [(w.c[0] - d.sceneX) / px, (w.c[1] - d.sceneY) / px, (w.c[2] - d.sceneX) / px, (w.c[3] - d.sceneY) / px]); }
+    return !!square && featureNear(square, size, segs);
+  };
+}
+/** PF2e's own "Effect: Cover" with its level already chosen, so its prompt doesn't open where nobody can click it (a rule's `selection` skips it). */
+async function addCoverEffect(actor, level) {
+  const src = (await fromUuid(COVER_EFFECT))?.toObject(); if (!src) throw new Error("PF2e's Effect: Cover isn't in its compendium.");
+  delete src._id; src.system.rules[0].selection = { bonus: COVER_BONUS[level], level }; foundry.utils.setProperty(src, `flags.${ID}.takeCover`, true);
+  await actor.createEmbeddedDocuments("Item", [src]);
+}
+/** The creatures Take Cover counts against: every creature on the map that isn't its ally, hidden ones too (cover is where it is, not what it knows). */
+const coverSubjects = (scene, tok) => scene.tokens.contents.filter(t => t.id !== tok.id && t.object && t.actor?.isOfType?.("creature") && !t.actor.isAllyOf?.(tok.actor));
+async function takeCover(combat, tok) {
+  const actor = tok.actor, prone = !!actor.hasCondition?.("prone"), vis = visionerApi();
+  const out = await game.pf2e.actions.get("take-cover").use({ actors: [actor], effect: false });   /* its card, without PF2e's effect */
+  const message = out?.[0]?.message?.id ?? null;
+  if (!vis) { const level = prone ? "greater-prone" : "standard"; await addCoverEffect(actor, level); return { message, by: "pf2e", level }; }
+  const levels = {}; let proneRanged = false;
+  const subjects = coverSubjects(combat.scene, tok);
+  for (const t of subjects) {
+    const level = coverAfterTaking(coverOf(vis, t, tok), prone);
+    if (level === "prone-ranged") { proneRanged = true; continue; }
+    if (await vis.setCover(t.id, tok.id, level, { takeCover: true, skipEphemeralUpdate: false })) levels[t.id] = level;
+  }
+  if (prone && !subjects.length) proneRanged = true;
+  let pf2e = false;
+  if (proneRanged) { const batch = await visionerFile("cover/batch.js"); if (batch?.applyTakeCoverProneRangedOnlyEffect) await batch.applyTakeCoverProneRangedOnlyEffect(tok.object); else { await addCoverEffect(actor, "greater-prone"); pf2e = true; } }
+  return { message, by: "visioner", levels, proneRanged, ...(pf2e ? { pf2eProne: true } : {}) };
+}
+/** Take Cover. Never sent twice: one begun before a reload counts as done if the monster is Taking Cover, and the GM looks otherwise. */
+async function runTakeCover(combat, id, i, tok) {
+  const record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {};
+  const now = nextCover(get(), takingCover(tok));
+  if (now === "next") return "next";
+  if (now === "already") { await record({ covered: { already: true } }); return "next"; }
+  if (now === "ask") { await save(combat, id, { note: `${tok.name} started to Take Cover and isn't Taking Cover.` }); return "ask"; }
+  if (!stepGate("take-cover", id)) return "stopped";
+  if (!(await ensureScene(combat) && tok.object)) throw new Error(cantOpen());
+  await record({ started: true });
+  const got = await watched(() => takeCover(combat, tok));
+  await record({ covered: got });
+  return "next";
+}
+const pendingCoverCard = tok => game.messages.contents.filter(m => { const f = m.flags?.[VISIONER]?.takeCoverExpiration; return f?.tokenId === tok.id && f.status === "pending"; }).at(-1) ?? null;
+/** End a Take Cover its own attack or move just ended (the rules: until it moves from its space or makes an attack). Visioner posts its own "Take Cover
+    Should End" card for that moment; this waits briefly for it and accepts it, so the card reads as done, or ends it directly if no card comes. Returns a
+    note for the GM when it couldn't. */
+async function endTakeCover(tok, reason) {
+  if (!takingCover(tok)) return null;
+  const ours = (tok.actor?.itemTypes?.effect ?? []).filter(e => e.getFlag(ID, "takeCover")).map(e => e.id);
+  if (ours.length) await tok.actor.deleteEmbeddedDocuments("Item", ours);
+  if (!takingCover(tok)) return null;
+  const svc = await visionerFile("chat/services/take-cover-expiration-service.js");
+  if (!svc?.expireTakeCoverForToken || !svc?.acceptTakeCoverExpirationMessage) return `${tok.name} ${reason === "attack" ? "attacked" : "moved"}, which ends its Take Cover: click Remove Take Cover on Visioner's card.`;
+  let card = null; for (let t = 0; t < 1500 && !(card = pendingCoverCard(tok)); t += 100) await new Promise(res => setTimeout(res, 100));
+  if (card) await svc.acceptTakeCoverExpirationMessage(card); else await svc.expireTakeCoverForToken(tok.object, reason);
+  return takingCover(tok) ? `${tok.name}'s Take Cover should have ended (it ${reason === "attack" ? "attacked" : "moved"}), and it hasn't: check Visioner's card.` : null;
+}
+/** After a step: if this request's steps so far ended its Take Cover, end it, and keep any note for the GM. */
+async function settleCover(combat, id, upto, tok) {
+  const r = request(combat, id); if (!r?.steps || !endsCover(r.steps, r.log, upto) || !takingCover(tok)) return;
+  let last = null; for (let k = upto - 1; k >= 0 && !last; k--) if (r.steps[k]?.do === "strike" || isMove(r.steps[k])) last = r.steps[k];
+  let note; try { note = await endTakeCover(tok, last?.do === "strike" ? "attack" : "movement"); } catch (e) { console.error(`${ID} | take cover`, e); note = `I couldn't end ${tok.name}'s Take Cover (${e.message}): check Visioner's card.`; }
+  if (note) await save(combat, id, { note: [request(combat, id).note, note].filter(Boolean).join(" ") });
+}
 /* what PF2e's own Damage button does, for a named target rather than the selected tokens. Effects that only count for this one hit aren't read. */
 async function applyFromCard(message, roll, target) {
   const context = message.flags.pf2e?.context ?? {}, { origin, keep } = damageOptions(context.options ?? []), actor = target.actor.getContextualClone(origin, []);
@@ -538,6 +637,7 @@ async function runTurn(combat, requestId) {
   /* pressing Do it means go, whatever was held. A note about why it stopped goes; one from an earlier step (a PC at 0 HP) stays with the turn. */
   await save(combat, requestId, { state: "running", go: false, hold: false, ...(r.state === "held" || r.state === "stopped" ? { note: null } : {}) });
   const tok = combat.scene.tokens.get(r.tokenId);
+  await settleCover(combat, requestId, r.pos ?? 0, tok);   /* a reload between a step and ending its Take Cover */
   for (let i = r.pos ?? 0; i < r.steps.length; i++) {
     const now = { ...request(combat, requestId), id: requestId };   /* a stored request doesn't carry its own id; replan needs it */
     let step = r.steps[i];
@@ -558,10 +658,12 @@ async function runTurn(combat, requestId) {
       work = () => runStrike(combat, requestId, i, step, tok, target);
     } else if (isMove(step)) work = () => runStride(combat, requestId, i, step, tok);
     else if (step.do in POSTURES) work = () => runPosture(combat, requestId, i, step.do, tok);
+    else if (step.do === "take-cover") work = () => runTakeCover(combat, requestId, i, tok);
     if (work) {
       let result; try { result = await work(); } catch (e) { console.error(e); result = "ask"; await save(combat, requestId, { note: e.message }); }
       if (result === "stopped") return save(combat, requestId, { state: "stopped" });
-      if (result === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} may not have finished. ${isMove(step) ? "Put the monster where it should be" : step.do in POSTURES ? "Check whether it is prone" : "Check the chat and HP"}, then play the rest yourself.`.trim() });
+      if (result === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} may not have finished. ${isMove(step) ? "Put the monster where it should be" : step.do in POSTURES ? "Check whether it is prone" : step.do === "take-cover" ? "Check whether it is Taking Cover" : "Check the chat and HP"}, then play the rest yourself.`.trim() });
+      await settleCover(combat, requestId, i + 1, tok);   /* its own attack or move ends a Take Cover */
       /* a Stride, Step or Crawl that ended short of its square: the rest was planned from there, so ask again (the reason names the square, never what stopped it) */
       const at = squareOf(tok, combat.scene);
       if (isMove(step) && !same(at, step.to) && i + 1 < r.steps.length && request(combat, requestId).state !== "manual") return replan(combat, { ...request(combat, requestId), id: requestId }, i + 1, [{ who: "me", what: "stopped", at }], tok);
