@@ -32,7 +32,7 @@ export function aimArea(area, step = {}, me, target = null) {
   const centre = [me.square[0] + n / 2, me.square[1] + n / 2];
   if (type === "emanation") {
     if (step.at || step.toward) return { ok: false, reason: `a ${size}-foot emanation spreads from the monster itself: leave out "at" and "toward".` };
-    return { ok: true, aim: { type, size, origin: centre, rotation: 0 } };
+    return { ok: true, aim: { type, size, origin: centre, rotation: 0, from: centre } };
   }
   if (type === "burst") {
     if (step.toward) return { ok: false, reason: `a burst is placed with "at" (a grid corner), not "toward".` };
@@ -43,7 +43,9 @@ export function aimArea(area, step = {}, me, target = null) {
     }
     if (!corner) return { ok: false, reason: `a burst needs ${AIM_WORDS.burst}.` };
     if (!corner.every(Number.isInteger)) return { ok: false, reason: `"at" is a grid corner, two whole numbers.` };
-    return { ok: true, aim: { type, size, origin: corner, rotation: 0, corner } };
+    /* line of effect is traced from the corner moved a hair toward the caster, so a corner on a wall belongs to the caster's side of it */
+    const d = Math.hypot(centre[0] - corner[0], centre[1] - corner[1]) || 1, from = [corner[0] + (centre[0] - corner[0]) / d * 1e-3, corner[1] + (centre[1] - corner[1]) / d * 1e-3];
+    return { ok: true, aim: { type, size, origin: corner, rotation: 0, corner, from, centre } };
   }
   /* cone or line: a direction from the monster's centre toward a square */
   if (step.at) return { ok: false, reason: `a ${type} is aimed with "toward" (a square), not "at".` };
@@ -61,7 +63,8 @@ export function aimArea(area, step = {}, me, target = null) {
     const t = (n / 2) / Math.max(Math.abs(c), Math.abs(s));
     origin = [centre[0] + c * t, centre[1] + s * t];
   }
-  return { ok: true, aim: { type, size, origin: origin.map(v => Math.round(v * 1e6) / 1e6), rotation, toward: sq } };
+  /* a cone or line starts at the caster's edge, often on a wall along a grid line: line of effect is traced from the caster's centre, so a wall it stands against stops it */
+  return { ok: true, aim: { type, size, origin: origin.map(v => Math.round(v * 1e6) / 1e6), rotation, toward: sq, from: centre } };
 }
 /** PF2e's Region shape for an aim, in squares (fight.mjs scales it to pixels). As PF2e's own shapeDataFromEffectArea (8.7.0): a burst is a circle, a cone
     a 90° cone, a line one square wide, an emanation one round the caster's token. me: { square, size } for an emanation's base. */
@@ -92,14 +95,16 @@ export function crossesWall(a, b, walls = []) {
   }
   return false;
 }
+/** Whether a burst's corner can be reached: line of effect from the caster's centre to it (Rules: a burst needs line of effect to its origin). */
+export const burstReachable = (aim, walls = []) => aim.type !== "burst" || !crossesWall(aim.centre, aim.from, walls);
 /** Who an area catches. covered: the set of "x,y" squares Foundry says the shape covers; creatures: [{ id, square, size }]; walls: solid wall segments in
     squares (line of effect: only walls that block both movement and sight, never trunks: Rhea, 2026-11-07). A creature is caught if any square of its space
-    is covered and has line of effect from the area's origin (to that square's centre). The caster isn't caught by its own emanation. */
+    is covered and has line of effect to that square's centre from aim.from (a burst's corner, nudged to the caster's side; the caster's centre for the rest). The caster isn't caught by its own emanation. */
 export function caughtBy(aim, covered, creatures = [], walls = [], selfId = null) {
   const out = [];
   for (const c of creatures) {
     if (aim.type === "emanation" && c.id === selfId) continue;
-    const hit = squaresOf(c.square, c.size ?? 1).some(([x, y]) => covered.has(`${x},${y}`) && !crossesWall(aim.origin, [x + 0.5, y + 0.5], walls));
+    const hit = squaresOf(c.square, c.size ?? 1).some(([x, y]) => covered.has(`${x},${y}`) && !crossesWall(aim.from ?? aim.origin, [x + 0.5, y + 0.5], walls));
     if (hit) out.push(c.id);
   }
   return out;

@@ -10,8 +10,8 @@ import { actionsFor, assignLabels, canTarget, describeKnows, flatDC, groundAroun
 import { MAX_TRIES, STEP_KINDS, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "../../scripts/brain.mjs";
 import { CHECK_WORD, FOLLOW_UPS, SAVE_MULT, abilityCost, followUpOutcome, lastAction, nextAbility, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets } from "../../scripts/turn.mjs";
 import { MAX_REPLANS, changesSince, checkPlan, coverAfterTaking, currentOf, endsCover, nextCover, damageOptions, describeChange, describeChanges, absorbOwn, describeStep, doneStep, isMove, latestNote, nextAction, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "../../scripts/turn.mjs";
-import { aimArea, caughtBy, crossesWall, placeable, shapeOf, squaresNear, squaresOf } from "../../scripts/area.mjs";
-import { aimText, areaHurt, listWords, nextArea } from "../../scripts/turn.mjs";
+import { aimArea, burstReachable, caughtBy, crossesWall, placeable, shapeOf, squaresNear, squaresOf } from "../../scripts/area.mjs";
+import { aimText, areaHurt, forThinker, listWords, nextArea } from "../../scripts/turn.mjs";
 import { cutShort, diagonalsIn, distanceBetween, featureNear, findRoute, findStep, footprintAt, headingOf, routeWords } from "../../scripts/move.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
@@ -637,6 +637,19 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   /* the plan as it arrives */
   check("cleanPlan keeps an area's aim", (p => p.ok && p.plan.steps[0].at.join() === "3,4" && p.plan.steps[0].toward.join() === "1,1" && p.plan.steps[0].deliberate === true)(cleanPlan({ steps: [{ do: "spell", item: "x", at: [3, 4], toward: [1, 1], deliberate: true }] }))
     && !cleanPlan({ steps: [{ do: "spell", item: "x", at: [3] }] }).ok && !cleanPlan({ steps: [{ do: "spell", item: "x", deliberate: "yes" }] }).ok && !("deliberate" in cleanPlan({ steps: [{ do: "spell", item: "x", deliberate: false }] }).plan.steps[0]));
+  /* review fixes */
+  const cone = aimArea({ type: "cone", size: 15 }, { toward: [10, 5] }, me).aim, wallAtEdge = [[[6, 4], [6, 7]]];
+  check("a cone traces line of effect from the caster's centre, so a wall it stands against stops it", cone.from.join() === "5.5,5.5" && caughtBy(cone, new Set(["6,5", "7,5"]), [{ id: "x", square: [7, 5] }], wallAtEdge).length === 0 && caughtBy(cone, new Set(["6,5", "7,5"]), [{ id: "x", square: [7, 5] }], []).join() === "x");
+  const b2 = aimArea({ type: "burst", size: 10 }, { at: [8, 5] }, me).aim;
+  check("a burst's corner on a wall belongs to the caster's side", b2.from[0] < 8 && caughtBy(b2, new Set(["7,5", "8,5"]), [{ id: "near", square: [7, 5] }, { id: "far", square: [8, 5] }], [[[8, 3], [8, 8]]]).join() === "near");
+  check("a burst behind a solid wall can't start there", !burstReachable(aimArea({ type: "burst", size: 10 }, { at: [10, 5] }, me).aim, [[[8, 3], [8, 8]]]) && burstReachable(b2, [[[8, 3], [8, 8]]]) && burstReachable(cone, wallAtEdge));
+  const NR = { id: "aura", name: "Aura", ranks: [{ rank: 1, pool: null, left: null }], minActions: 1, maxActions: 1, range: null, targets: 0, area: { type: "burst", size: 10 }, save: { stat: "will", basic: true }, damaging: true, traits: [] };
+  const TO = { ...NR, id: "touchburst", name: "Touch Burst", touch: true };
+  check("a burst with no range starts at a corner of its own space", checkPlan({ steps: [{ do: "spell", item: "aura", at: [6, 6], deliberate: true }] }, { ...actx, spells: [NR] }).ok && /no range, so its burst starts at a corner of the monster's own space/.test(checkPlan({ steps: [{ do: "spell", item: "aura", at: [9, 9] }] }, { ...actx, spells: [NR] }).reason ?? ""));
+  check("a touch burst within reach", /beyond Touch Burst's range \(5 ft\)/.test(checkPlan({ steps: [{ do: "spell", item: "touchburst", at: [12, 12] }] }, { ...actx, spells: [TO] }).reason ?? ""));
+  const st = checkPlan({ steps: [{ do: "spell", item: "fireball", at: [11, 5] }] }, actx).steps;
+  check("the thinker never gets an area's hits", st[0].area.hits.length && !("hits" in forThinker(st)[0].area) && forThinker(st)[0].area.catches.join() === "E1" && st[0].area.hits.length > 0 && forThinker([{ do: "strike" }])[0].do === "strike");
+  check("nobody caught reads as finished", doneStep({ do: "spell", item: "x", mode: "area" }, { cast: {}, rows: [] }).result === "cast; no one it knows of was in the area");
   check("the prompt explains aiming", /"toward": \[x, y\]/.test(hello(1).prompt) && /"deliberate": true/.test(hello(1).prompt));
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */

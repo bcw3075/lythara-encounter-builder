@@ -172,9 +172,10 @@ function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here }) {
   if (sp.area && placeable(sp.area) && ctx.areaOf && here) {
     const r = ctx.areaOf(sp, { at: step.at, toward: step.toward }, { square: here, size: ctx.me?.size ?? 1 }, t ? { square: t.square, size: t.size ?? 1 } : null);
     if (!r.ok) return no(`${sp.name}: ${r.reason}`);
-    if (r.aim.type === "burst" && sp.range != null) {   /* a corner of a square within range: the nearest of the four squares round it */
-      const c = r.aim.corner, d = Math.min(...[[c[0] - 1, c[1] - 1], [c[0], c[1] - 1], [c[0] - 1, c[1]], [c[0], c[1]]].map(q => distanceTo({ square: q, size: 1 }, null)));
-      if (d > sp.range) return no(`the corner [${c[0]}, ${c[1]}] is ${d} ft away, beyond ${sp.name}'s range (${sp.range} ft).`);
+    if (r.aim.type === "burst") {   /* a corner of a square within range: the nearest of the four squares round it; touch by its reach; no range: a corner of its own space */
+      const c = r.aim.corner, n = ctx.me?.size ?? 1, range = sp.touch ? Math.max(5, ctx.reach ?? 5) : sp.range;
+      if (range == null) { if (!(c[0] >= here[0] && c[0] <= here[0] + n && c[1] >= here[1] && c[1] <= here[1] + n)) return no(`${sp.name} has no range, so its burst starts at a corner of the monster's own space.`); }
+      else { const d = Math.min(...[[c[0] - 1, c[1] - 1], [c[0], c[1] - 1], [c[0] - 1, c[1]], [c[0], c[1]]].map(q => distanceTo({ square: q, size: 1 }, null))); if (d > range) return no(`the corner [${c[0]}, ${c[1]}] is ${d} ft away, beyond ${sp.name}'s range (${range} ft).`); }
     }
     if (r.allies.length && !step.deliberate) return no(`${sp.name} there would also catch ${listWords(r.allies.map(l => l === r.self ? "itself" : l))}. Aim it elsewhere, or add "deliberate": true if it means to.`);
     area = { type: r.aim.type, size: r.aim.size, aim: r.aim, catches: r.known, hits: r.ids, ...(step.deliberate ? { deliberate: true } : {}) };
@@ -237,6 +238,9 @@ export function nextArea(rec = {}, { mode = "area", apply = false, lasting = fal
   if (!lasting && !rec.removed) return "remove";
   return "next";
 }
+/** Checked steps as the thinker may see them: an area's `hits` (token ids of everyone it catches, for the GM's card) never go back, because they would
+    show creatures the monster doesn't perceive. */
+export const forThinker = (steps = []) => steps.map(s => s?.area?.hits ? { ...s, area: Object.fromEntries(Object.entries(s.area).filter(([k]) => k !== "hits")) } : s);
 /** Who an area hurts and by how much: { tokenId: multiplier } for each caught creature whose save lets damage through. */
 export const areaHurt = (rec = {}) => Object.fromEntries((rec.rows ?? []).filter(id => SAVE_MULT[rec.saves?.[id]] > 0).map(id => [id, SAVE_MULT[rec.saves[id]]]));
 /** Where an area was aimed, in words. */
@@ -347,7 +351,7 @@ function spellResult(step, rec = {}) {
   if (!rec.cast) return "unknown";
   if (rec.flat && !rec.flat.ok) return "flat check failed";
   if (step.mode === "card" || rec.noRows) return "card posted for the GM to apply";
-  if (step.mode === "area") return rec.results != null ? (rec.results ? `saves: ${rec.results}` : "cast; no one it knows of was in the area") : "waiting for saves";
+  if (step.mode === "area") return rec.results != null || (rec.rows && !rec.rows.length) ? (rec.results ? `saves: ${rec.results}` : "cast; no one it knows of was in the area") : "waiting for saves";
   if (step.mode === "attack") return rec.attack ? OUTCOMES[rec.attack.degree] ?? "unknown" : "unknown";
   return rec.save ? `target's save: ${CHECK_OUTCOMES[rec.save.degree] ?? "unknown"}` : "waiting for the save";
 }
