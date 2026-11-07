@@ -323,9 +323,23 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
     check("isMove crawl", isMove({ do: "crawl" }) && !isMove({ do: "drop-prone" }));
     check("hello can crawl and drop", hello(1).canDo.includes("crawl") && hello(1).canDo.includes("drop-prone") && STEP_KINDS.includes("drop-prone") && !STEP_KINDS.includes("drop") && hello(1).prompt.includes('"do": "crawl"') && hello(1).prompt.includes('"do": "drop-prone"')); }
   /* its own Stand or Drop Prone isn't news; anything else that came is */
-  check("absorb a stand", absorbOwn(["frightened 1", "off-guard", "prone"], ["frightened 1", "off-guard", "prone"], ["frightened 1"]).join() === "frightened 1");
-  check("absorb a drop", absorbOwn(["frightened 1"], ["frightened 1"], ["frightened 1", "off-guard", "prone"]).join() === "frightened 1,off-guard,prone");
-  check("a reaction's condition still counts", absorbOwn(["off-guard", "prone"], ["off-guard", "prone"], ["clumsy 1"], ["prone", "off-guard"]).join() === "" && absorbOwn(["frightened 1"], ["frightened 1"], ["frightened 1", "prone", "off-guard", "clumsy 1"], ["prone", "off-guard"]).join() === "frightened 1,off-guard,prone");
+  const PS = ["prone", "off-guard"];
+  check("absorb a stand", absorbOwn(["frightened 1", "off-guard", "prone"], ["frightened 1", "off-guard", "prone"], ["frightened 1"], PS).join() === "frightened 1");
+  check("absorb a drop", absorbOwn(["frightened 1"], ["frightened 1"], ["frightened 1", "off-guard", "prone"], PS).join() === "frightened 1,off-guard,prone");
+  { const was = situationOf({ me: { square: [1, 1], conditions: ["off-guard", "prone"] } }), after = ["clumsy 1"], seen = { ...was, me: { ...was.me, conditions: absorbOwn(was.me.conditions, was.me.conditions, after, PS) } };
+    const ch = changesSince(seen, situationOf({ me: { square: [1, 1], conditions: after } }));
+    check("a reaction's condition after a Stand re-plans", ch.length === 1 && ch[0].what === "conditions" && ch[0].now.join() === "clumsy 1", JSON.stringify(ch));
+    const ok = changesSince({ ...was, me: { ...was.me, conditions: absorbOwn(was.me.conditions, was.me.conditions, [], PS) } }, situationOf({ me: { square: [1, 1], conditions: [] } }));
+    check("its own Stand alone doesn't", ok.length === 0, JSON.stringify(ok)); }
+  /* the second review's findings (0.5.1) */
+  { const cw = W(), carried = (from, to, before = [], o = {}) => { const prefix = []; for (const r of before) prefix.push(...(prefix.length ? r.slice(1) : r)); if (!prefix.length) prefix.push(from);
+      const odd = diagonalsIn(prefix) % 2 === 1, x = o.step ? findStep({ from, to, odd }, cw) : findRoute({ from, to, budget: 35, odd }, cw); return x.ok ? x : { ok: false, reason: routeWords(x, to, 35, o.kind) }; };
+    const c = { ...mctx, route: carried, targets: {}, prone: true };
+    check("a diagonal crawl after a diagonal crawl: 10 ft, refused", /crawling to \[2, 7\] counts as 10 ft/.test(checkPlan({ steps: [{ do: "crawl", to: [1, 6] }, { do: "crawl", to: [2, 7] }] }, c).reason ?? ""), checkPlan({ steps: [{ do: "crawl", to: [1, 6] }, { do: "crawl", to: [2, 7] }] }, c).reason);
+    check("crawl, stand, stride", checkPlan({ steps: [{ do: "crawl", to: [1, 5] }, { do: "stand" }, { do: "stride", to: [3, 5] }] }, c).ok); }
+  check("a Large creature's crawl: only the new squares", findStep({ from: [2, 2], size: 2, to: [3, 2] }, W({ diff: [[3, 3]] })).ok && /a Crawl moves only 5 ft/.test(routeWords(findStep({ from: [2, 2], size: 2, to: [3, 2] }, W({ diff: [[4, 3]] })), [3, 2], 35, "crawl")));
+  check("no dropping prone in the air", /20 ft up/.test(checkPlan({ steps: [{ do: "drop-prone" }] }, { ...mctx, me: { square: [0, 5], size: 1, elev: 20 } }).reason) && checkPlan({ steps: [{ do: "drop-prone" }] }, mctx).ok);
+  check("a 0.5.0 Stand record still counts", nextPosture({ started: true, stood: {} }, true) === "next" && doneStep({ do: "stand" }, { stood: {} }).result === "stood");
 
   check("prompt names the next diagonal", hello(1).prompt.includes("you.nextDiagonal") && /Restrained: it can't Strike/.test(hello(1).prompt));
   check("isMove", isMove({ do: "step" }) && isMove({ do: "stride" }) && !isMove({ do: "stand" }) && !isMove(null));

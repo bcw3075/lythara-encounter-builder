@@ -5,7 +5,7 @@ export const COSTS = { strike: 1, stride: 1, step: 1, crawl: 1, stand: 1, "drop-
 const MOVES = ["stride", "step", "crawl"], ONE_SQUARE = ["step", "crawl"];
 /** Steps that change only whether the monster is prone, and what they leave it. Rules: Prone (https://2e.aonprd.com/Conditions.aspx?ID=88). */
 export const POSTURES = { stand: false, "drop-prone": true };
-const WORD = { stride: "Stride", step: "Step", crawl: "Crawl" };
+export const WORD = { stride: "Stride", step: "Step", crawl: "Crawl" };
 /** A Step or a Crawl moves 5 ft; one that Foundry would charge more for (a diagonal after an odd number this turn) is refused. Rules: Step https://2e.aonprd.com/Actions.aspx?ID=2304; Crawl (Player Core): prone, Speed 10+, 5 ft, stays prone. */
 export const STEP_FT = 5;
 const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
@@ -33,6 +33,7 @@ export function checkPlan(plan, ctx) {
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
       if (step.do === "stand" && !prone) return { ok: false, reason: `${at}: it isn't prone, so it has nothing to Stand up from.` };
       if (step.do === "drop-prone" && prone) return { ok: false, reason: `${at}: it is already prone.` };
+      if (step.do === "drop-prone" && (ctx.me?.elev ?? 0) > 0) return { ok: false, reason: `${at}: it is ${ctx.me.elev} ft up, and a creature knocked or dropping prone in the air falls instead.` };
       steps.push({ do: step.do }); prone = POSTURES[step.do]; continue;
     }
     if (MOVES.includes(step.do)) {
@@ -63,7 +64,7 @@ export function checkPlan(plan, ctx) {
   }
   return { ok: true, steps };
 }
-/** Whether a step moves the monster across the map (a Stride or a Step). */
+/** Whether a step moves the monster across the map (a Stride, Step or Crawl). */
 export const isMove = s => MOVES.includes(s?.do);
 /** One id per Strike. A thrown dagger shares its slug with the melee one, and a plan has to be able to say which. strikes: [{ slug, ranged }]. */
 export function strikeIds(strikes) {
@@ -78,7 +79,7 @@ export const OUTCOMES = ["critical miss", "miss", "hit", "critical hit"];
 /** A finished step as the monster saw it, for the next plan: labels and ids only, and the result shown in chat. */
 export function doneStep(step, rec = {}) {
   if (isMove(step)) { const got = rec.moved?.to; return { do: step.do, to: step.to, result: !got ? "unknown" : same(got, step.to) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]` }; }
-  if (step.do in POSTURES) return { do: step.do, result: rec.changed ? (step.do === "stand" ? "stood" : "dropped") : "unknown" };
+  if (step.do in POSTURES) return { do: step.do, result: rec.changed || rec.stood ? (step.do === "stand" ? "stood" : "dropped") : "unknown" };
   if (step.do !== "strike") return { do: step.do };
   return { do: "strike", item: step.item, target: step.target, result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.attack ? OUTCOMES[rec.attack.degree] ?? "unknown" : "unknown" };
 }
@@ -161,7 +162,7 @@ export function nextMove(rec = {}, at = null, to = null) {
     monster is already as the step leaves it, it counts as done; otherwise the GM looks. Not begun and already as it leaves it (something else stood it
     up or knocked it down first): done, with nothing posted. already: whether it is already standing (for Stand) or prone (for Drop Prone). */
 export function nextPosture(rec = {}, already = false) {
-  if (rec.changed) return "next";
+  if (rec.changed || rec.stood) return "next";   /* stood: a Stand recorded by 0.5.0 */
   if (!rec.started) return already ? "already" : "act";
   return already ? "already" : "ask";
 }

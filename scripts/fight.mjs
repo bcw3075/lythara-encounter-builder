@@ -1,7 +1,7 @@
 /* A fight's turns. One named account does the work (the runner: the Claude Bridge unless the setting says otherwise), on its own page with the
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. For now it runs Strikes, Strides, Steps, Crawls, Stand and Drop Prone; see claude/encounter-builder-plan.md for the rest of step 2. */
-import { MAX_REPLANS, POSTURES, absorbOwn, changesSince, checkPlan, currentOf, damageOptions, describeChanges, doneStep, isMove, latestNote, nextAction, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "./turn.mjs";
+import { MAX_REPLANS, POSTURES, WORD, absorbOwn, changesSince, checkPlan, currentOf, damageOptions, describeChanges, doneStep, isMove, latestNote, nextAction, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "./turn.mjs";
 import { cutShort, diagonalsIn, findRoute, findStep, footprintAt, routeWords } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap } from "./builder.mjs";
@@ -201,7 +201,7 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
   /* only what it perceived when asked, and still does: a plan can't name anything else */
   const now = new Map(sense(combat, tok, turns(combat).memory?.[tok.id] ?? {}).map(o => [o.id, o])), targets = {};
   for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && canTarget(o.state)) targets[label] = { name: label, square: o.square, size: sizeOf(o.token), ...heightOf(o.token), flat: flatDC(o.state) }; }
-  /* moves are worked out only for a plan that has a Stride or a Step, so trouble there can't stop a plan of Strikes */
+  /* moves are worked out only for a plan that has a Stride, Step or Crawl, so trouble there can't stop a plan of Strikes */
   const speed = landSpeed(actor); let route = null;
   if (moves) { try { route = await mover(combat, tok, speed, knownTo(combat, tok, [...now.values()])); } catch (e) { console.error(`${ID} | moves`, e); const why = `I couldn't work out moves here (${e.message}).`; route = () => ({ ok: false, reason: why }); } }
   return { actions: Math.max(0, actionsOf(actor, combat) - (req.spent ?? 0) - used.actions), attacksBefore: (req.attacks ?? 0) + used.attacks, strikes, targets,
@@ -237,6 +237,9 @@ function cantMove(actor) {
   for (const c of ["restrained", "grabbed", "immobilized"]) if (actor.hasCondition?.(c)) return `it is ${c}, so it can't use move actions (Stride, Step, Crawl, Stand or Drop Prone).`;
   return null;
 }
+/** The movement action a move is sent and priced with: crawl for a Crawl (a prone token can't walk); otherwise the token's own, except never crawl for a
+    Stride or Step (one after a Crawl and a Stand in the same plan). */
+const moveAction = (tok, kind) => kind === "crawl" ? "crawl" : tok.movementAction === "crawl" ? "walk" : tok.movementAction;
 const DEEP = /deep water/i;   /* Survey Sheet's name for its greater-difficult water. Other greater difficult terrain is just 10 ft more a square. */
 /** route(from, to, before, { step, kind }) for checkPlan, for this monster on this scene as it stands now: a Stride's route, or with step a single 5-ft
     square (a Step or a Crawl, which kind names for the words). */
@@ -252,8 +255,9 @@ async function mover(combat, tok, speed, known = null) {
   const centre = ([x, y]) => ({ x: ox + (x + size / 2) * px, y: oy + (y + size / 2) * px });
   const world = { cols: model.cols, rows: model.rows, terrain, blocked: (i, j) => !!model.blocked[model.idx(i, j)], creature: (i, j) => who.get(`${i},${j}`) ?? null,
     wall: (a, b) => !!CONFIG.Canvas.polygonBackends.move.testCollision(centre(a), centre(b), { mode: "any", type: "move" }) };
-  const action = tok.movementAction, costFn = CONFIG.Token.movement.TerrainData.getMovementCostFunction(tok, {});
-  const measure = squares => squares.length < 2 ? 0 : tok.measureMovementPath(tok.object.createTerrainMovementPath(squares.map(([x, y]) => ({ x: ox + x * px, y: oy + y * px, action }))), { cost: costFn }).cost;
+  const costFn = CONFIG.Token.movement.TerrainData.getMovementCostFunction(tok, {});
+  /* squares before `from` (the turn so far) go with the token's own action, the new route with the move's own (crawl for a Crawl) */
+  const measure = (squares, from = squares.length, kind = "stride") => squares.length < 2 ? 0 : tok.measureMovementPath(tok.object.createTerrainMovementPath(squares.map(([x, y], k) => ({ x: ox + x * px, y: oy + y * px, action: moveAction(tok, k >= from ? kind : "stride") }))), { cost: costFn }).cost;
   /* What it has already moved this turn: Foundry keeps the token's movement history for the turn (cleared when the turn changes) and charges a new move
      as the rest of that path, so diagonals carry on from it, as the rules say. */
   const history = (tok.movementHistory ?? []).map(w => [Math.round((w.x - ox) / px), Math.round((w.y - oy) / px)]);
@@ -262,7 +266,7 @@ async function mover(combat, tok, speed, known = null) {
     if (!prefix.length || !same(prefix.at(-1), from)) prefix.push(from);
     const odd = diagonalsIn(prefix) % 2 === 1, r = step ? findStep({ from, to, size, odd }, world) : findRoute({ from, to, size, budget: speed, odd }, world);
     if (!r.ok && r.why !== "far") return { ok: false, reason: routeWords(r, to, speed, kind) };
-    return { ok: true, route: r.route, cost: measure([...prefix, ...r.route.slice(1)]) - measure(prefix) };   /* checkPlan compares the cost with Speed */
+    return { ok: true, route: r.route, cost: measure([...prefix, ...r.route.slice(1)], prefix.length, kind) - measure(prefix) };   /* checkPlan compares the cost with Speed */
   };
 }
 /** Hand a plan in. Any GM may call this; the runner checks it. meta says who made it ({ by: "chat" | "api" | "gm", model, generation, usage }); a plan
@@ -449,20 +453,24 @@ async function runStrike(combat, id, i, step, tok, target) {
     action doesn't take its own Stride for a change; anything else (an HP change from a reaction, someone now out of sight) still counts. */
 async function runStride(combat, id, i, step, tok) {
   const scene = combat.scene, record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {};
-  const after = async () => { const at = squareOf(tok, scene); if (request(combat, id).seen) await save(combat, id, { seen: { me: { square: at } } });   /* no baseline, nothing to move */
-    if (!same(at, step.to)) await save(combat, id, { note: `${tok.name} stopped at square ${at[0]}, ${at[1]} instead of ${step.to[0]}, ${step.to[1]}.` }); };
+  /* the step's record, the baseline's square and any note go in one save: a reload between two saves would leave the step done with the old square,
+     and the look before the next action would re-plan for its own move */
+  const finish = async rec => { const at = squareOf(tok, scene), change = { log: { [i]: rec } };
+    if (request(combat, id).seen) change.seen = { me: { square: at } };   /* no baseline, nothing to move */
+    if (!same(at, step.to)) change.note = `${tok.name} stopped at square ${at[0]}, ${at[1]} instead of ${step.to[0]}, ${step.to[1]}.`;
+    await save(combat, id, change); };
   const now = nextMove(get(), squareOf(tok, scene), step.to);
   if (now === "next") return "next";
-  if (now === "arrived") { await record({ moved: { to: squareOf(tok, scene), cost: null } }); await after(); return "next"; }
-  if (now === "ask") { await save(combat, id, { note: `${tok.name} started a ${{ step: "Step", crawl: "Crawl" }[step.do] ?? "Stride"} and isn't where it was going.` }); return "ask"; }
+  if (now === "arrived") { await finish({ moved: { to: squareOf(tok, scene), cost: null } }); return "next"; }
+  if (now === "ask") { await save(combat, id, { note: `${tok.name} started a ${WORD[step.do] ?? "Stride"} and isn't where it was going.` }); return "ask"; }
   if (!stepGate(step.do, id)) return "stopped";
   if (!(await ensureScene(combat) && tok.object)) throw new Error(cantOpen());
   /* someone it didn't know was there, on the way: the move ends before their space, as the rules say. The thinker is asked again without being told why. */
   const known = knownTo(combat, tok, sense(combat, tok, turns(combat).memory?.[tok.id] ?? {})), taken = new Set();
   for (const t of scene.tokens) if (t.id !== tok.id && t.actor?.isOfType?.("creature") && !known.has(t.id)) for (const [a, b] of footprintAt(squareOf(t, scene), sizeOf(t))) taken.add(`${a},${b}`);
   const route = cutShort(step.route, sizeOf(tok), (a, b) => taken.has(`${a},${b}`));
-  if (route.length < 2) { await record({ started: true, moved: { to: squareOf(tok, scene), cost: 0 } }); await after(); return "next"; }
-  const px = scene.grid.size, d = scene.dimensions, action = step.do === "crawl" ? "crawl" : tok.movementAction, waypoints = route.slice(1).map(([x, y]) => ({ x: d.sceneX + x * px, y: d.sceneY + y * px, action }));
+  if (route.length < 2) { await finish({ started: true, moved: { to: squareOf(tok, scene), cost: 0 } }); return "next"; }
+  const px = scene.grid.size, d = scene.dimensions, action = moveAction(tok, step.do), waypoints = route.slice(1).map(([x, y]) => ({ x: d.sceneX + x * px, y: d.sceneY + y * px, action }));
   await record({ started: true });
   const charged = await watched(async () => {
     let got = null; const hook = Hooks.on("moveToken", (doc, mv) => { if (doc.id === tok.id) got = { cost: mv.passed?.cost ?? null, x: mv.destination?.x, y: mv.destination?.y }; });
@@ -473,8 +481,7 @@ async function runStride(combat, id, i, step, tok) {
       return got;
     } finally { Hooks.off("moveToken", hook); }
   });
-  await record({ moved: { to: squareOf(tok, scene), cost: charged?.cost ?? null } });
-  await after();
+  await finish({ moved: { to: squareOf(tok, scene), cost: charged?.cost ?? null } });
   return "next";
 }
 /** Stand or Drop Prone: PF2e's own action (`StandActionVariant`, `DropProneActionVariant` in PF2e 8.7.0), which posts its card and then removes or adds
@@ -486,11 +493,13 @@ const PRONE_SET = ["prone", "off-guard"];
 async function runPosture(combat, id, i, kind, tok) {
   const record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {}, actor = tok.actor, wantProne = POSTURES[kind];
   const already = () => !!actor.hasCondition?.("prone") === wantProne, words = kind === "stand" ? "Stand" : "Drop Prone";
-  const take = async (before, own) => { const seen = request(combat, id).seen; if (!seen?.me) return;
-    await save(combat, id, { seen: { me: { conditions: absorbOwn(seen.me.conditions ?? [], before, situationOf({ me: { conditions: conditionWords(actor) } }).me.conditions, own) } } }); };
+  /* the step's record and the baseline go in one save, so a reload can't leave the step done with the old conditions */
+  const finish = async (rec, before) => { const seen = request(combat, id).seen, change = { log: { [i]: rec } };
+    if (seen?.me) change.seen = { me: { conditions: absorbOwn(seen.me.conditions ?? [], before, situationOf({ me: { conditions: conditionWords(actor) } }).me.conditions, PRONE_SET) } };
+    await save(combat, id, change); };
   const now = nextPosture(get(), already());
   if (now === "next") return "next";
-  if (now === "already") { await record({ changed: { message: null } }); await take(request(combat, id).seen?.me?.conditions ?? [], PRONE_SET); return "next"; }
+  if (now === "already") { await finish({ changed: { message: null } }, request(combat, id).seen?.me?.conditions ?? []); return "next"; }
   if (now === "ask") { await save(combat, id, { note: `${tok.name} started to ${words} and is ${wantProne ? "not" : "still"} prone.` }); return "ask"; }
   if (!stepGate(kind, id)) return "stopped";
   const before = situationOf({ me: { conditions: conditionWords(actor) } }).me.conditions;
@@ -498,8 +507,7 @@ async function runPosture(combat, id, i, kind, tok) {
   const out = await watched(() => game.pf2e.actions.get(kind).use({ actors: [actor] }));
   for (let t = 0; t < 2000 && !already(); t += 100) await new Promise(res => setTimeout(res, 100));   /* PF2e awaits its toggle, but give the update a moment */
   if (!already()) { await save(combat, id, { note: `${tok.name} used ${words} but is ${wantProne ? "not" : "still"} prone.` }); return "ask"; }
-  await record({ changed: { message: out?.[0]?.message?.id ?? null } });
-  await take(before, PRONE_SET);
+  await finish({ changed: { message: out?.[0]?.message?.id ?? null } }, before);
   return "next";
 }
 /* what PF2e's own Damage button does, for a named target rather than the selected tokens. Effects that only count for this one hit aren't read. */

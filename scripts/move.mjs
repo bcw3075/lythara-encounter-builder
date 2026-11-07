@@ -1,4 +1,4 @@
-/* Moving a monster: the distance between two creatures, and the route and cost of a Stride or a Step. Pure: no Foundry globals. A creature's square is its
+/* Moving a monster: the distance between two creatures, and the route and cost of a Stride, a Step or a Crawl. Pure: no Foundry globals. A creature's square is its
    top-left square, [x, y] with y down, and its size is how many squares a side (1, 2 for Large, ...). Foundry's own measurement has the last word on
    what a route costs (fight.mjs measures every route this finds); this file finds the route, because Foundry has no pathfinding of its own. */
 export const FT = 5;

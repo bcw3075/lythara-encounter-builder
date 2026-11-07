@@ -34,7 +34,7 @@ Hooks.on("getSceneControlButtons", controls => {
 /* canvasReady goes through Hooks.call, so a handler returning false stops every later module's handler. No handler here returns anything. */
 Hooks.on("lythara-survey-sheet.encounterDrawn", scene => { markDrawn(scene); });
 Hooks.on("canvasReady", c => { markReady(c.scene?.id); redrawTurns(); });
-for (const h of ["createCombat", "deleteCombat", "createCombatant", "deleteCombatant"]) Hooks.on(h, () => { redrawTurns(); });
+for (const h of ["createCombat", "deleteCombat", "createCombatant", "updateCombatant", "deleteCombatant", "deleteToken"]) Hooks.on(h, () => { redrawTurns(); });
 /* a brief sent from a chat shows up in an open window */
 Hooks.on("updateScene", (scene, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}.brief`) && !scene.getFlag(ID, "build")) { const app = apps.get(scene.id); if (app?.rendered) { app.loadBrief(); app.render(); } } });
 /* the party landing beside a hidden monster is worth a word; nothing moves on its own */
