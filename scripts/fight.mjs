@@ -1039,7 +1039,7 @@ async function runArea(combat, id, i, step, tok) {
         const message = await watched(async () => { const card = waitFor("spell-cast"); await entry.cast(spell, { rank: step.rank, consume: true }); return card; });
         const names = list => listWords(list.map(t => scene.tokens.get(t)?.name ?? "someone"));
         const words = [step.mode === "card" ? `Apply ${step.itemName} from its card${rows.length ? ` to ${names(rows)}` : ""}: its area is on the map.` : null,
-          hidden.length ? `It also caught ${names(hidden)}, hidden from the players, so they have no row: roll ${hidden.length === 1 ? "that save" : "those saves"} and apply ${step.itemName} to them yourself.` : null].filter(Boolean).join(" ");
+          hidden.length ? `It also caught ${names(hidden)}, hidden from the players, so they have no row: ${spell.system.defense?.save?.statistic ? `roll ${hidden.length === 1 ? "that save" : "those saves"} and apply` : "apply"} ${step.itemName} to ${hidden.length === 1 ? "them" : "those"} yourself.` : null].filter(Boolean).join(" ");
         await save(combat, id, { log: { [i]: { cast: { message: message.id } } }, ...(words ? { note: joinNote(combat, id, words) } : {}) });
       } else if (now === "place") {
         const made = await watched(() => placeArea(combat, id, i, step, tok, spell, game.messages.get(get().cast.message)));
