@@ -590,7 +590,7 @@ async function runTakeCover(combat, id, i, tok) {
   const now = nextCover(get(), takingCover(tok));
   if (now === "next") return "next";
   if (now === "already") { await record({ covered: { already: true } }); return "next"; }
-  if (now === "ask") { await save(combat, id, { note: `${tok.name} started to Take Cover and isn't Taking Cover.` }); return "ask"; }
+  if (now === "ask") { await save(combat, id, { note: `${tok.name} started to Take Cover before the page reloaded, so its cover may not have reached every creature${takingCover(tok) ? "" : " (it isn't Taking Cover now)"}.` }); return "ask"; }
   if (!stepGate("take-cover", id)) return "stopped";
   if (!(await ensureScene(combat) && tok.object)) throw new Error(cantOpen());
   await record({ started: true });
