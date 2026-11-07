@@ -33,7 +33,7 @@ export function checkPlan(plan, ctx) {
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
       if (step.do === "stand" && !prone) return { ok: false, reason: `${at}: it isn't prone, so it has nothing to Stand up from.` };
       if (step.do === "drop-prone" && prone) return { ok: false, reason: `${at}: it is already prone.` };
-      if (step.do === "drop-prone" && (ctx.me?.elev ?? 0) > 0) return { ok: false, reason: `${at}: it is ${ctx.me.elev} ft up, and a creature knocked or dropping prone in the air falls instead.` };
+      if (step.do === "drop-prone" && (ctx.me?.elev ?? 0) > 0) return { ok: false, reason: `${at}: it is ${Math.round(ctx.me.elev)} ft up, and a creature knocked or dropping prone in the air falls instead.` };
       steps.push({ do: step.do }); prone = POSTURES[step.do]; continue;
     }
     if (MOVES.includes(step.do)) {

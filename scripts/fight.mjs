@@ -448,7 +448,8 @@ async function runStrike(combat, id, i, step, tok, target) {
   return "ask";
 }
 /** A Stride, a Step or a Crawl, along the route the check found (a Step's or Crawl's is its one square), with the action the token moves by: its own for
-    a Stride or Step, crawl for a Crawl (a prone token can't walk, and Foundry prices crawling like walking: 5 ft a square, tested 2026-11-07). Never sent twice: a move begun before a reload
+    a Stride or Step, crawl for a Crawl (a prone token can't walk). Foundry's crawl action books each square at double (core's costMultiplier 2, tested
+    2026-11-07), so a Crawl's charged cost reads 10 ft; the rules distance, which checkPlan uses, is 5 ft. Never sent twice: a move begun before a reload
     counts as done only if the monster is where it was going. Afterwards the monster's own square in `seen` moves with it, so the look before the next
     action doesn't take its own Stride for a change; anything else (an HP change from a reaction, someone now out of sight) still counts. */
 async function runStride(combat, id, i, step, tok) {
