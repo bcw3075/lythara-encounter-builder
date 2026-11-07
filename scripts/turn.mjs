@@ -33,7 +33,7 @@ const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
     restrained), and last (its last action this turn before the plan, from `lastAction`; null at the start of a turn). */
 export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
-  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, last = ctx.last ?? null; const steps = [], routes = [];
+  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {};
   const distanceTo = (t, reach) => here && t.square ? distanceBetween({ x: here[0], y: here[1], size: ctx.me.size ?? 1, elev: ctx.me.elev, depth: ctx.me.depth }, { x: t.square[0], y: t.square[1], size: t.size ?? 1, elev: t.elev, depth: t.depth }, { reach }) : t.distance;
   for (const [n, step] of plan.steps.entries()) {
     const at = `Step ${n + 1}`;
@@ -44,20 +44,24 @@ export function checkPlan(plan, ctx) {
       if (ab.kind === "passive") return { ok: false, reason: `${at}: ${ab.name} is passive: it is always on, not something to do.` };
       if (ab.kind === "reaction") return { ok: false, reason: `${at}: ${ab.name} is a reaction, used when its trigger happens, not planned on its own turn.` };
     }
-    const cost = ab ? abilityCost(ab) : COSTS[step.do];
-    if (cost > left) return { ok: false, reason: `${at}: no actions left${ab && cost > 1 ? ` (${ab.name} takes ${cost})` : ""}.` };
-    left -= cost;
-    if (step.do === "none") { steps.push({ do: "none" }); continue; }
-    if (ctx.cantAct) return { ok: false, reason: `${at}: ${ctx.cantAct}` };
     if (ab) {
-      const r = checkAbility(step, ab, { ctx, last, at, attacks, distanceTo });
+      if (ctx.cantAct) return { ok: false, reason: `${at}: ${ctx.cantAct}` };
+      const r = checkAbility(step, { ...ab, usesLeft: ab.id in uses ? uses[ab.id] : ab.usesLeft }, { ctx, last, at, attacks, distanceTo });
       if (!r.ok) return r;
+      /* Grab's hold takes an action even for Improved Grab (Monster Core: it still needs an action to extend the duration) */
+      const cost = r.step.mode === "hold" ? 1 : abilityCost(ab);
+      if (cost > left) return { ok: false, reason: `${at}: no actions left${cost > 1 ? ` (${ab.name} takes ${cost})` : ""}.` };
+      left -= cost; if (ab.usesLeft != null) uses[ab.id] = (ab.id in uses ? uses[ab.id] : ab.usesLeft) - 1;
       steps.push({ ...r.step, actions: cost });
       if (r.step.mapCounts) attacks++;
       if (r.step.attack) took = tookProne = false;
       last = { do: "ability", item: ab.id, target: r.step.target ?? null };   /* a free action is an action too: a second follow-up can't come after it */
       continue;
     }
+    if (COSTS[step.do] > left) return { ok: false, reason: `${at}: no actions left.` };
+    left -= COSTS[step.do];
+    if (step.do === "none") { steps.push({ do: "none" }); last = { do: "none" }; continue; }
+    if (ctx.cantAct) return { ok: false, reason: `${at}: ${ctx.cantAct}` };
     if (step.do in POSTURES) {
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
       if (step.do === "stand" && !prone) return { ok: false, reason: `${at}: it isn't prone, so it has nothing to Stand up from.` };
@@ -130,7 +134,8 @@ function checkAbility(step, ab, { ctx, last, at, attacks, distanceTo }) {
   const t = ctx.targets[target]; if (!t) return no(`it doesn't know of "${target}".`);
   const follow = after && last.target === target && last.hit !== false;
   if (!follow) {
-    /* Grab's other use: keep hold of a creature it has grabbed or restrained, with no check (it lasts to the end of its next turn) */
+    /* Grab's other use: keep hold of a creature it has grabbed or restrained, with no check (it lasts to the end of its next turn). `held` is true only for a
+       grip this monster's own Grab made (the glue keeps them), so another creature's grip doesn't count and nothing is given away. */
     if (ab.followUp === "grapple" && t.held) {
       const reach = Math.max(0, ...(ctx.strikes ?? []).filter(s => !s.ranged && (s.effects ?? []).includes(ab.effect)).map(s => s.reach ?? 5));
       const d = distanceTo(t, reach); if (d > reach) return no(`${t.name ?? target} is ${d} ft away, out of reach to keep hold of.`);
@@ -142,7 +147,7 @@ function checkAbility(step, ab, { ctx, last, at, attacks, distanceTo }) {
   }
   if (last.ranged) return no(`${ab.name} needs the creature within reach, and its last Strike was ranged.`);
   const d = distanceTo(t, last.reach ?? 5); if (d > (last.reach ?? 5)) return no(`${t.name ?? target} is ${d} ft away, out of reach for ${ab.name}.`);
-  if (sizeRank(t.cat) >= 0 && sizeRank(ctx.me?.cat) >= 0 && sizeRank(t.cat) > sizeRank(ctx.me.cat) + 1) return no(`${t.name ?? target} is more than one size larger than it, too big to ${word}.`);
+  if (sizeRank(t.cat) >= 0 && sizeRank(ctx.me?.cat) >= 0 && sizeRank(t.cat) > sizeRank(ctx.me.cat) + 1) return no(t.flat >= 11 ? `it can't ${word} ${t.name ?? target}.` : `${t.name ?? target} is more than one size larger than it, too big to ${word}.`);   /* a hidden creature's size isn't the monster's to know */
   return { ok: true, step: { do: "ability", item: ab.id, itemName: ab.name, mode: "check", check: ab.followUp, target, targetName: t.name ?? target, flat: t.flat ?? 0, attack: true, needsHit: last.hit == null } };
 }
 /** Its last action this turn before a plan, for an ability that needs it (Grab, Knockdown...): from the step just done with its record, or from the last
