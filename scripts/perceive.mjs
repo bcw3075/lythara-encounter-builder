@@ -100,7 +100,7 @@ export function tacticsFor(html, group, localize) {
 export const strikeMods = labels => labels.map(l => Number(String(l).match(/[+-]\d+/)?.[0] ?? 0));
 /** The ground around a square, one string per row. # no footing, D greater difficult, d difficult, c cover worth having, . open. Tokens aren't marked, or an
     unseen one would show as a gap. */
-export const GROUND_KEY = "# blocked, D greater difficult, d difficult, c some cover, . open. First row is [from], y grows downwards.";
+export const GROUND_KEY = "# blocked, D greater difficult (usually deep water, which a Stride can't enter), d difficult, c some cover, . open. First row is [from], y grows downwards.";
 export function groundAround(model, [i, j], radius = 10, coverAt = .3) {
   const x0 = Math.max(0, i - radius), y0 = Math.max(0, j - radius), x1 = Math.min(model.cols - 1, i + radius), y1 = Math.min(model.rows - 1, j + radius), rows = [];
   for (let y = y0; y <= y1; y++) { let row = ""; for (let x = x0; x <= x1; x++) { const k = model.idx(x, y); row += model.blocked[k] ? "#" : model.costs[k] === 2 ? "D" : model.costs[k] === 1 ? "d" : model.cover[k] >= coverAt ? "c" : "."; } rows.push(row); }

@@ -1,23 +1,40 @@
 /* A monster's turn as plain data: what a plan means, whether it's legal, and where a step stands. Pure: no Foundry globals.
-   The glue gathers live values first. For now this covers Strikes; movement and the rest come as step 2 goes on. */
-export const COSTS = { strike: 1, none: 0 };
+   The glue gathers live values first. Strikes and Strides so far; the other step kinds come as step 2 goes on. */
+import { distanceBetween, headingOf } from "./move.mjs";
+export const COSTS = { strike: 1, stride: 1, none: 0 };
+const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
 
 /** Check a plan against what the glue gathered. Returns { ok: true, steps } with each step resolved, or { ok: false, reason }.
     ctx: { actions (left this turn), attacksBefore (attacks already made this turn, for the multiple attack penalty), strikes: [{ id, name, reach, ranged, maxRange }],
-    targets: { label: { distance, name, flat } } }. Only what the monster perceives is in targets. Names here are labels when the reason goes to the thinker. */
+    targets: { label: { name, square, size, flat } or { name, distance, flat } }, me: { square, size }, speed, cantMove (why it can't Stride, or null),
+    route(from, to) → { ok, route, cost } or { ok: false, reason } }. Only what the monster perceives is in targets. A Stride moves where later steps are
+    measured from. Names here are labels when the reason goes to the thinker. */
 export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
-  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0; const steps = [];
+  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null; const steps = [];
+  const distanceTo = (t, reach) => here && t.square ? distanceBetween({ x: here[0], y: here[1], size: ctx.me.size ?? 1 }, { x: t.square[0], y: t.square[1], size: t.size ?? 1 }, { reach }) : t.distance;
   for (const [n, step] of plan.steps.entries()) {
     const at = `Step ${n + 1}`;
     if (!(step.do in COSTS)) return { ok: false, reason: `${at}: I can't do "${step.do}" yet.` };
     if (COSTS[step.do] > left) return { ok: false, reason: `${at}: no actions left.` };
     left -= COSTS[step.do];
     if (step.do === "none") { steps.push({ do: "none" }); continue; }
+    if (step.do === "stride") {
+      if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
+      if (!Array.isArray(step.to)) return { ok: false, reason: `${at}: a Stride needs "to", the square to end on.` };
+      if (!here || !ctx.route) return { ok: false, reason: `${at}: I can't work out moves here.` };
+      if (same(here, step.to)) return { ok: false, reason: `${at}: it is already at [${step.to[0]}, ${step.to[1]}].` };
+      const way = ctx.route(here, step.to);
+      if (!way.ok) return { ok: false, reason: `${at}: ${way.reason}` };
+      if (way.cost > ctx.speed) return { ok: false, reason: `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, more than its Speed of ${ctx.speed} ft.` };
+      steps.push({ do: "stride", from: [...here], to: [...step.to], route: way.route, cost: way.cost });
+      here = [...step.to]; continue;
+    }
     const s = ctx.strikes.find(x => x.id === step.item); if (!s) return { ok: false, reason: `${at}: it has no attack called "${step.item}".` };
     const t = ctx.targets[step.target]; if (!t) return { ok: false, reason: `${at}: it doesn't know of "${step.target}".` };
-    if (s.ranged) { if (s.maxRange && t.distance > s.maxRange) return { ok: false, reason: `${at}: ${t.name} is ${t.distance} ft away, out of range of ${s.name} (${s.maxRange} ft).` }; }
-    else if (t.distance > s.reach) return { ok: false, reason: `${at}: ${t.name} is ${t.distance} ft away, out of reach of ${s.name} (${s.reach} ft).` };
+    const where = steps.some(x => x.do === "stride") ? ` from [${here[0]}, ${here[1]}]` : "";
+    if (s.ranged) { const d = distanceTo(t, null); if (s.maxRange && d > s.maxRange) return { ok: false, reason: `${at}: ${t.name} is ${d} ft away${where}, out of range of ${s.name} (${s.maxRange} ft).` }; }
+    else { const d = distanceTo(t, s.reach); if (d > s.reach) return { ok: false, reason: `${at}: ${t.name} is ${d} ft away${where}, out of reach of ${s.name} (${s.reach} ft).` }; }
     steps.push({ do: "strike", item: s.id, itemName: s.name, target: step.target, targetName: t.name ?? step.target, variant: Math.min(attacks, 2), flat: t.flat ?? 0 });
     attacks++;
   }
@@ -35,6 +52,7 @@ export function spentBy(steps = []) {
 export const OUTCOMES = ["critical miss", "miss", "hit", "critical hit"];
 /** A finished step as the monster saw it, for the next plan: labels and ids only, and the result shown in chat. */
 export function doneStep(step, rec = {}) {
+  if (step.do === "stride") { const got = rec.moved?.to; return { do: "stride", to: step.to, result: !got ? "unknown" : same(got, step.to) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]` }; }
   if (step.do !== "strike") return { do: step.do };
   return { do: "strike", item: step.item, target: step.target, result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.attack ? OUTCOMES[rec.attack.degree] ?? "unknown" : "unknown" };
 }
@@ -43,7 +61,6 @@ export function doneStep(step, rec = {}) {
 /* Rhea, 2026-11-06: the module carries a plan out one action at a time and looks again before each. If anything changed since the plan was made, the rest
    is dropped and the thinker is asked again with a fresh packet. The baseline is taken when the packet is, because that's what the plan was made from. */
 export const MAX_REPLANS = 3;
-const sameSquare = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
 /** What the rest of a turn rests on. me: { square, hp, actions, conditions }; others: { label: { square, state, down } }, only who it perceived when asked. */
 export function situationOf({ me = {}, others = {} } = {}) {
   return { me: { square: me.square ?? null, hp: me.hp ?? 0, actions: me.actions ?? 0, conditions: [...new Set(me.conditions ?? [])].sort() },
@@ -53,7 +70,7 @@ export function situationOf({ me = {}, others = {} } = {}) {
 export function changesSince(was, now) {
   if (!was || !now) return [];
   const out = [];
-  if (!sameSquare(was.me.square, now.me.square)) out.push({ who: "me", what: "moved" });
+  if (!same(was.me.square, now.me.square)) out.push({ who: "me", what: "moved" });
   if (was.me.hp !== now.me.hp) out.push({ who: "me", what: now.me.hp < was.me.hp ? "hurt" : "healed" });
   if (was.me.actions !== now.me.actions) out.push({ who: "me", what: "actions", now: now.me.actions });
   if (was.me.conditions.join() !== now.me.conditions.join()) out.push({ who: "me", what: "conditions", now: now.me.conditions });
@@ -62,7 +79,7 @@ export function changesSince(was, now) {
     if (!n) { out.push({ who: label, what: "gone" }); continue; }
     if (w.down !== n.down) out.push({ who: label, what: n.down ? "down" : "up" });
     if (w.state !== n.state) out.push({ who: label, what: "state", now: n.state });
-    if (!sameSquare(w.square, n.square)) out.push({ who: label, what: "moved" });
+    if (!same(w.square, n.square)) out.push({ who: label, what: "moved" });
   }
   return out;
 }
@@ -88,6 +105,7 @@ export const describeChanges = (list = [], nameOf, self) => list.map(c => descri
 /** A resolved step in plain words, for the card. */
 export function describeStep(s) {
   if (s.do === "none") return "Does nothing.";
+  if (s.do === "stride") { const way = s.from ? headingOf(s.from, s.to) : ""; return `Strides ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}.`; }
   return `${s.itemName} at ${s.targetName}${s.variant ? `, attack ${s.variant + 1}` : ""}${s.flat ? `, after a DC ${s.flat} flat check` : ""}.`;
 }
 /** What to do next with a Strike step, from what its record says already happened. Nothing is ever repeated: when the record can't tell
@@ -102,6 +120,13 @@ export function nextAction(rec = {}, { apply = false, flat = 0 } = {}) {
   if (!apply && !rec.applying) return "next";
   if (!rec.applying) return "apply";
   return rec.applied ? "next" : "ask";
+}
+/** What to do next with a Stride step. A move begun before a reload is never sent again: if the monster is where it was going, the step is done;
+    anywhere else, the GM looks. at: the square it stands on now. */
+export function nextMove(rec = {}, at = null, to = null) {
+  if (rec.moved) return "next";
+  if (!rec.started) return "move";
+  return same(at, to) ? "arrived" : "ask";
 }
 /** This turn's unfinished request. By round and combatant, not turn number: an initiative change can move the number during the turn. */
 export function currentOf(requests = {}, round, combatantId) {

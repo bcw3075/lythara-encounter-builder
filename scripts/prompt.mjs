@@ -1,6 +1,6 @@
 /* The thinker's instructions. One file, whoever thinks: a chat gets it in `hello`, and the API route will send it as the system prompt. It starts the
    same every time, which suits caching. Generic on purpose: the repo is public, so no campaign words here. Pure: no Foundry globals. */
-export const PROMPT_VERSION = 2;
+export const PROMPT_VERSION = 3;
 export function promptText({ canDo = [], stepKinds = [], maxSteps = 8, tries = 2 } = {}) {
   return `You decide what one monster does on its turn in a Pathfinder 2e (Remastered) fight. Rules: https://2e.aonprd.com/.
 
@@ -13,7 +13,8 @@ What you send back: one plan as JSON.
 - Step kinds the module knows: ${stepKinds.join(", ")}. It can carry out only these so far: ${canDo.join(", ")}. A plan with any other kind is turned down.
 - "target" must be a label in "perceived" (E1, E2 and so on). A hidden target costs a DC 11 flat check, a concealed one DC 5: the module rolls it. Undetected creatures can't be targeted yet.
 - Each Strike costs 1 action and the module applies the multiple attack penalty in order. "actionsLeft" already counts what's spent this turn, and "attacksMade" says how many attacks it has made, so its next attack is at the next number in "mod". Don't plan more actions than "actionsLeft".
-- Melee needs the target within reach; ranged needs it within the weapon's maximum range. Nothing moves yet, so plan from where the monster stands. If nothing it can do makes sense, send one step { "do": "none" } and say why.
+- A Stride costs 1 action: { "do": "stride", "to": [x, y] }, the square it ends on. Squares are map squares, the same as "you.square" and the squares in "perceived" and "ground" (ground.from is the top-left square of its rows). A creature's square is its top-left square: a Large one covers that square and the ones right and below. The module finds the route: around walls and solid things ("#"), never through an enemy's space or ending in anyone's, and never into deep water (most "D" squares; any other greater difficult terrain costs 10 ft more a square). Difficult terrain ("d") costs 5 ft more a square, and every second diagonal 10 ft. The route must fit within "you.speed". It can't Stride while prone, grabbed, immobilized or restrained.
+- Melee needs the target within reach; ranged needs it within the weapon's maximum range, both measured from where the monster stands after any Stride before it. Distance counts squares between the two creatures' edges, 5 ft each, every second diagonal 10 ft; 10-foot reach also reaches a creature two squares away diagonally. Moving away from someone may let them make a reaction (such as Reactive Strike); the module doesn't ask players for reactions yet, but plan as if it did. If nothing it can do makes sense, send one step { "do": "none" } and say why.
 - At most ${maxSteps} steps. "suggestOpus": true if this monster is complex enough (spells, many abilities) to deserve a stronger model later.
 - Play the monster as its tactics and nature say: animals and mindless things don't use clever tactics; intelligent foes do. Fight to win, not to be kind, but within what it perceives.
 

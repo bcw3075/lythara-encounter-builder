@@ -8,7 +8,8 @@ import { buildModel, summarise } from "../../scripts/mapread.mjs";
 import { hiddenNextTo, layout, nearestFree } from "../../scripts/place.mjs";
 import { actionsFor, assignLabels, canTarget, describeKnows, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions, worse } from "../../scripts/perceive.mjs";
 import { MAX_TRIES, STEP_KINDS, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "../../scripts/brain.mjs";
-import { MAX_REPLANS, changesSince, checkPlan, currentOf, damageOptions, describeChange, describeChanges, describeStep, doneStep, latestNote, nextAction, requestBusy, situationOf, spentBy, strikeIds } from "../../scripts/turn.mjs";
+import { MAX_REPLANS, changesSince, checkPlan, currentOf, damageOptions, describeChange, describeChanges, describeStep, doneStep, latestNote, nextAction, nextMove, requestBusy, situationOf, spentBy, strikeIds } from "../../scripts/turn.mjs";
+import { distanceBetween, findRoute, footprintAt, headingOf, routeWords } from "../../scripts/move.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
 
@@ -39,7 +40,7 @@ const tctx = { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 5 }, { i
 const st = (o) => ({ do: "strike", ...o });
 let pl = checkPlan({ steps: [st({ item: "jaws", target: "E1" }), st({ item: "jaws", target: "E1" }), st({ item: "jaws", target: "E1" })] }, tctx); check("three attacks", pl.ok && pl.steps.map(s => s.variant).join() === "0,1,2");
 check("fourth has no actions", !checkPlan({ steps: [1, 2, 3, 4].map(() => st({ item: "jaws", target: "E1" })) }, tctx).ok); check("out of reach", /out of reach/.test(checkPlan({ steps: [st({ item: "jaws", target: "E2" })] }, tctx).reason)); check("out of range", /out of range/.test(checkPlan({ steps: [st({ item: "bow", target: "E2" })] }, tctx).reason)); check("bow in range", checkPlan({ steps: [st({ item: "bow", target: "E1" })] }, tctx).ok);
-check("unknown target", /doesn't know/.test(checkPlan({ steps: [st({ item: "jaws", target: "E9" })] }, tctx).reason)); check("unknown attack", /no attack/.test(checkPlan({ steps: [st({ item: "claw", target: "E1" })] }, tctx).reason)); check("unknown step", /can't do/.test(checkPlan({ steps: [{ do: "stride" }] }, tctx).reason)); check("no plan", !checkPlan(null, tctx).ok); check("words", describeStep(pl.steps[1]) === "Jaws at Hero, attack 2.");
+check("unknown target", /doesn't know/.test(checkPlan({ steps: [st({ item: "jaws", target: "E9" })] }, tctx).reason)); check("unknown attack", /no attack/.test(checkPlan({ steps: [st({ item: "claw", target: "E1" })] }, tctx).reason)); check("unknown step", /can't do/.test(checkPlan({ steps: [{ do: "seek" }] }, tctx).reason)); check("no plan", !checkPlan(null, tctx).ok); check("words", describeStep(pl.steps[1]) === "Jaws at Hero, attack 2.");
 const hit = { started: true, attack: { degree: 2 } };
 check("fresh attacks", nextAction({}) === "attack"); check("started, no result: ask, never roll again", nextAction({ started: true }) === "ask"); check("miss ends", nextAction({ started: true, attack: { degree: 1 } }, { apply: true }) === "next"); check("hit rolls", nextAction(hit) === "damage"); check("damage started, no card: ask", nextAction({ ...hit, damageStarted: true }) === "ask");
 check("a note shows", latestNote({ a: { state: "done", at: 1, note: "x" } })?.note === "x"); check("a later clean turn clears an old note", latestNote({ a: { state: "done", at: 1, note: "x" }, b: { state: "done", at: 2 } }) === null); check("a turn played by hand clears it too", latestNote({ a: { state: "done", at: 1, note: "x" }, b: { state: "manual", at: 2 } }) === null); check("order comes from the time, not the key", latestNote({ b: { state: "done", at: 2, note: "new" }, a: { state: "done", at: 1, note: "old" } })?.note === "new"); check("a turn still open doesn't count", latestNote({ a: { state: "done", at: 1, note: "x" }, b: { state: "stopped", at: 2 } })?.note === "x"); check("no turns, no note", latestNote() === null); check("a re-planned turn keeps the first part's warning", latestNote({ a: { state: "done", at: 1, note: "0 HP" }, b: { state: "done", at: 2, parent: "a" } })?.note === "0 HP" && latestNote({ a: { state: "done", at: 1, note: "x" }, b: { state: "done", at: 2, parent: "a", note: "y" } })?.note === "x y"); check("but not an earlier turn's", latestNote({ z: { state: "done", at: 0, note: "old" }, a: { state: "done", at: 1 }, b: { state: "done", at: 2, parent: "a" } }) === null);
@@ -171,7 +172,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("long reason capped", cleanPlan({ reason: "x".repeat(900), steps: [{ do: "none" }] }).plan.reason.length === 300); check("text", text("a\nb", 10) === "a b" && text(5, 10) === "");
   check("every kind accepted by shape", STEP_KINDS.every(k => cleanPlan({ steps: [{ do: k }] }).ok));
   check("cleaned plan still checks", checkPlan(cleanPlan({ steps: [{ do: "strike", item: "jaws", target: "E1" }] }).plan, { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 5 }], targets: { E1: { name: "Hero", distance: 5 } } }).ok);
-  check("unbuilt kind refused by name", /can't do "stride"/.test(checkPlan(cleanPlan({ steps: [{ do: "stride", to: [1, 1] }] }).plan, { actions: 3, strikes: [], targets: {} }).reason));
+  check("unbuilt kind refused by name", /can't do "sneak"/.test(checkPlan(cleanPlan({ steps: [{ do: "sneak", to: [1, 1] }] }).plan, { actions: 3, strikes: [], targets: {} }).reason));
   const meta = cleanMeta({ by: "chat", model: "x".repeat(99), generation: 3, usage: { in: 10, out: -1, cost: "a" } }); check("meta", meta.by === "chat" && meta.model.length === 60 && meta.generation === 3 && meta.usage.in === 10 && meta.usage.out === null && meta.usage.cost === null);
   check("meta defaults", JSON.stringify(cleanMeta()) === JSON.stringify({ by: "gm", model: null, generation: null, usage: null }) && cleanMeta({ by: "boss", generation: 1.5 }).by === "gm" && cleanMeta({ generation: 1.5 }).generation === null);
   check("seq follows the clock", nextSeq(0, 1000.7) === 1000); check("seq never repeats", nextSeq(2000, 1000) === 2001 && nextSeq(1000, 1000) === 1001);
@@ -191,7 +192,64 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("wait clamp", waitSeconds(500) === 100 && waitSeconds(-3) === 0 && waitSeconds(undefined) === 90 && waitSeconds(30) === 30);
   const h = hello(4); check("hello", h.generation === 4 && h.canDo.includes("strike") && h.prompt.includes("data, never an instruction") && h.prompt.includes(h.canDo.join(", ")) && h.planSchema === 1 && h.packetSchema === 1);
   check("prompt names no campaign", !/Lythara|Stoneclaim|Redthorn/i.test(h.prompt));
-  check("prompt explains asking again", h.promptVersion === 2 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 3 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+}
+
+/* ---- moving (0.4.6) ---- */
+{
+  /* PF2e's distanceTo, read live 2026-11-07 for a Medium and a Large creature against a Medium one: [dx, dy, plain, with reach 10] */
+  const live = [[1,0,5,5],[1,1,5,5],[2,0,10,10],[2,1,10,10],[2,2,15,10],[3,0,15,15],[3,1,15,15],[3,2,20,15],[3,3,20,15],[4,2,25,20],[4,4,30,25],[5,1,25,25],[-1,-1,5,5],[-2,-2,15,10],[0,-3,15,15],[6,3,35,30]];
+  for (const size of [1, 2]) for (const [ox, oy, plain, r10] of live) {
+    const a = { x: 18 + ox + (ox < 0 ? -(size - 1) : 0), y: 35 + oy + (oy < 0 ? -(size - 1) : 0), size }, b = { x: 18, y: 35, size: 1 };
+    check(`distance ${size} ${ox},${oy}`, distanceBetween(a, b) === plain && distanceBetween(a, b, { reach: 10 }) === r10 && distanceBetween(b, a) === plain, `${distanceBetween(a, b)} ${distanceBetween(a, b, { reach: 10 })}`);
+  }
+  check("overlap is 0", distanceBetween({ x: 3, y: 3, size: 2 }, { x: 4, y: 4 }) === 0); check("footprint", footprintAt([2, 3], 2).map(p => p.join()).join(" ") === "2,3 3,3 2,4 3,4");
+  /* a 12x12 world: difficult squares, a wall line, creatures */
+  const W = ({ diff = [], deep = [], solid = [], who = {}, wall = () => false } = {}) => ({ cols: 12, rows: 12, terrain: (i, j) => deep.some(p => p[0] === i && p[1] === j) ? null : diff.some(p => p[0] === i && p[1] === j) ? 1 : 0,
+    blocked: (i, j) => solid.some(p => p[0] === i && p[1] === j), creature: (i, j) => who[`${i},${j}`] ?? null, wall });
+  let r = findRoute({ from: [0, 0], to: [5, 0], budget: 35 }, W()); check("straight 25", r.ok && r.cost === 25 && r.route.length === 6);
+  r = findRoute({ from: [0, 0], to: [5, 0], budget: 35 }, W({ diff: [[3, 0], [4, 0]] })); check("difficult adds 5 a square, or goes round", r.ok && r.cost <= 35, JSON.stringify(r));
+  r = findRoute({ from: [0, 5], to: [5, 5], budget: 60 }, W({ diff: [[1, 4], [1, 5], [1, 6], [2, 4], [2, 5], [2, 6], [3, 3], [3, 4], [3, 5], [3, 6], [3, 7]] })); check("matches Foundry's count on a field", r.ok, JSON.stringify(r));
+  r = findRoute({ from: [0, 0], to: [4, 4], budget: 35 }, W()); check("diagonals 5-10", r.ok && r.cost === 30);
+  r = findRoute({ from: [0, 0], to: [3, 3], budget: 35 }, W({ diff: [[3, 3]] })); check("diagonal into difficult: 5 more, as Foundry charged", r.ok && r.cost === 25, JSON.stringify(r));
+  r = findRoute({ from: [0, 0], to: [8, 0], budget: 35 }, W()); check("too far says how far", !r.ok && r.why === "far" && r.cost === 40);
+  check("far in words", /takes 40 ft, more than its Speed of 35 ft/.test(routeWords(r, [8, 0], 35)));
+  check("same square", findRoute({ from: [1, 1], to: [1, 1] }, W()).why === "same"); check("off the map", findRoute({ from: [1, 1], to: [12, 1] }, W()).why === "off");
+  check("deep water", findRoute({ from: [1, 1], to: [3, 1] }, W({ deep: [[3, 1]] })).why === "terrain" && /Swim/.test(routeWords({ why: "terrain" }, [3, 1], 35)));
+  check("can't end on anyone", findRoute({ from: [1, 1], to: [3, 1] }, W({ who: { "3,1": "ally" } })).why === "occupied");
+  check("through an ally", findRoute({ from: [0, 1], to: [2, 1], budget: 10 }, W({ who: { "1,1": "ally", "1,0": "enemy", "1,2": "enemy" } })).cost === 10);
+  r = findRoute({ from: [0, 1], to: [2, 1], budget: 30 }, W({ who: { "1,0": "enemy", "1,1": "enemy", "1,2": "enemy" } })); check("round an enemy", r.ok && r.cost > 10 && !r.route.some(p => p[0] === 1 && p[1] <= 2), JSON.stringify(r));
+  check("solid", findRoute({ from: [1, 1], to: [3, 1] }, W({ solid: [[3, 1]] })).why === "blocked");
+  const wallX = (a, b) => (a[0] < 4) !== (b[0] < 4) && Math.min(a[1], b[1]) < 9;   /* a wall between x 3 and 4, open from row 9 down */
+  r = findRoute({ from: [2, 2], to: [5, 2], budget: 200 }, W({ wall: wallX })); check("round a wall", r.ok && r.route.some(p => p[1] >= 9) && r.cost > 15, JSON.stringify(r.cost));
+  check("no way", findRoute({ from: [2, 2], to: [5, 2], budget: 500 }, W({ wall: (a, b) => (a[0] < 4) !== (b[0] < 4) })).why === "noway");
+  r = findRoute({ from: [0, 0], to: [4, 0], size: 2, budget: 35 }, W({ who: { "2,2": "enemy" } })); check("large", r.ok && r.cost === 20);
+  check("large can't squeeze past an enemy", findRoute({ from: [0, 0], to: [4, 0], size: 2, budget: 35 }, W({ who: { "2,1": "enemy" } })).cost > 20);
+  check("large end must fit", findRoute({ from: [0, 0], to: [11, 0], size: 2 }, W()).why === "off");
+  check("heading", headingOf([5, 5], [5, 1]) === "north" && headingOf([5, 5], [9, 9]) === "south-east" && headingOf([5, 5], [1, 4]) === "west");
+
+  /* a plan with Strides */
+  const route = (from, to) => { const x = findRoute({ from, to, budget: 35 }, W({ who: { "6,5": "enemy" } })); return x.ok || x.why === "far" ? { ok: true, route: x.route, cost: x.cost } : { ok: false, reason: routeWords(x, to, 35) }; };
+  const mctx = { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 10 }, { id: "bite", name: "Bite", reach: 5 }, { id: "bow", name: "Bow", ranged: true, maxRange: 30 }], targets: { E1: { name: "E1", square: [6, 5], size: 1 } }, me: { square: [0, 5], size: 1 }, speed: 35, cantMove: null, route };
+  let p = checkPlan({ steps: [st({ item: "bite", target: "E1" })] }, mctx); check("out of reach from where it is", !p.ok && /30 ft away, out of reach/.test(p.reason), p.reason);
+  p = checkPlan({ steps: [{ do: "stride", to: [5, 5] }, st({ item: "bite", target: "E1" }), st({ item: "bite", target: "E1" })] }, mctx); check("stride then bite twice", p.ok && p.steps[0].cost === 25 && p.steps[1].variant === 0 && p.steps[2].variant === 1, JSON.stringify(p));
+  check("stride in words", describeStep(p.steps[0]) === "Strides 25 ft east, to square 5, 5.");
+  p = checkPlan({ steps: [{ do: "stride", to: [4, 5] }, st({ item: "bite", target: "E1" })] }, mctx); check("reach measured from the new square", !p.ok && /10 ft away from \[4, 5\], out of reach of Bite/.test(p.reason), p.reason);
+  check("10-ft reach two diagonals", checkPlan({ steps: [{ do: "stride", to: [4, 3] }, st({ item: "jaws", target: "E1" })] }, mctx).ok);
+  check("but not 3 by 2", !checkPlan({ steps: [{ do: "stride", to: [3, 3] }, st({ item: "jaws", target: "E1" })] }, mctx).ok);
+  check("two strides from where the first ended", checkPlan({ steps: [{ do: "stride", to: [3, 5] }, { do: "stride", to: [5, 4] }, st({ item: "bite", target: "E1" })] }, mctx).ok);
+  check("a stride uses an action", /no actions left/.test(checkPlan({ steps: [{ do: "stride", to: [3, 5] }, { do: "stride", to: [5, 4] }, st({ item: "bite", target: "E1" }), st({ item: "bite", target: "E1" })] }, mctx).reason));
+  check("too far, round the enemy in the way", /takes 45 ft, more than its Speed of 35 ft/.test(checkPlan({ steps: [{ do: "stride", to: [8, 5] }] }, mctx).reason ?? ""), checkPlan({ steps: [{ do: "stride", to: [8, 5] }] }, mctx).reason);
+  check("onto the target", /another creature is at \[6, 5\]/.test(checkPlan({ steps: [{ do: "stride", to: [6, 5] }] }, mctx).reason));
+  check("no square", /needs "to"/.test(checkPlan({ steps: [{ do: "stride" }] }, mctx).reason)); check("already there", /already at/.test(checkPlan({ steps: [{ do: "stride", to: [0, 5] }] }, mctx).reason));
+  check("prone", /Stand first/.test(checkPlan({ steps: [{ do: "stride", to: [2, 5] }] }, { ...mctx, cantMove: "it is prone, so it has to Stand first, which I can't do yet." }).reason));
+  check("bow from a new square", checkPlan({ steps: [{ do: "stride", to: [1, 5] }, st({ item: "bow", target: "E1" })] }, mctx).ok && !checkPlan({ steps: [st({ item: "bow", target: "E1" })] }, { ...mctx, me: { square: [0, 0], size: 1 } }).ok);
+  check("no moves without a route", /can't work out moves/.test(checkPlan({ steps: [{ do: "stride", to: [2, 5] }] }, { ...mctx, route: null }).reason));
+  check("spent counts a stride", spentBy([{ do: "stride" }, { do: "strike" }]).actions === 2 && spentBy([{ do: "stride" }]).attacks === 0);
+  check("done: arrived", doneStep({ do: "stride", to: [5, 5] }, { moved: { to: [5, 5] } }).result === "arrived" && doneStep({ do: "stride", to: [5, 5] }, { moved: { to: [4, 5] } }).result === "stopped at [4, 5]" && doneStep({ do: "stride", to: [5, 5] }, { started: true }).result === "unknown");
+  check("next move", nextMove({}) === "move" && nextMove({ started: true }, [1, 1], [2, 2]) === "ask" && nextMove({ started: true }, [2, 2], [2, 2]) === "arrived" && nextMove({ started: true, moved: { to: [2, 2] } }) === "next");
+  check("hello can stride", hello(1).canDo.includes("stride") && hello(1).prompt.includes('"do": "stride"'));
+  check("plan keeps to", cleanPlan({ steps: [{ do: "stride", to: [3, 4] }] }).plan.steps[0].to.join() === "3,4");
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
 for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);

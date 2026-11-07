@@ -1,7 +1,8 @@
 /* A fight's turns. One named account does the work (the runner: the Claude Bridge unless the setting says otherwise), on its own page with the
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. For now it runs Strikes; see claude/encounter-builder-plan.md for the rest of step 2. */
-import { MAX_REPLANS, changesSince, checkPlan, currentOf, damageOptions, describeChanges, doneStep, latestNote, nextAction, requestBusy, situationOf, spentBy, strikeIds } from "./turn.mjs";
+import { MAX_REPLANS, changesSince, checkPlan, currentOf, damageOptions, describeChanges, doneStep, latestNote, nextAction, nextMove, requestBusy, situationOf, spentBy, strikeIds } from "./turn.mjs";
+import { findRoute, footprintAt, routeWords } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap } from "./builder.mjs";
 import { MAX_TRIES, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "./brain.mjs";
@@ -51,6 +52,9 @@ const onFightScene = combat => canvas.ready && canvas.scene?.id === combat.scene
 const strikesWithIds = actor => { const list = (actor.system.actions ?? []).filter(a => a.type === "strike"), ids = strikeIds(list.map(a => ({ slug: a.slug ?? a.item?.id, ranged: !!a.item?.isRanged }))); return list.map((a, i) => ({ id: ids[i], strike: a })); };
 const conditionsOn = actor => (actor.conditions?.active ?? []).map(c => c.slug);
 const squareOf = (tok, scene) => { const px = scene.grid.size, d = scene.dimensions; return [Math.round((tok.x - d.sceneX) / px), Math.round((tok.y - d.sceneY) / px)]; };
+/** How many squares a side a token covers: 1 for Medium and smaller, 2 for Large... */
+const sizeOf = tok => Math.max(1, Math.round(tok.width ?? 1));
+const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
 function lightOn(point, scene) {
   const fx = canvas.effects, sources = [];
   for (const s of fx.darknessSources ?? []) if (s.active && s.shape?.contains?.(point.x, point.y)) sources.push({ darkness: true });
@@ -186,15 +190,53 @@ export async function onRunnerReady() {
     await onTurnChange(combat); act(combat);
   }
 }
-/** Live values for the legality check. Reach and distance need the canvas on the fight scene. used: what this request's finished steps took. Names are
-    labels, because a refusal's reason goes back to the thinker; the card puts names in. */
-function gather(combat, req, used = { actions: 0, attacks: 0 }) {
+/** Live values for the legality check. Reach, distance and moves need the canvas on the fight scene. used: what this request's finished steps took. Names
+    are labels, because a refusal's reason goes back to the thinker; the card puts names in. */
+async function gather(combat, req, used = { actions: 0, attacks: 0 }) {
   const scene = combat.scene, tok = scene.tokens.get(req.tokenId), actor = tok.actor;
   const strikes = strikesWithIds(actor).map(({ id, strike: a }) => ({ id, name: a.label, reach: actor.getReach({ action: "attack", weapon: a.item }), ranged: !!a.item?.isRanged, maxRange: a.item?.range?.max ?? null }));
   /* only what it perceived when asked, and still does: a plan can't name anything else */
   const now = new Map(sense(combat, tok, turns(combat).memory?.[tok.id] ?? {}).map(o => [o.id, o])), targets = {};
-  for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && canTarget(o.state)) targets[label] = { name: label, distance: o.distance, flat: flatDC(o.state) }; }
-  return { actions: Math.max(0, actionsOf(actor, combat) - (req.spent ?? 0) - used.actions), attacksBefore: (req.attacks ?? 0) + used.attacks, strikes, targets };
+  for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && canTarget(o.state)) targets[label] = { name: label, square: o.square, size: sizeOf(o.token), flat: flatDC(o.state) }; }
+  const speed = landSpeed(actor), route = await mover(combat, tok, speed);
+  return { actions: Math.max(0, actionsOf(actor, combat) - (req.spent ?? 0) - used.actions), attacksBefore: (req.attacks ?? 0) + used.attacks, strikes, targets,
+    me: { square: squareOf(tok, scene), size: sizeOf(tok) }, speed, cantMove: cantMove(actor, speed), route };
+}
+
+/* ---------- moving ---------- */
+/* Foundry has no pathfinding, so move.mjs finds the route; Foundry's own measurement then says what it costs, because that is what a real move charges
+   (the same on 5 test routes over difficult terrain, 2026-11-07). Walls are core's own movement test between where the creature would stand. */
+const landSpeed = actor => Number(actor.system.movement?.speeds?.land?.value) || 0;
+/** Why it can't Stride at all, or null. Rules: Immobilized, Grabbed and Restrained can't move; Prone has to Stand first; Paralyzed, Petrified and
+    Unconscious can't act. */
+function cantMove(actor, speed) {
+  const has = c => actor.hasCondition?.(c);
+  for (const c of ["paralyzed", "petrified", "unconscious"]) if (has(c)) return `it is ${c} and can't act.`;
+  for (const c of ["immobilized", "grabbed", "restrained"]) if (has(c)) return `it is ${c}, so it can't move.`;
+  if (has("prone")) return "it is prone, so it has to Stand first, which I can't do yet.";
+  return speed > 0 ? null : "it has no land Speed.";
+}
+const DEEP = /deep water/i;   /* Survey Sheet's name for its greater-difficult water. Other greater difficult terrain is just 10 ft more a square. */
+/** route(from, to) for checkPlan, for this monster on this scene as it stands now. */
+async function mover(combat, tok, speed) {
+  const scene = combat.scene, px = scene.grid.size, d = scene.dimensions, ox = d.sceneX, oy = d.sceneY, size = sizeOf(tok);
+  const { model } = await readMap(scene, { except: new Set(scene.tokens.map(t => t.id)) });   /* creatures are counted below, ally or enemy */
+  const deep = scene.regions.filter(r => DEEP.test(r.name ?? "") && r.behaviors.some(b => b.type === "modifyMovementCost" && !b.disabled)), deepAt = new Map();
+  const terrain = (i, j) => { const k = model.idx(i, j), c = model.costs[k] ?? 0; if (c < 2) return c;
+    if (!deepAt.has(k)) deepAt.set(k, deep.some(r => r.testPoint({ x: ox + (i + .5) * px, y: oy + (j + .5) * px, elevation: 0 }))); return deepAt.get(k) ? null : 2; };
+  const who = new Map();
+  for (const t of scene.tokens) { if (t.id === tok.id || !t.actor?.isOfType?.("creature")) continue; const rel = t.actor.isAllyOf?.(tok.actor) ? "ally" : "enemy";
+    for (const [i, j] of footprintAt(squareOf(t, scene), sizeOf(t))) if (who.get(`${i},${j}`) !== "enemy") who.set(`${i},${j}`, rel); }
+  const centre = ([x, y]) => ({ x: ox + (x + size / 2) * px, y: oy + (y + size / 2) * px });
+  const world = { cols: model.cols, rows: model.rows, terrain, blocked: (i, j) => !!model.blocked[model.idx(i, j)], creature: (i, j) => who.get(`${i},${j}`) ?? null,
+    wall: (a, b) => !!CONFIG.Canvas.polygonBackends.move.testCollision(centre(a), centre(b), { mode: "any", type: "move" }) };
+  const action = tok.movementAction, costFn = CONFIG.Token.movement.TerrainData.getMovementCostFunction(tok, {});
+  const measure = route => tok.measureMovementPath(tok.object.createTerrainMovementPath(route.map(([x, y]) => ({ x: ox + x * px, y: oy + y * px, action }))), { cost: costFn }).cost;
+  return (from, to) => {
+    const r = findRoute({ from, to, size, budget: speed }, world);
+    if (!r.ok && r.why !== "far") return { ok: false, reason: routeWords(r, to, speed) };
+    return { ok: true, route: r.route, cost: measure(r.route) };   /* checkPlan compares the cost with Speed */
+  };
 }
 /** Hand a plan in. Any GM may call this; the runner checks it. meta says who made it ({ by: "chat" | "api" | "gm", model, generation, usage }); a plan
     from an older chat's generation is ignored. The plan is stored as it came and cleaned by the runner, so tries are counted in one place. */
@@ -220,7 +262,7 @@ async function judgeNow(combat, requestId) {
   if (!await ensureScene(combat)) { await save(combat, requestId, { state: "requested", verdict: cantOpen() }); return { state: "requested", reason: cantOpen() }; }
   const r = request(combat, requestId), clean = cleanPlan(r.plan);
   if (!clean.ok) return reject(combat, requestId, clean.reason);
-  const c = checkPlan(clean.plan, gather(combat, r));
+  const c = checkPlan(clean.plan, await gather(combat, r));
   if (!c.ok) return reject(combat, requestId, c.reason);
   await save(combat, requestId, { state: "ready", plan: whole(clean.plan), steps: c.steps, verdict: null });
   const tok = combat.scene.tokens.get(r.tokenId);
@@ -278,12 +320,12 @@ export const clock = () => game.time.serverTime;
 export const brainListening = () => listening(brainNow(), clock());
 export const brainSeenAt = () => brainNow().at ?? 0;
 /** Legality only: what the runner would say, with nothing written. Needs the fight open on this page. */
-export function checkOnly(combat, requestId, plan) {
+export async function checkOnly(combat, requestId, plan) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
   const r = request(combat, requestId); if (!r) throw new Error("No such request.");
   if (!onFightScene(combat)) throw new Error("This page doesn't have the fight's map open, so it can't tell.");
   const clean = cleanPlan(plan); if (!clean.ok) return { ok: false, reason: clean.reason };
-  return checkPlan(clean.plan, gather(combat, r));
+  return checkPlan(clean.plan, await gather(combat, r));
 }
 /** The thinker can't make a plan: the card says so and the GM plays. */
 export async function reportFailure(combat, requestId, reason, meta = {}) {
@@ -374,6 +416,34 @@ async function runStrike(combat, id, i, step, tok, target) {
   }
   return "ask";
 }
+/** A Stride, along the route the check found, with the action PF2e gives the token (walk in a fight). Never sent twice: a move begun before a reload
+    counts as done only if the monster is where it was going. Afterwards the monster's own square in `seen` moves with it, so the look before the next
+    action doesn't take its own Stride for a change; anything else (an HP change from a reaction, someone now out of sight) still counts. */
+async function runStride(combat, id, i, step, tok) {
+  const scene = combat.scene, record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {};
+  const after = async () => { const at = squareOf(tok, scene); await save(combat, id, { seen: { me: { square: at } } });
+    if (!same(at, step.to)) await save(combat, id, { note: `${tok.name} stopped at square ${at[0]}, ${at[1]} instead of ${step.to[0]}, ${step.to[1]}.` }); };
+  const now = nextMove(get(), squareOf(tok, scene), step.to);
+  if (now === "next") return "next";
+  if (now === "arrived") { await record({ moved: { to: squareOf(tok, scene), cost: null } }); await after(); return "next"; }
+  if (now === "ask") { await save(combat, id, { note: `${tok.name} started a Stride and isn't where it was going.` }); return "ask"; }
+  if (!stepGate("stride", id)) return "stopped";
+  if (!(await ensureScene(combat) && tok.object)) throw new Error(cantOpen());
+  const px = scene.grid.size, d = scene.dimensions, action = tok.movementAction, waypoints = step.route.slice(1).map(([x, y]) => ({ x: d.sceneX + x * px, y: d.sceneY + y * px, action }));
+  await record({ started: true });
+  const charged = await watched(async () => {
+    let got = null; const hook = Hooks.on("moveToken", (doc, mv) => { if (doc.id === tok.id) got = { cost: mv.passed?.cost ?? null, x: mv.destination?.x, y: mv.destination?.y }; });
+    try {
+      await tok.move(waypoints);
+      for (let t = 0; t < STEP_MS && !(got && tok.x === got.x && tok.y === got.y); t += 100) await new Promise(res => setTimeout(res, 100));   /* the hook comes before the update lands */
+      await within(tok.object?.movementAnimationPromise ?? Promise.resolve(), 10000, "The move's animation didn't finish.").catch(() => {});   /* cover and sight are read from where the token is drawn */
+      return got;
+    } finally { Hooks.off("moveToken", hook); }
+  });
+  await record({ moved: { to: squareOf(tok, scene), cost: charged?.cost ?? null } });
+  await after();
+  return "next";
+}
 /* what PF2e's own Damage button does, for a named target rather than the selected tokens. Effects that only count for this one hit aren't read. */
 async function applyFromCard(message, roll, target) {
   const context = message.flags.pf2e?.context ?? {}, { origin, keep } = damageOptions(context.options ?? []), actor = target.actor.getContextualClone(origin, []);
@@ -406,10 +476,14 @@ async function runTurn(combat, requestId) {
     if (now.state === "manual") return;
     if (now.hold) return save(combat, requestId, { state: "held", hold: false, note: "Held before the next step." });
     /* look again before an action that hasn't begun. One begun before a reload carries on, never re-planned halfway. */
-    if (!Object.keys(now.log?.[i] ?? {}).length) { const why = lookAgain(combat, now, i, tok); if (why.length) return replan(combat, now, i, why, tok); }
+    if (!Object.keys(now.log?.[i] ?? {}).length) { const why = await lookAgain(combat, now, i, tok); if (why.length) return replan(combat, now, i, why, tok); }
+    let work = null;
     if (step.do === "strike") {
       const target = combat.scene.tokens.get(r.labels[step.target]); if (!target) return save(combat, requestId, { state: "stopped", note: `${step.targetName} is gone.` });
-      let result; try { result = await runStrike(combat, requestId, i, step, tok, target); } catch (e) { console.error(e); result = "ask"; await save(combat, requestId, { note: e.message }); }
+      work = () => runStrike(combat, requestId, i, step, tok, target);
+    } else if (step.do === "stride") work = () => runStride(combat, requestId, i, step, tok);
+    if (work) {
+      let result; try { result = await work(); } catch (e) { console.error(e); result = "ask"; await save(combat, requestId, { note: e.message }); }
       if (result === "stopped") return save(combat, requestId, { state: "stopped" });
       if (result === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} may not have finished. Check the chat and HP, then play the rest yourself.`.trim() });
     }
@@ -422,11 +496,11 @@ async function runTurn(combat, requestId) {
   if (request(combat, requestId).state !== "manual") return save(combat, requestId, { state: "done" });
 }
 /** What changed since the plan was made, or why the next step no longer works. Empty when it can go on. */
-function lookAgain(combat, r, i, tok) {
+async function lookAgain(combat, r, i, tok) {
   if (!r.seen || !tok.object) return [];   /* a request from before 0.4.0 has no baseline */
   const changes = changesSince(r.seen, situationNow(combat, tok, r.labels));
   if (changes.length) return changes;
-  const rest = checkPlan({ steps: (r.plan?.steps ?? []).slice(i) }, gather(combat, r, spentBy(r.steps.slice(0, i))));
+  const rest = checkPlan({ steps: (r.plan?.steps ?? []).slice(i) }, await gather(combat, r, spentBy(r.steps.slice(0, i))));
   return rest.ok ? [] : [{ who: "plan", what: "illegal", reason: rest.reason }];
 }
 /** Drop the rest of the plan and ask again, for the same turn: a new request with a fresh packet, what's done so far, and why. The old one ends there. */
