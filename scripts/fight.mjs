@@ -482,11 +482,18 @@ async function runTurn(combat, requestId) {
   await save(combat, requestId, { state: "running", go: false, hold: false, ...(r.state === "held" || r.state === "stopped" ? { note: null } : {}) });
   const tok = combat.scene.tokens.get(r.tokenId);
   for (let i = r.pos ?? 0; i < r.steps.length; i++) {
-    const now = { ...request(combat, requestId), id: requestId }, step = r.steps[i];   /* a stored request doesn't carry its own id; replan needs it */
+    const now = { ...request(combat, requestId), id: requestId };   /* a stored request doesn't carry its own id; replan needs it */
+    let step = r.steps[i];
     if (now.state === "manual") return;
     if (now.hold) return save(combat, requestId, { state: "held", hold: false, note: "Held before the next step." });
     /* look again before an action that hasn't begun. One begun before a reload carries on, never re-planned halfway. */
-    if (!Object.keys(now.log?.[i] ?? {}).length) { const why = await lookAgain(combat, now, i, tok); if (why.length) return replan(combat, now, i, why, tok); }
+    if (!Object.keys(now.log?.[i] ?? {}).length) {
+      const look = await lookAgain(combat, now, i, tok); if (look.changes.length) return replan(combat, now, i, look.changes, tok);
+      /* a Stride goes by the route just checked: the ground can change under a plan (a wall, someone it can't perceive) without the monster noticing */
+      if (step.do === "stride" && look.next?.do === "stride" && JSON.stringify(look.next.route) !== JSON.stringify(step.route)) {
+        step = { ...step, route: look.next.route, cost: look.next.cost }; r.steps[i] = step; await save(combat, requestId, { steps: r.steps });
+      }
+    }
     let work = null;
     if (step.do === "strike") {
       const target = combat.scene.tokens.get(r.labels[step.target]); if (!target) return save(combat, requestId, { state: "stopped", note: `${step.targetName} is gone.` });
@@ -505,13 +512,13 @@ async function runTurn(combat, requestId) {
   }
   if (request(combat, requestId).state !== "manual") return save(combat, requestId, { state: "done" });
 }
-/** What changed since the plan was made, or why the next step no longer works. Empty when it can go on. */
+/** What changed since the plan was made, or why the next step no longer works (`changes`, empty when it can go on), and the next step as it checks out now (`next`). */
 async function lookAgain(combat, r, i, tok) {
-  if (!r.seen || !tok.object) return [];   /* a request from before 0.4.0 has no baseline */
+  if (!r.seen || !tok.object) return { changes: [] };   /* a request from before 0.4.0 has no baseline */
   const changes = changesSince(r.seen, situationNow(combat, tok, r.labels));
-  if (changes.length) return changes;
+  if (changes.length) return { changes };
   const rest = checkPlan({ steps: (r.plan?.steps ?? []).slice(i) }, await gather(combat, r, spentBy(r.steps.slice(0, i))));
-  return rest.ok ? [] : [{ who: "plan", what: "illegal", reason: rest.reason }];
+  return rest.ok ? { changes: [], next: rest.steps[0] } : { changes: [{ who: "plan", what: "illegal", reason: rest.reason }] };
 }
 /** Drop the rest of the plan and ask again, for the same turn: a new request with a fresh packet, what's done so far, and why. The old one ends there. */
 async function replan(combat, r, i, changes, tok) {
