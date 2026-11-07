@@ -493,7 +493,9 @@ export function fightState(combat = game.combat) {
    flag. It only ever fires on the card's author's browser, and this module always rolls the damage itself: one roller, one card. */
 let pending = null;
 export function onPreCreateMessage(message) { if (pending && message.speaker?.token === pending.tokenId && (pending.all || message.flags?.pf2e?.context?.type === "attack-roll")) message.updateSource({ [`flags.${WORKBENCH}.noAutoDamageRoll`]: true }); }   /* a spell's cards all opt out: its cast card too, which Workbench reads for save spells */
-export function onCreateMessage(message) { if (!pending || message.author?.id !== game.user.id || message.speaker?.token !== pending.tokenId) return; const type = message.flags?.pf2e?.context?.type; (pending.waiters.get(type) ?? pending.waiters.get("*"))?.(message, type); }
+/* PF2e gives a spell's cast card the context type "spell-cast" only when the spell has a check, damage or save; one without (Mist, found live 2026-11-07)
+   has PF2e's casting flag and no context, so that counts as the cast card too */
+export function onCreateMessage(message) { if (!pending || message.author?.id !== game.user.id || message.speaker?.token !== pending.tokenId) return; const type = message.flags?.pf2e?.context?.type ?? (message.flags?.pf2e?.casting ? "spell-cast" : undefined); (pending.waiters.get(type) ?? pending.waiters.get("*"))?.(message, type); }
 const waitFor = type => { const p = new Promise((res, rej) => { const t = setTimeout(() => { pending?.waiters.delete(type); rej(new Error(`No ${type} card came.`)); }, STEP_MS); pending.waiters.set(type, m => { clearTimeout(t); pending.waiters.delete(type); res(m); }); }); p.catch(() => {}); return p; };
 /* the first of several card types: a spell attack's card type isn't pinned down, so take the first attack card that comes */
 const waitForAny = types => { const p = new Promise((res, rej) => { const t = setTimeout(() => { pending?.waiters.delete("*"); rej(new Error(`No ${types.join(" or ")} card came.`)); }, STEP_MS); pending.waiters.set("*", (m, type) => { if (!types.includes(type)) return; clearTimeout(t); pending.waiters.delete("*"); res(m); }); }); p.catch(() => {}); return p; };
@@ -965,7 +967,9 @@ async function placeArea(combat, id, i, step, tok, spell, message) {
   const origin = { name: spell.name, slug: spell.slug, traits: foundry.utils.deepClone(spell.system.traits?.value ?? []), ...(spell.getOriginData?.() ?? {}) };
   const [made] = await scene.createEmbeddedDocuments("Region", [{ name: spell.name, shapes: [shape], levels: canvas.level ? [canvas.level.id] : [], color: game.user.color.toString(),
     highlightMode: "coverage", displayMeasurements: false, visibility: CONST.REGION_VISIBILITY.ALWAYS,
-    flags: { pf2e: { messageId: message?.id ?? null, origin, areaShape: spell.system.area?.type ?? step.area.type }, [ID]: { area: { combat: combat.id, request: id, step: i, mode: step.mode, lasting: !!step.lasting } } } }]);
+    /* Toolbelt's Template Helper opens its "target the tokens in this area?" dialog for any spell area its own user creates; on the runner's page nobody can
+       click it (found live 2026-11-07), and the module targets the creatures itself, so it's told to skip (its own flag, read in its createRegion hook) */
+    flags: { pf2e: { messageId: message?.id ?? null, origin, areaShape: spell.system.area?.type ?? step.area.type }, [TOOLBELT]: { targetHelper: { skip: true } }, [ID]: { area: { combat: combat.id, request: id, step: i, mode: step.mode, lasting: !!step.lasting } } } }]);
   return made;
 }
 /** Instant areas go once they're done (Rhea, 2026-11-07); lasting ones stay for the GM. This drops instant card-mode areas, which the GM resolves from
