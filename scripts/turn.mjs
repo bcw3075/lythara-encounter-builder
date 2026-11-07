@@ -1,9 +1,9 @@
 /* A monster's turn as plain data: what a plan means, whether it's legal, and where a step stands. Pure: no Foundry globals.
-   The glue gathers live values first. Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities and spells so far; the other step kinds come as step 2 goes on. */
+   The glue gathers live values first. Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak and Seek so far; the other step kinds come as step 2 goes on. */
 import { distanceBetween, headingOf } from "./move.mjs";
 import { placeable } from "./area.mjs";
 /** What each step kind costs. An ability's cost is its own (0 for a free action); 1 here is only the fallback. */
-export const COSTS = { strike: 1, stride: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, none: 0 };
+export const COSTS = { strike: 1, stride: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, none: 0 };
 /** A basic save's damage by the target's degree of success, 0 critical failure to 3 critical success: double, full, half, none. Rules: Basic Saving Throws
     (https://2e.aonprd.com/Rules.aspx?ID=2297). */
 export const SAVE_MULT = [2, 1, 0.5, 0];
@@ -14,12 +14,26 @@ export const SAVE_MULT = [2, 1, 0.5, 0];
 export const FOLLOW_UPS = { grab: "grapple", "improved-grab": "grapple", knockdown: "trip", "improved-knockdown": "trip", push: "shove", "improved-push": "shove", pull: "reposition", "improved-pull": "reposition" };
 export const CHECK_WORD = { grapple: "Grapple", trip: "Trip", shove: "Shove", reposition: "Reposition" };
 const SIZES = ["tiny", "sm", "med", "lg", "huge", "grg"];
-const MOVES = ["stride", "step", "crawl"], ONE_SQUARE = ["step", "crawl"];
+const MOVES = ["stride", "step", "crawl", "sneak"], ONE_SQUARE = ["step", "crawl"];
 /** Steps that change only whether the monster is prone, and what they leave it. Rules: Prone (https://2e.aonprd.com/Conditions.aspx?ID=88). */
 export const POSTURES = { stand: false, "drop-prone": true };
-export const WORD = { stride: "Stride", step: "Step", crawl: "Crawl" };
+export const WORD = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak" };
 /** A Step or a Crawl moves 5 ft; one that Foundry would charge more for (a diagonal after an odd number this turn) is refused. Rules: Step https://2e.aonprd.com/Actions.aspx?ID=2304; Crawl (Player Core): prone, Speed 10+, 5 ft, stays prone. */
 export const STEP_FT = 5;
+/** Hide, Sneak and Seek (Rhea, 2026-11-07): PF2e's own action posts its secret card, and the module presses Visioner's own buttons on it, so Visioner alone
+    decides who the monster is hidden from or finds. Rules: Hide (https://2e.aonprd.com/Actions.aspx?ID=62), Sneak (ID 63), Seek (ID 2301). A Seek covers a
+    15-ft burst at a grid corner within 30 ft, or a 30-ft cone from the monster (Angel's default, from the older printed rule; the remaster leaves it to
+    the GM, about 30 ft or less). A Sneak moves up to half its Speed, as Visioner counts it: half, rounded down to 5 ft. */
+export const SEEK = { burst: 15, cone: 30, range: 30 };
+export const sneakSpeed = speed => Math.floor(Math.floor((Number(speed) || 0) / 2) / STEP_FT) * STEP_FT;
+/** Actions that keep a hidden or undetected creature so (Rules: Hide, Sneak: anything other than Hide, Sneak or Step makes it observed). An attack keeps
+    its off-guard for that attack and reveals it after; anything else reveals it just before (Rhea chose this, 2026-11-07). "none" does nothing at all. */
+const KEEPS_HIDDEN = ["hide", "sneak", "step", "none"];
+/** Whether a step is an attack: a Strike, or an ability or spell with the attack trait. */
+export const isAttack = s => s?.do === "strike" || ((s?.do === "ability" || s?.do === "spell") && !!s.attack);
+/** Whether the monster comes out of hiding just before this step (true) or just after it (an attack), or not at all. */
+export const revealsBefore = s => !!s && !KEEPS_HIDDEN.includes(s.do) && !isAttack(s);
+export const revealsAfter = s => isAttack(s);
 const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
 /** "A", "A and B", "A, B and C". */
 export const listWords = (xs = []) => xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`;
@@ -42,14 +56,17 @@ export const listWords = (xs = []) => xs.length < 2 ? xs.join("") : `${xs.slice(
     taking minutes), range (feet, or null for none or unlimited), touch, targets (how many creatures it targets; 0 for none or only itself), area
     ({ type, size } or null), attack (a spell attack roll), save ({ stat, basic } or null), damaging, traits, critText (its text lists what a critical
     success does) }]), allies ({ label: { name, square, size, elev, depth } }: its allies and itself, which a spell may target), saveRows (Toolbelt's Target
-    Helper is on, so a save can be rolled from its rows) and reach (its longest melee reach, for touch spells). */
+    Helper is on, so a save can be rolled from its rows) and reach (its longest melee reach, for touch spells).
+    Hide, Sneak, Seek (2026-11-07): lightAt(square) ("bright" | "dim" | "dark" at a square), concealed (it has the concealed condition); Hide uses
+    coverFrom too. A Sneak goes like a Stride at half Speed; a Seek must be the plan's last step (it is asked again after, with what it found). */
 export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
-  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {};
+  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {};
   const distanceTo = (t, reach) => here && t.square ? distanceBetween({ x: here[0], y: here[1], size: ctx.me.size ?? 1, elev: ctx.me.elev, depth: ctx.me.depth }, { x: t.square[0], y: t.square[1], size: t.size ?? 1, elev: t.elev, depth: t.depth }, { reach }) : t.distance;
   for (const [n, step] of plan.steps.entries()) {
     const at = `Step ${n + 1}`;
     if (!(step.do in COSTS)) return { ok: false, reason: `${at}: I can't do "${step.do}" yet.` };
+    if (sought) return { ok: false, reason: `${at}: a Seek has to be the plan's last step. You are asked again after it, with what it found.` };
     if (step.do === "spell") {
       if (ctx.cantAct) return { ok: false, reason: `${at}: ${ctx.cantAct}` };
       const sp = (ctx.spells ?? []).find(s => s.id === step.item);
@@ -106,12 +123,42 @@ export function checkPlan(plan, ctx) {
       if (!why) return { ok: false, reason: `${at}: Take Cover needs it to be prone, next to a wall or a trunk thick enough to hide behind, or behind standard cover from a creature it sees${moved ? ` (after a move in the same plan only a wall or trunk next to its new square counts, because cover from a square it isn't on yet can't be read)` : ""}.` };
       steps.push({ do: "take-cover", why, ...(why === "cover" ? { from } : {}) }); took = true; tookProne = why === "prone"; last = { do: "take-cover" }; continue;
     }
+    if (step.do === "hide") {
+      /* Rules: Hide needs cover, greater cover or concealment from the creatures it hides from. Visioner checks each creature when it applies the result; this
+         only turns down a Hide with nothing at all to hide behind, from what the monster knows: standard cover from a creature it sees, Taking Cover, its
+         own concealment, or dim light or darkness where it stands. Cover from a square it isn't on yet can't be read, so after a move only a wall or a thick
+         trunk next to it, or the light there, counts. */
+      const light = here && ctx.lightAt ? ctx.lightAt(here) : "bright", size = ctx.me?.size ?? 1;
+      const from = moved ? [] : Object.entries(ctx.coverFrom ?? {}).filter(([, l]) => l === "standard" || l === "greater").map(([k]) => k);
+      const why = from.length ? "cover" : took ? "taking-cover" : ctx.concealed ? "concealed" : light !== "bright" ? light : moved && here && ctx.nearCover?.(here, size) ? "near" : null;
+      if (!why) return { ok: false, reason: `${at}: Hide needs cover or concealment: standard cover from a creature it sees, Taking Cover, being concealed, or dim light or darkness where it stands (it's bright there)${moved ? `; after a move in the same plan only a wall or trunk next to its new square, or the light there, counts` : ""}.` };
+      steps.push({ do: "hide", why, ...(why === "cover" ? { from } : {}) }); last = { do: "hide" }; continue;
+    }
+    if (step.do === "seek") {
+      if (!here) return { ok: false, reason: `${at}: I can't tell where it stands.` };
+      if ((step.at == null) === (step.toward == null)) return { ok: false, reason: `${at}: a Seek needs either "at": [x, y], a grid corner for a ${SEEK.burst}-foot burst within ${SEEK.range} ft, or "toward": [x, y], a square for a ${SEEK.cone}-foot cone from the monster.` };
+      const key = step.at != null ? "at" : "toward", pt = step[key];
+      if (!Array.isArray(pt) || pt.length !== 2 || !pt.every(Number.isInteger)) return { ok: false, reason: `${at}: "${key}" must be [x, y], two whole numbers.` };
+      const n = ctx.me?.size ?? 1;
+      let aim;
+      if (key === "at") {   /* the nearest of the four squares round the corner */
+        const d = Math.min(...[[pt[0] - 1, pt[1] - 1], [pt[0], pt[1] - 1], [pt[0] - 1, pt[1]], [pt[0], pt[1]]].map(q => distanceTo({ square: q, size: 1 }, null)));
+        if (d > SEEK.range) return { ok: false, reason: `${at}: the corner [${pt[0]}, ${pt[1]}] is ${d} ft away, and a Seek's ${SEEK.burst}-foot burst goes within ${SEEK.range} ft.` };
+        aim = { type: "burst", corner: [...pt], size: SEEK.burst };
+      } else {
+        if (pt[0] >= here[0] && pt[0] < here[0] + n && pt[1] >= here[1] && pt[1] < here[1] + n) return { ok: false, reason: `${at}: a Seek's cone points away from the monster, so name a square outside its own space.` };
+        aim = { type: "cone", toward: [...pt], size: SEEK.cone };
+      }
+      steps.push({ do: "seek", aim }); sought = true; last = { do: "seek" }; continue;
+    }
     if (MOVES.includes(step.do)) {
       const word = WORD[step.do], small = ONE_SQUARE.includes(step.do);
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
       if (step.do === "crawl" && !prone) return { ok: false, reason: `${at}: it isn't prone; Crawl is how a prone creature moves, so Stride or Step instead.` };
       if (step.do !== "crawl" && prone) return { ok: false, reason: `${at}: it is prone, so it has to Stand first (a "stand" step, 1 action) before it can ${word}, or Crawl 5 ft.` };
       if (!(ctx.speed > 0)) return { ok: false, reason: `${at}: it has no land Speed.` };
+      const limit = step.do === "sneak" ? sneakSpeed(ctx.speed) : ctx.speed;
+      if (!(limit > 0)) return { ok: false, reason: `${at}: a Sneak moves at half Speed, and half of ${ctx.speed} ft is less than a square.` };
       if (small && ctx.speed < 2 * STEP_FT) return { ok: false, reason: `${at}: a ${word} needs a Speed of at least ${2 * STEP_FT} ft, and its Speed is ${ctx.speed} ft.` };
       if (!Array.isArray(step.to)) return { ok: false, reason: `${at}: a ${word} needs "to", the square to end on.` };
       if (!here || !ctx.route) return { ok: false, reason: `${at}: I can't work out moves here.` };
@@ -119,7 +166,7 @@ export function checkPlan(plan, ctx) {
       const way = ctx.route(here, step.to, routes, { step: small, kind: step.do });
       if (!way.ok) return { ok: false, reason: `${at}: ${way.reason}` };
       if (small && way.cost > STEP_FT) return { ok: false, reason: `${at}: ${step.do === "crawl" ? "crawling" : "stepping"} to [${step.to[0]}, ${step.to[1]}] counts as ${way.cost} ft, and a ${word} moves only ${STEP_FT} ft${way.route?.length === 2 && way.route[0][0] !== way.route[1][0] && way.route[0][1] !== way.route[1][1] ? " (every second diagonal in a turn counts 10 ft)" : ""}.` };
-      if (way.cost > ctx.speed) return { ok: false, reason: `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, more than its Speed of ${ctx.speed} ft.` };
+      if (way.cost > limit) return { ok: false, reason: step.do === "sneak" ? `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, and a Sneak moves at most half its Speed (${limit} ft).` : `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, more than its Speed of ${ctx.speed} ft.` };
       steps.push({ do: step.do, from: [...here], to: [...step.to], route: way.route, cost: way.cost }); routes.push(way.route);
       here = [...step.to]; moved = true; took = tookProne = false; last = { do: step.do }; continue;
     }
@@ -337,6 +384,10 @@ export const OUTCOMES = ["critical miss", "miss", "hit", "critical hit"];
 export const CHECK_OUTCOMES = ["critical failure", "failure", "success", "critical success"];
 /** A finished step as the monster saw it, for the next plan: labels and ids only, and the result shown in chat. */
 export function doneStep(step, rec = {}) {
+  /* Hide and Sneak are secret rolls (Rhea, 2026-11-07, B): the thinker learns what it did, never whether it worked */
+  if (step.do === "hide") return { do: "hide", result: rec.applied ? "hid (whether it worked is secret)" : rec.gm ? "card posted for the GM to apply" : "unknown" };
+  if (step.do === "seek") return { do: "seek", aim: step.aim, result: rec.applied ? "searched: what it perceives now shows what it found" : rec.gm ? "card posted for the GM to apply" : "unknown" };
+  if (step.do === "sneak") { const got = rec.moved?.to; return { do: "sneak", to: step.to, result: `${!got ? "unknown" : same(got, step.to) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]`}${rec.applied ? " (whether it stayed unseen is secret)" : rec.gm ? "; card posted for the GM to apply" : ""}` }; }
   if (isMove(step)) { const got = rec.moved?.to; return { do: step.do, to: step.to, result: !got ? "unknown" : same(got, step.to) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]` }; }
   if (step.do in POSTURES) return { do: step.do, result: rec.changed || rec.stood ? (step.do === "stand" ? "stood" : "dropped") : "unknown" };
   if (step.do === "take-cover") return { do: "take-cover", result: rec.covered ? "took cover" : "unknown" };
@@ -389,6 +440,7 @@ export function describeChange(c, nameOf = l => l, self = "It") {
   switch (c.what) {
     case "moved": return `${who} moved.`;
     case "stopped": return `${who} was stopped at [${c.at?.[0]}, ${c.at?.[1]}], short of where it was going.`;
+    case "sought": return `${who} finished Seeking: what it perceives now shows what it found.`;
     case "hurt": return `${who} was hurt.`;
     case "healed": return `${who} regained HP.`;
     case "actions": return `${its} actions this turn are now ${c.now}.`;
@@ -405,7 +457,9 @@ export const describeChanges = (list = [], nameOf, self) => list.map(c => descri
 /** A resolved step in plain words, for the card. */
 export function describeStep(s) {
   if (s.do === "none") return "Does nothing.";
-  if (isMove(s)) { const way = s.from ? headingOf(s.from, s.to) : ""; return `${WORD[s.do]}s ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}.`; }
+  if (isMove(s)) { const way = s.from ? headingOf(s.from, s.to) : ""; return `${WORD[s.do]}s ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}${s.do === "sneak" ? " (a secret Stealth check; Visioner applies the result)" : ""}.`; }
+  if (s.do === "hide") return `Hides (a secret Stealth check against each creature it has cover or concealment from; Visioner applies the result).`;
+  if (s.do === "seek") return s.aim?.type === "burst" ? `Seeks in a ${s.aim.size}-foot burst from the corner [${s.aim.corner[0]}, ${s.aim.corner[1]}] (a secret Perception check; Visioner applies the result).` : `Seeks in a ${s.aim?.size ?? SEEK.cone}-foot cone toward square ${s.aim?.toward?.[0]}, ${s.aim?.toward?.[1]} (a secret Perception check; Visioner applies the result).`;
   if (s.do === "stand") return "Stands up.";
   if (s.do === "drop-prone") return "Drops prone.";
   if (s.do === "ability") {
@@ -462,6 +516,23 @@ export function nextCover(rec = {}, active = false) {
   if (rec.covered) return "next";
   if (!rec.started) return active ? "already" : "act";
   return "ask";
+}
+/** What to do next with a Hide, Sneak or Seek, from its record. Never repeated: when the record can't tell whether a stage finished, "ask" (or "check", where
+    the card itself can tell: Visioner's Apply button turns into Revert once it has applied). PF2e's own action posts the card with the secret roll
+    ("roll"); "gm" when Visioner's buttons aren't on it, so the GM applies the result from the card. A Sneak then presses Start Sneak ("start", and
+    "check-start" after a reload), moves like a Stride ("move": the glue goes by the move's own record, `started` and `moved`), and applies. A Seek is
+    limited to its area when it applies. rec: rollStarted, card, gm, startStarted, startDone, started, moved, applyStarted, applied. */
+export function nextStealth(rec = {}, kind = "hide") {
+  if (!rec.rollStarted) return "roll";
+  if (!rec.card) return "ask";
+  if (rec.gm) return "gm";
+  if (kind === "sneak") {
+    if (!rec.startStarted) return "start";
+    if (!rec.startDone) return "check-start";
+    if (!rec.moved) return "move";
+  }
+  if (!rec.applyStarted) return "apply";
+  return rec.applied ? "next" : "check";
 }
 /** What to do next with an ability step, from its record. Never repeated: when the record can't tell whether a stage finished, "ask". mode: "check" (a
     follow-up: flat check if any, the check, its effects, then a Trip's critical damage), "hold" or "card" (its card posted). "gm" means done, with something

@@ -115,7 +115,7 @@ export function cutShort(route = [], size = 1, unknown = () => false) {
 
 /** A route's failure in words, for the thinker and the card. Squares stay squares, which is what the thinker plans with. */
 export function routeWords(r, to, speed, kind = "stride") {
-  const sq = `[${to[0]}, ${to[1]}]`, word = { stride: "Stride", step: "Step", crawl: "Crawl" }[kind] ?? "Stride";
+  const sq = `[${to[0]}, ${to[1]}]`, word = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak" }[kind] ?? "Stride";
   switch (r.why) {
     case "same": return `it is already at ${sq}.`;
     case "off": return `${sq} is off the map.`;

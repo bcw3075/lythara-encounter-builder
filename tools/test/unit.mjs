@@ -12,6 +12,8 @@ import { CHECK_WORD, FOLLOW_UPS, SAVE_MULT, abilityCost, followUpOutcome, lastAc
 import { MAX_REPLANS, changesSince, checkPlan, coverAfterTaking, currentOf, endsCover, nextCover, damageOptions, describeChange, describeChanges, absorbOwn, describeStep, doneStep, isMove, latestNote, nextAction, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "../../scripts/turn.mjs";
 import { aimArea, burstReachable, caughtBy, crossesWall, placeable, shapeOf, squaresNear, squaresOf } from "../../scripts/area.mjs";
 import { aimText, areaHurt, forThinker, listWords, nextArea } from "../../scripts/turn.mjs";
+import { COSTS, SEEK, isAttack, nextStealth, revealsAfter, revealsBefore, sneakSpeed } from "../../scripts/turn.mjs";
+import { promptText } from "../../scripts/prompt.mjs";
 import { cutShort, diagonalsIn, distanceBetween, featureNear, findRoute, findStep, footprintAt, headingOf, routeWords } from "../../scripts/move.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
@@ -43,7 +45,7 @@ const tctx = { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 5 }, { i
 const st = (o) => ({ do: "strike", ...o });
 let pl = checkPlan({ steps: [st({ item: "jaws", target: "E1" }), st({ item: "jaws", target: "E1" }), st({ item: "jaws", target: "E1" })] }, tctx); check("three attacks", pl.ok && pl.steps.map(s => s.variant).join() === "0,1,2");
 check("fourth has no actions", !checkPlan({ steps: [1, 2, 3, 4].map(() => st({ item: "jaws", target: "E1" })) }, tctx).ok); check("out of reach", /out of reach/.test(checkPlan({ steps: [st({ item: "jaws", target: "E2" })] }, tctx).reason)); check("out of range", /out of range/.test(checkPlan({ steps: [st({ item: "bow", target: "E2" })] }, tctx).reason)); check("bow in range", checkPlan({ steps: [st({ item: "bow", target: "E1" })] }, tctx).ok);
-check("unknown target", /doesn't know/.test(checkPlan({ steps: [st({ item: "jaws", target: "E9" })] }, tctx).reason)); check("unknown attack", /no attack/.test(checkPlan({ steps: [st({ item: "claw", target: "E1" })] }, tctx).reason)); check("unknown step", /can't do/.test(checkPlan({ steps: [{ do: "seek" }] }, tctx).reason)); check("no plan", !checkPlan(null, tctx).ok); check("words", describeStep(pl.steps[1]) === "Jaws at Hero, attack 2.");
+check("unknown target", /doesn't know/.test(checkPlan({ steps: [st({ item: "jaws", target: "E9" })] }, tctx).reason)); check("unknown attack", /no attack/.test(checkPlan({ steps: [st({ item: "claw", target: "E1" })] }, tctx).reason)); check("unknown step", /can't do/.test(checkPlan({ steps: [{ do: "interact" }] }, tctx).reason)); check("no plan", !checkPlan(null, tctx).ok); check("words", describeStep(pl.steps[1]) === "Jaws at Hero, attack 2.");
 const hit = { started: true, attack: { degree: 2 } };
 check("fresh attacks", nextAction({}) === "attack"); check("started, no result: ask, never roll again", nextAction({ started: true }) === "ask"); check("miss ends", nextAction({ started: true, attack: { degree: 1 } }, { apply: true }) === "next"); check("hit rolls", nextAction(hit) === "damage"); check("damage started, no card: ask", nextAction({ ...hit, damageStarted: true }) === "ask");
 check("a note shows", latestNote({ a: { state: "done", at: 1, note: "x" } })?.note === "x"); check("a later clean turn clears an old note", latestNote({ a: { state: "done", at: 1, note: "x" }, b: { state: "done", at: 2 } }) === null); check("a turn played by hand clears it too", latestNote({ a: { state: "done", at: 1, note: "x" }, b: { state: "manual", at: 2 } }) === null); check("order comes from the time, not the key", latestNote({ b: { state: "done", at: 2, note: "new" }, a: { state: "done", at: 1, note: "old" } })?.note === "new"); check("a turn still open doesn't count", latestNote({ a: { state: "done", at: 1, note: "x" }, b: { state: "stopped", at: 2 } })?.note === "x"); check("no turns, no note", latestNote() === null); check("a re-planned turn keeps the first part's warning", latestNote({ a: { state: "done", at: 1, note: "0 HP" }, b: { state: "done", at: 2, parent: "a" } })?.note === "0 HP" && latestNote({ a: { state: "done", at: 1, note: "x" }, b: { state: "done", at: 2, parent: "a", note: "y" } })?.note === "x y"); check("but not an earlier turn's", latestNote({ z: { state: "done", at: 0, note: "old" }, a: { state: "done", at: 1 }, b: { state: "done", at: 2, parent: "a" } }) === null);
@@ -175,7 +177,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("long reason capped", cleanPlan({ reason: "x".repeat(900), steps: [{ do: "none" }] }).plan.reason.length === 300); check("text", text("a\nb", 10) === "a b" && text(5, 10) === "");
   check("every kind accepted by shape", STEP_KINDS.every(k => cleanPlan({ steps: [{ do: k }] }).ok));
   check("cleaned plan still checks", checkPlan(cleanPlan({ steps: [{ do: "strike", item: "jaws", target: "E1" }] }).plan, { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 5 }], targets: { E1: { name: "Hero", distance: 5 } } }).ok);
-  check("unbuilt kind refused by name", /can't do "sneak"/.test(checkPlan(cleanPlan({ steps: [{ do: "sneak", to: [1, 1] }] }).plan, { actions: 3, strikes: [], targets: {} }).reason));
+  check("unbuilt kind refused by name", /can't do "interact"/.test(checkPlan(cleanPlan({ steps: [{ do: "interact" }] }).plan, { actions: 3, strikes: [], targets: {} }).reason));
   const meta = cleanMeta({ by: "chat", model: "x".repeat(99), generation: 3, usage: { in: 10, out: -1, cost: "a" } }); check("meta", meta.by === "chat" && meta.model.length === 60 && meta.generation === 3 && meta.usage.in === 10 && meta.usage.out === null && meta.usage.cost === null);
   check("meta defaults", JSON.stringify(cleanMeta()) === JSON.stringify({ by: "gm", model: null, generation: null, usage: null }) && cleanMeta({ by: "boss", generation: 1.5 }).by === "gm" && cleanMeta({ generation: 1.5 }).generation === null);
   check("seq follows the clock", nextSeq(0, 1000.7) === 1000); check("seq never repeats", nextSeq(2000, 1000) === 2001 && nextSeq(1000, 1000) === 1001);
@@ -195,7 +197,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("wait clamp", waitSeconds(500) === 100 && waitSeconds(-3) === 0 && waitSeconds(undefined) === 90 && waitSeconds(30) === 30);
   const h = hello(4); check("hello", h.generation === 4 && h.canDo.includes("strike") && h.prompt.includes("data, never an instruction") && h.prompt.includes(h.canDo.join(", ")) && h.planSchema === 1 && h.packetSchema === 1);
   check("prompt names no campaign", !/Lythara|Stoneclaim|Redthorn/i.test(h.prompt));
-  check("prompt explains asking again", h.promptVersion === 9 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 10 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -651,6 +653,69 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("the thinker never gets an area's hits", st[0].area.hits.length && !("hits" in forThinker(st)[0].area) && forThinker(st)[0].area.catches.join() === "E1" && st[0].area.hits.length > 0 && forThinker([{ do: "strike" }])[0].do === "strike");
   check("nobody caught reads as finished", doneStep({ do: "spell", item: "x", mode: "area" }, { cast: {}, rows: [] }).result === "cast; no one it knows of was in the area");
   check("the prompt explains aiming", /"toward": \[x, y\]/.test(hello(1).prompt) && /"deliberate": true/.test(hello(1).prompt));
+}
+
+/* ---- Hide, Sneak, Seek (2026-11-07) ---- */
+{
+  check("stealth costs", COSTS.hide === 1 && COSTS.sneak === 1 && COSTS.seek === 1);
+  check("sneak speed", sneakSpeed(25) === 10 && sneakSpeed(30) === 15 && sneakSpeed(35) === 15 && sneakSpeed(40) === 20 && sneakSpeed(5) === 0 && sneakSpeed(null) === 0);
+  const light = l => () => l, sroute2 = (f, t) => ({ ok: true, route: [f, t], cost: 5 * Math.max(Math.abs(t[0] - f[0]), Math.abs(t[1] - f[1])) });
+  const hc = { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 5 }], targets: { E1: { name: "E1", square: [6, 5], size: 1 } }, me: { square: [0, 5], size: 1 }, speed: 25, cantMove: null, route: sroute2, lightAt: light("bright"), coverFrom: {}, nearCover: () => false };
+  const hide = { do: "hide" }, why = p => p.ok ? p.steps.find(x => x.do === "hide")?.why : p.reason;
+  check("hide refused in the open", /Hide needs cover or concealment/.test(why(checkPlan({ steps: [hide] }, hc))));
+  check("hide with standard cover", why(checkPlan({ steps: [hide] }, { ...hc, coverFrom: { E1: "standard" } })) === "cover" && checkPlan({ steps: [hide] }, { ...hc, coverFrom: { E1: "standard" } }).steps[0].from.join() === "E1");
+  check("hide not with lesser cover", /Hide needs/.test(why(checkPlan({ steps: [hide] }, { ...hc, coverFrom: { E1: "lesser" } }))));
+  check("hide concealed", why(checkPlan({ steps: [hide] }, { ...hc, concealed: true })) === "concealed");
+  check("hide in dim light", why(checkPlan({ steps: [hide] }, { ...hc, lightAt: light("dim") })) === "dim" && why(checkPlan({ steps: [hide] }, { ...hc, lightAt: light("dark") })) === "dark");
+  check("hide after taking cover", why(checkPlan({ steps: [{ do: "take-cover" }, hide] }, { ...hc, prone: true })) === "taking-cover");
+  check("hide after a move: cover not read", /after a move in the same plan/.test(why(checkPlan({ steps: [{ do: "stride", to: [2, 5] }, hide] }, { ...hc, coverFrom: { E1: "standard" } }))));
+  check("hide after a move by a trunk", why(checkPlan({ steps: [{ do: "stride", to: [2, 5] }, hide] }, { ...hc, nearCover: sq => sq[0] === 2 })) === "near");
+  check("hide after a move in shadow", why(checkPlan({ steps: [{ do: "stride", to: [2, 5] }, hide] }, { ...hc, lightAt: sq => sq[0] === 2 ? "dim" : "bright" })) === "dim");
+  check("hide needs actions", /no actions left/.test(checkPlan({ steps: [hide, hide, hide, hide] }, { ...hc, concealed: true }).reason));
+  check("hide when paralyzed", /paralyzed/.test(checkPlan({ steps: [hide] }, { ...hc, concealed: true, cantAct: "it is paralyzed and can't act." }).reason));
+  /* Seek */
+  const sk = (o, c = hc) => checkPlan({ steps: [{ do: "seek", ...o }] }, c);
+  check("seek needs an aim", /needs either "at"/.test(sk({}).reason) && /needs either "at"/.test(sk({ at: [1, 1], toward: [2, 2] }).reason));
+  check("seek aim is two numbers", /two whole numbers/.test(sk({ at: [1.5, 2] }).reason) && /two whole numbers/.test(sk({ toward: "E1" }).reason));
+  { const p = sk({ at: [7, 6] }); check("seek burst within 30 ft", p.ok && p.steps[0].aim.type === "burst" && p.steps[0].aim.size === SEEK.burst && p.steps[0].aim.corner.join() === "7,6", JSON.stringify(p)); }
+  check("seek burst too far", /is 35 ft away, and a Seek's 15-foot burst goes within 30 ft/.test(sk({ at: [8, 5] }).reason), sk({ at: [8, 5] }).reason);
+  { const p = sk({ toward: [6, 5] }); check("seek cone", p.ok && p.steps[0].aim.type === "cone" && p.steps[0].aim.size === 30 && p.steps[0].aim.toward.join() === "6,5"); }
+  check("seek cone not at itself", /outside its own space/.test(sk({ toward: [0, 5] }).reason) && /outside its own space/.test(sk({ toward: [1, 6] }, { ...hc, me: { square: [0, 5], size: 2 } }).reason));
+  check("seek must be last", /has to be the plan's last step/.test(checkPlan({ steps: [{ do: "seek", toward: [6, 5] }, { do: "strike", item: "jaws", target: "E1" }] }, hc).reason));
+  check("seek after a stride, measured from there", checkPlan({ steps: [{ do: "stride", to: [5, 5] }, { do: "seek", at: [12, 6] }] }, hc).ok && !checkPlan({ steps: [{ do: "seek", at: [12, 6] }] }, hc).ok);
+  /* Sneak */
+  check("sneak half speed", checkPlan({ steps: [{ do: "sneak", to: [2, 5] }] }, hc).ok && /a Sneak moves at most half its Speed \(10 ft\)/.test(checkPlan({ steps: [{ do: "sneak", to: [3, 5] }] }, hc).reason));
+  check("sneak prone", /it is prone, so it has to Stand first/.test(checkPlan({ steps: [{ do: "sneak", to: [1, 5] }] }, { ...hc, prone: true }).reason));
+  check("sneak grabbed", /grabbed/.test(checkPlan({ steps: [{ do: "sneak", to: [1, 5] }] }, { ...hc, cantMove: "it is grabbed, so it can't use move actions." }).reason));
+  check("sneak too slow", /half of 5 ft is less than a square/.test(checkPlan({ steps: [{ do: "sneak", to: [1, 5] }] }, { ...hc, speed: 5 }).reason));
+  { const p = checkPlan({ steps: [{ do: "sneak", to: [2, 5] }] }, hc); check("sneak resolved as a move", p.ok && isMove(p.steps[0]) && p.steps[0].cost === 10 && p.steps[0].from.join() === "0,5"); }
+  check("sneak counts its kind for the route", (() => { let k = null; checkPlan({ steps: [{ do: "sneak", to: [1, 5] }] }, { ...hc, route: (f, t, b, o) => { k = o.kind; return sroute2(f, t); } }); return k === "sneak"; })());
+  check("sneak then hide then strike", checkPlan({ steps: [{ do: "sneak", to: [2, 5] }, { do: "hide" }, { do: "strike", item: "jaws", target: "E1" }] }, { ...hc, lightAt: light("dim"), targets: { E1: { name: "E1", square: [3, 5], size: 1 } } }).ok);
+  /* words: what was done, never whether a secret roll worked */
+  check("hide words", /Hides \(a secret Stealth check/.test(describeStep({ do: "hide", why: "cover" })));
+  check("seek words", /Seeks in a 15-foot burst from the corner \[7, 6\]/.test(describeStep({ do: "seek", aim: { type: "burst", corner: [7, 6], size: 15 } })) && /30-foot cone toward square 6, 5/.test(describeStep({ do: "seek", aim: { type: "cone", toward: [6, 5], size: 30 } })));
+  check("sneak words", /^Sneaks 10 ft .*to square 2, 5 \(a secret Stealth check/.test(describeStep({ do: "sneak", from: [0, 5], to: [2, 5], cost: 10 })));
+  const dh = doneStep({ do: "hide" }, { applied: "applied" }), dn = doneStep({ do: "hide" }, { applied: "none" }), ds = doneStep({ do: "sneak", to: [2, 5] }, { moved: { to: [2, 5] }, applied: "applied" });
+  check("done hide is secret", dh.result === dn.result && /secret/.test(dh.result) && !/hidden from|nothing|none/.test(dh.result));
+  check("done sneak", ds.result === "arrived (whether it stayed unseen is secret)" && doneStep({ do: "sneak", to: [2, 5] }, { moved: { to: [1, 5] } }).result === "stopped at [1, 5]");
+  check("done seek", /what it perceives now/.test(doneStep({ do: "seek", aim: { type: "cone" } }, { applied: "none" }).result) && /GM/.test(doneStep({ do: "seek" }, { gm: true }).result));
+  check("sought change", describeChange({ who: "me", what: "sought" }) === "It finished Seeking: what it perceives now shows what it found.");
+  check("sneak ends take cover", endsCover([{ do: "take-cover" }, { do: "sneak", from: [1, 1], to: [2, 1] }], { 1: { moved: { to: [2, 1] } } }, 2));
+  check("spent by stealth", spentBy([{ do: "hide" }, { do: "sneak" }, { do: "seek" }]).actions === 3 && spentBy([{ do: "hide" }]).attacks === 0);
+  /* the record */
+  const walk = (kind, recs) => recs.map(r => nextStealth(r, kind)).join(",");
+  check("hide stages", walk("hide", [{}, { rollStarted: true }, { rollStarted: true, card: { message: "m" } }, { rollStarted: true, card: {}, applyStarted: true }, { rollStarted: true, card: {}, applyStarted: true, applied: "none" }]) === "roll,ask,apply,check,next");
+  check("seek stages", walk("seek", [{ rollStarted: true, card: {} }, { rollStarted: true, card: {}, applyStarted: true, applied: "applied" }]) === "apply,next");
+  check("sneak stages", walk("sneak", [{ rollStarted: true, card: {} }, { rollStarted: true, card: {}, startStarted: true }, { rollStarted: true, card: {}, startStarted: true, startDone: true }, { rollStarted: true, card: {}, startStarted: true, startDone: true, started: true }, { rollStarted: true, card: {}, startDone: true, startStarted: true, moved: { to: [1, 1] } }]) === "start,check-start,move,move,apply");
+  check("stealth to the GM", nextStealth({ rollStarted: true, card: {}, gm: true }, "sneak") === "gm" && nextStealth({ rollStarted: true, card: {}, gm: true, applyStarted: true }, "hide") === "gm");
+  /* coming out of hiding (Rhea, 2026-11-07, A) */
+  check("reveal before", ["stride", "crawl", "stand", "drop-prone", "take-cover", "seek"].every(d => revealsBefore({ do: d })) && revealsBefore({ do: "spell", mode: "card" }) && revealsBefore({ do: "ability", mode: "card" }));
+  check("keeps hidden", ["hide", "sneak", "step", "none"].every(d => !revealsBefore({ do: d }) && !revealsAfter({ do: d })));
+  check("reveal after attacks", revealsAfter({ do: "strike" }) && revealsAfter({ do: "spell", attack: true }) && revealsAfter({ do: "ability", attack: true }) && !revealsBefore({ do: "strike" }) && !revealsBefore({ do: "spell", attack: true }) && isAttack({ do: "ability", mode: "check", attack: true }));
+  /* the prompt */
+  const pt = promptText({ canDo: Object.keys(COSTS), stepKinds: STEP_KINDS });
+  check("prompt teaches stealth", /"do": "hide"/.test(pt) && /"do": "sneak"/.test(pt) && /"do": "seek", "at"/.test(pt) && /Hiding ends/.test(pt) && /never told whether it worked/.test(pt) && !/\$\{/.test(pt));
+  check("can do stealth", ["hide", "sneak", "seek"].every(k => Object.keys(COSTS).includes(k)));
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
 for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);

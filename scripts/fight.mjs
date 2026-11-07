@@ -1,7 +1,7 @@
 /* A fight's turns. One named account does the work (the runner: the Claude Bridge unless the setting says otherwise), on its own page with the
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
-   summarised chat loses nothing. For now it runs Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities and spells; see claude/encounter-builder-plan.md for the rest of step 2. */
-import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES, WORD, absorbOwn, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "./turn.mjs";
+   summarised chat loses nothing. For now it runs Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak and Seek; see claude/encounter-builder-plan.md for the rest of step 2. */
+import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES, WORD, absorbOwn, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds } from "./turn.mjs";
 import { cutShort, diagonalsIn, featureNear, findRoute, findStep, footprintAt, routeWords } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap } from "./builder.mjs";
@@ -188,6 +188,10 @@ async function buildPacket(combat, tok, turn = {}) {
   const book = await spellBook(a); if (book.length) you.spells = spellsOf(book);
   const cover = visionerApi();
   you.takeCover = { taking: takingCover(tok), nextToCover: nearCoverFor(scene)(square, sizeOf(tok)), standardCoverFrom: cover ? others.filter(o => SEES.includes(o.state) && labels[o.id] && STANDARD.includes(coverOf(cover, o.token, tok))).map(o => labels[o.id]) : [] };
+  /* what it knows of its own stealth (Rhea, 2026-11-07, B): what it last tried and whether it is still hiding, the light where it stands, its own
+     concealment and who it has standard cover from; never whether a secret roll worked */
+  const tried = t.stealth?.[tok.id] ?? null;
+  you.stealth = { lastTried: tried ? `${tried.did === "sneak" ? "Sneaked" : "Hid"} in round ${tried.round}, and hasn't come out of hiding since` : null, light: lightOn(tok.object.center, scene), concealed: !!a.hasCondition?.("concealed"), standardCoverFrom: you.takeCover.standardCoverFrom };
   const packet = packetOf({ you, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], ground: groundAround(model, square, GROUND_RADIUS),
     allies: allies.map(x => ({ label: labels[x.id], name: x.name, square: squareOf(x, scene), healthWord: wordsFor(x.actor), conditions: visibleConditions(conditionsOn(x.actor)) })),
     others: others.map(o => ({ id: o.id, state: o.state, label: labels[o.id], square: o.square, size: o.token.actor.size, distance: o.distance, gear: gearOf(o.token.actor), conditions: visibleConditions(conditionsOn(o.token.actor)), healthWord: wordsFor(o.token.actor), cover: cover?.getAutoCoverState?.(tok.object, o.token.object) ?? "none" })) });
@@ -304,6 +308,8 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
   return { actions: Math.max(0, actionsOf(actor, combat) - (req.spent ?? 0) - used.actions), attacksBefore: (req.attacks ?? 0) + used.attacks, strikes, targets,
     me: { square: squareOf(tok, scene), size: sizeOf(tok), ...heightOf(tok), cat: actor.size ?? null }, speed, cantAct: cantAct(actor), cantMove: cantMove(actor), cantAttack: cantAttack(actor), prone: !!actor.hasCondition?.("prone"), route,
     tookCover: takingCover(tok), coverFrom, nearCover: nearCoverFor(scene),
+    /* Hide: the light at a square (where it stands, or will after a move) and its own concealment */
+    lightAt: sq => { const px = scene.grid.size, d = scene.dimensions, n = sizeOf(tok); return lightOn({ x: d.sceneX + (sq[0] + n / 2) * px, y: d.sceneY + (sq[1] + n / 2) * px }, scene); }, concealed: !!actor.hasCondition?.("concealed"),
     /* abilities, and its last action before this plan (a Grab or Knockdown needs it): the step just done, or the last thing done before a re-plan */
     abilities: abilityList(actor).map(({ item, ...a }) => a), last: lastAction({ ...(before ?? { done: req.done?.at(-1) ?? null }), strikes }),
     /* spells: what it can cast now, and for a spell at a friend its allies (not hidden by the GM) and itself, by their labels */
@@ -347,7 +353,7 @@ function cantAttack(actor) { return actor.hasCondition?.("restrained") ? "it is 
     Restrained creatures are Immobilized. Grabbed and Restrained are named first because PF2e adds Immobilized with them, and the cause is what the reader
     needs. Prone (Stand first) and no land Speed are checkPlan's, because a Stand earlier in the plan changes the first. */
 function cantMove(actor) {
-  for (const c of ["restrained", "grabbed", "immobilized"]) if (actor.hasCondition?.(c)) return `it is ${c}, so it can't use move actions (Stride, Step, Crawl, Stand or Drop Prone).`;
+  for (const c of ["restrained", "grabbed", "immobilized"]) if (actor.hasCondition?.(c)) return `it is ${c}, so it can't use move actions (Stride, Step, Crawl, Sneak, Stand or Drop Prone).`;
   return null;
 }
 /** The movement action a move is sent and priced with: crawl for a Crawl (a prone token can't walk); otherwise the token's own, except never crawl for a
@@ -808,6 +814,119 @@ async function runAbility(combat, id, i, step, tok, target) {
    through Toolbelt's own buttons. A basic save's damage is applied by degree. Anything else a spell does is the GM's, from its card. */
 const ownerOnline = actor => game.users.some(u => !u.isGM && u.active && actor?.testUserPermission?.(u, "OWNER"));
 /** The degree of a creature's save on a spell's card, from Toolbelt's row (its flag, which Workbench reads too), or null. */
+/* ---------- Hide, Sneak and Seek ---------- */
+/* Rhea, 2026-11-07: PF2e's own action posts the secret card, and the module presses Visioner's own buttons on it on this page (Apply Changes; Start Sneak
+   before a Sneak's move), so Visioner alone decides who the monster is hidden from or finds, what each creature's cover and concealment allow, and the
+   off-guard; the GM can Revert from the card. The card's buttons are Visioner's markup (`data-action` apply-now-hide, apply-now-seek, start-sneak,
+   apply-now-sneak, apply-now-consequences in 8.14.17): if they aren't there (Visioner off, or an update changed its card), the step goes to the GM.
+   Visioner checks every creature on the map for a Seek unless its card names an area, so the module writes the Seek's area into Visioner's own flag on
+   the card (`seekTemplate`: a circle by straight distance, or a cone by angle, tested on each token's centre). Visioner's Start Sneak records every
+   creature's start as hidden when its automatic system is off (it calls TokenDocument#canObserve, which Foundry 14 doesn't have, found 2026-11-07), so the
+   module puts Visioner's own stored states back on the card before the move. */
+const HIDDEN = ["hidden", "undetected", "unnoticed"], STEALTH_WORD = { hide: "Hide", sneak: "Sneak", seek: "Seek" };
+const sleep = ms => new Promise(res => setTimeout(res, ms));
+const cardEl = id => ui.chat?.element?.querySelector?.(`[data-message-id="${id}"]`) ?? null;
+async function cardButton(id, action, ms = 3000) { for (let t = 0; t <= ms; t += 100) { const b = cardEl(id)?.querySelector?.(`[data-action="${action}"]`); if (b) return b; await sleep(100); } return null; }
+const press = b => b.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+/** Press Visioner's Apply Changes on a card and wait for its answer: "applied" (the button became Revert), "none" (Visioner found nothing to change), or
+    null if the button isn't there. Visioner marks the button "processing" while it works and takes that off when it's done. */
+async function applyOnCard(id, kind) {
+  const b = await cardButton(id, `apply-now-${kind}`); if (!b) return null;
+  press(b);
+  for (let t = 0; t < STEP_MS; t += 100) {
+    await sleep(100);
+    if (cardEl(id)?.querySelector?.(`[data-action="revert-now-${kind}"]`)) return "applied";
+    const a = cardEl(id)?.querySelector?.(`[data-action="apply-now-${kind}"]`); if (t >= 300 && a && !a.classList.contains("processing")) return "none";
+  }
+  throw new Error(`Visioner's ${kind} result didn't come within ${STEP_MS / 1000} seconds.`);
+}
+/** A Seek's area in Visioner's own terms: a circle at a grid corner, or a cone from the monster's centre toward a square's centre. */
+function seekArea(aim, tok, scene) {
+  const px = scene.grid.size, d = scene.dimensions, at = sq => ({ x: d.sceneX + sq[0] * px, y: d.sceneY + sq[1] * px });
+  if (aim.type === "burst") return { center: at(aim.corner), radiusFeet: aim.size, templateType: "circle", hasTargets: true };
+  const c = tok.object.center, to = at([aim.toward[0] + .5, aim.toward[1] + .5]);
+  return { center: { x: c.x, y: c.y }, radiusFeet: aim.size, templateType: "cone", geometry: { direction: Math.atan2(to.y - c.y, to.x - c.x) * 180 / Math.PI, angle: 90 }, hasTargets: true };
+}
+/** Put Visioner's own stored states back as a Sneak's start, where its Start Sneak recorded something else. */
+async function fixSneakStart(message, tok) {
+  const vis = visionerApi(), f = message.flags?.[VISIONER] ?? {}, change = {};
+  for (const [oid, st] of Object.entries(f.sneakStartStates ?? {})) {
+    let real; try { real = vis.getVisibility(oid, tok.id) ?? "observed"; } catch { real = "observed"; }
+    if (st?.visibility === real) continue;
+    change[`flags.${VISIONER}.sneakStartStates.${oid}.visibility`] = real;
+    if (f.startStates?.[oid]) change[`flags.${VISIONER}.startStates.${oid}.visibility`] = real;
+  }
+  if (Object.keys(change).length) await message.update(change);
+  return Object.keys(change).length;
+}
+async function runStealth(combat, id, i, step, tok) {
+  const record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {}, kind = step.do, word = STEALTH_WORD[kind];
+  const toGm = async (why) => { await record({ gm: true }); await addNote(combat, id, `${why} ${kind === "sneak" ? `Press Start Sneak on its card, move ${tok.name} to square ${step.to[0]}, ${step.to[1]}, then apply its results` : `Apply its results from its card${kind === "seek" ? ` (only creatures in the ${step.aim.size}-foot ${step.aim.type} it searched)` : ""}`}.`); return "gm"; };
+  for (let guard = 0; guard < 10; guard++) {
+    const now = nextStealth(get(), kind);
+    if (now === "next") return "next";
+    if (now === "gm") return "gm";
+    if (now === "ask") { await addNote(combat, id, `${tok.name}'s ${word} card may not have been posted.`); return "ask"; }
+    if (now === "move") { const moved = await runStride(combat, id, i, step, tok); if (moved !== "next") return moved; continue; }
+    if (!stepGate(`${kind}-${now}`, id)) return "stopped";
+    if (!(await ensureScene(combat) && tok.object)) throw new Error(cantOpen());
+    const msgId = get().card?.message, message = msgId ? game.messages.get(msgId) : null;
+    if (now === "roll") {
+      await record({ rollStarted: true });
+      pending = { tokenId: tok.id, waiters: new Map() };
+      let card; try { card = await watched(async () => { const c = waitForAny(["skill-check", "perception-check"]); await game.pf2e.actions.get(kind).use({ actors: [tok.actor], event: clickWith("showCheckDialogs") }); return c; }); }
+      finally { pending = null; }
+      await record({ card: { message: card.id } });
+      if (!visionerApi()) return toGm(`Visioner is off, so the module can't apply ${tok.name}'s ${word}.`);
+    } else if (now === "start" || now === "check-start") {
+      if (!message) return toGm(`${tok.name}'s ${word} card is gone.`);
+      if (now === "start") {
+        const b = await cardButton(msgId, "start-sneak"); if (!b && !message.flags?.[VISIONER]?.sneakStartStates) return toGm(`Visioner's Start Sneak isn't on ${tok.name}'s Sneak card.`);
+        await record({ startStarted: true });
+        if (b) press(b);
+      }
+      for (let t = 0; t < STEP_MS && !game.messages.get(msgId)?.flags?.[VISIONER]?.sneakStartStates; t += 100) await sleep(100);
+      if (!game.messages.get(msgId)?.flags?.[VISIONER]?.sneakStartStates) { await addNote(combat, id, `Visioner's Start Sneak didn't record ${tok.name}'s start.`); return "ask"; }
+      await fixSneakStart(game.messages.get(msgId), tok);
+      await record({ startDone: true });
+    } else if (now === "apply" || now === "check") {
+      if (!message) return toGm(`${tok.name}'s ${word} card is gone.`);
+      if (now === "check") {   /* begun before a reload: the card says whether Visioner applied it */
+        if (await cardButton(msgId, `revert-now-${kind}`, 1500)) { await record({ applied: "applied" }); await rememberStealth(combat, tok, kind); continue; }
+        await addNote(combat, id, `I can't tell whether Visioner applied ${tok.name}'s ${word}.`); return "ask";
+      }
+      if (kind === "seek") await message.update({ [`flags.${VISIONER}.seekTemplate`]: seekArea(step.aim, tok, combat.scene) });   /* before the button: Visioner reads it when pressed */
+      if (!(await cardButton(msgId, `apply-now-${kind}`))) return toGm(`Visioner's Apply Changes isn't on ${tok.name}'s ${word} card.`);
+      await record({ applyStarted: true });
+      const got = await watched(() => applyOnCard(msgId, kind));
+      if (!got) { await addNote(combat, id, `Visioner's Apply Changes went from ${tok.name}'s ${word} card before it was pressed.`); return "ask"; }
+      await record({ applied: got });
+      await rememberStealth(combat, tok, kind);
+    }
+  }
+  return "ask";
+}
+/** What the monster knows it last did to hide, for its packet; forgotten once it comes out of hiding. A Seek isn't hiding. */
+async function rememberStealth(combat, tok, kind) { if (kind !== "seek") await saveTurns(combat, { [`stealth.${tok.id}`]: { did: kind, round: combat.round } }); }
+/** Who it is hidden from or undetected by in Visioner now: other creatures that aren't its allies and aren't hidden by the GM. */
+function hiddenFromWho(tok) {
+  const vis = visionerApi(); if (!vis) return [];
+  return tok.parent.tokens.contents.filter(t => { if (t.id === tok.id || t.hidden || !t.object || !t.actor?.isOfType?.("creature") || t.actor.isAllyOf?.(tok.actor)) return false;
+    try { return HIDDEN.includes(vis.getVisibility(t.id, tok.id)); } catch { return false; } });
+}
+/** Out of hiding (Rhea, 2026-11-07, A): a hidden or undetected monster becomes observed by those creatures just before an action other than Hide, Sneak
+    or Step, and after an attack (which keeps its off-guard for that attack). After an attack Visioner's own Attack Consequences on its card goes first;
+    otherwise Visioner's public setVisibility. The GM can hide it again in Visioner's manager. With Visioner's automatic system on, Visioner decides. */
+async function comeOut(combat, id, tok, why, cardId = null) {
+  const who = hiddenFromWho(tok); if (!who.length) return;
+  if (game.settings.get(VISIONER, "autoVisibilityEnabled")) return addNote(combat, id, `${tok.name} was hidden before ${why}; Visioner's automatic visibility decides whether it still is.`);
+  let left = who;
+  if (cardId) { try { if (await applyOnCard(cardId, "consequences")) left = hiddenFromWho(tok); } catch (e) { console.warn(`${ID} | consequences`, e); } }
+  const vis = visionerApi(); for (const t of left) await vis.setVisibility(t.id, tok.id, "observed");
+  await saveTurns(combat, { [`stealth.${tok.id}`]: foundry.data.operators.ForcedDeletion.create() });
+  await addNote(combat, id, `${tok.name} was hidden from ${listWords(who.map(t => t.name))}, and ${why} makes it observed by them (hide it again in Visioner's manager to allow a quiet action).`);
+}
+const actWords = step => step.do === "stride" ? "its Stride" : step.do === "crawl" ? "its Crawl" : step.do === "stand" ? "standing up" : step.do === "drop-prone" ? "dropping prone" : step.do === "take-cover" ? "Taking Cover" : step.do === "seek" ? "its Seek" : step.do === "spell" ? `casting ${step.itemName}` : step.do === "ability" ? `using ${step.itemName}` : step.do === "strike" ? `its ${step.itemName}` : "acting";
 function savedDegree(message, tokenId) {
   for (const v of Object.values(message?.flags?.[TOOLBELT]?.targetHelper?.saveVariants ?? {})) { const s = v?.saves?.[tokenId]; if (s?.success in DEGREE) return DEGREE[s.success]; }
   return null;
@@ -1140,6 +1259,8 @@ async function runTurn(combat, requestId) {
       if (step.do === "ability" && look.next?.do === "ability" && (look.next.mode !== step.mode || look.next.target !== step.target)) { step = look.next; r.steps[i] = step; await save(combat, requestId, { steps: r.steps }); }
       /* an area as it checks out now: where it stands and who it catches */
       if (step.do === "spell" && step.area?.aim && look.next?.do === "spell" && JSON.stringify(look.next.area) !== JSON.stringify(step.area)) { step = look.next; r.steps[i] = step; await save(combat, requestId, { steps: r.steps }); }
+      /* out of hiding just before anything but Hide, Sneak, Step or an attack (Rhea, 2026-11-07, A) */
+      if (revealsBefore(step)) await comeOut(combat, requestId, tok, actWords(step)).catch(e => console.warn(`${ID} | out of hiding`, e));
     }
     let work = null;
     if (step.do === "strike") {
@@ -1154,14 +1275,18 @@ async function runTurn(combat, requestId) {
     } else if (step.do === "spell") {
       const tid = step.target ? tokenIdOf(combat, r, step.target) : null, target = tid ? combat.scene.tokens.get(tid) : null; if (step.target && !target) return save(combat, requestId, { state: "stopped", note: `${step.targetName} is gone.` });
       work = step.area?.aim ? () => runArea(combat, requestId, i, step, tok) : () => runSpell(combat, requestId, i, step, tok, target);
-    }
+    } else if (step.do in STEALTH_WORD) work = () => runStealth(combat, requestId, i, step, tok);
     if (work) {
       let result; try { result = await work(); } catch (e) { console.error(e); result = "ask"; await save(combat, requestId, { note: e.message }); }
       if (result === "stopped") return save(combat, requestId, { state: "stopped" });
       /* a save the player rolls: the turn waits, with no timer, until their row on the spell's card has it (or the GM presses Roll it for them) */
       if (result === "wait") return save(combat, requestId, { state: request(combat, requestId).state === "manual" ? "manual" : "saves" });
-      if (result === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} may not have finished. ${isMove(step) ? "Put the monster where it should be" : step.do in POSTURES ? "Check whether it is prone" : step.do === "take-cover" ? "Check whether it is Taking Cover" : step.do === "ability" ? "Check the chat, HP and conditions" : step.do === "spell" ? "Check the chat, the spell's slot or use, HP and conditions" : "Check the chat and HP"}, then play the rest yourself.`.trim() });
+      if (result === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} may not have finished. ${isMove(step) ? "Put the monster where it should be" : step.do in POSTURES ? "Check whether it is prone" : step.do === "take-cover" ? "Check whether it is Taking Cover" : step.do === "ability" ? "Check the chat, HP and conditions" : step.do === "spell" ? "Check the chat, the spell's slot or use, HP and conditions" : step.do in STEALTH_WORD ? `Check its ${STEALTH_WORD[step.do]} card and apply Visioner's results if they aren't${step.do === "sneak" ? ", and where it stands" : ""}` : "Check the chat and HP"}, then play the rest yourself.`.trim() });
+      /* an attack from hiding: the target was off-guard to it, and now it is observed (Visioner's Attack Consequences on its card, or the module) */
+      if (revealsAfter(step)) await comeOut(combat, requestId, tok, actWords(step), request(combat, requestId).log?.[i]?.attack?.message ?? null).catch(e => console.warn(`${ID} | out of hiding`, e));
       await settleCover(combat, requestId, i + 1, tok, i);   /* its own attack or move ends a Take Cover */
+      /* a Seek ends the plan: ask again with what it found, while it has actions left (replan ends the turn otherwise) */
+      if (step.do === "seek" && result !== "gm" && request(combat, requestId).state !== "manual") { await save(combat, requestId, { pos: i + 1, coverSettled: i + 1 }); return replan(combat, { ...request(combat, requestId), id: requestId }, i + 1, [{ who: "me", what: "sought" }], tok); }
       /* a Stride, Step or Crawl that ended short of its square: the rest was planned from there, so ask again (the reason names the square, never what stopped it) */
       const at = squareOf(tok, combat.scene);
       if (isMove(step) && !same(at, step.to) && i + 1 < r.steps.length && request(combat, requestId).state !== "manual") return replan(combat, { ...request(combat, requestId), id: requestId }, i + 1, [{ who: "me", what: "stopped", at }], tok);
