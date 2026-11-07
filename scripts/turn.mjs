@@ -10,7 +10,7 @@ const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
 /** Check a plan against what the glue gathered. Returns { ok: true, steps } with each step resolved, or { ok: false, reason }.
     ctx: { actions (left this turn), attacksBefore (attacks already made this turn, for the multiple attack penalty), strikes: [{ id, name, reach, ranged, maxRange }],
     targets: { label: { name, square, size, elev, depth, flat } or { name, distance, flat } }, me: { square, size, elev, depth }, speed (land), cantAct (why it can't act at all, or null),
-    cantMove (why it can't use any move action, Stand included: grabbed, immobilized, restrained; or null), prone (whether it starts the plan prone),
+    cantMove (why it can't use any move action, Stand included: grabbed, immobilized, restrained; or null), cantAttack (why it can't Strike, or null), prone (whether it starts the plan prone),
     route(from, to, before, { step }) → { ok, route, cost } or { ok: false, reason }, before being the routes of this plan's earlier moves (the diagonal count
     runs across the turn), step asking for a single 5-ft Step rather than a Stride }. Only what the monster perceives is in targets. A Stride or Step moves
     where later steps are measured from; a Stand ends Prone for the rest of the plan. Names here are labels when the reason goes to the thinker. */
@@ -46,6 +46,7 @@ export function checkPlan(plan, ctx) {
       steps.push({ do: step.do, from: [...here], to: [...step.to], route: way.route, cost: way.cost }); routes.push(way.route);
       here = [...step.to]; continue;
     }
+    if (ctx.cantAttack) return { ok: false, reason: `${at}: ${ctx.cantAttack}` };
     const s = ctx.strikes.find(x => x.id === step.item); if (!s) return { ok: false, reason: `${at}: it has no attack called "${step.item}".` };
     const t = ctx.targets[step.target]; if (!t) return { ok: false, reason: `${at}: it doesn't know of "${step.target}".` };
     const where = steps.some(x => MOVES.includes(x.do)) ? ` from [${here[0]}, ${here[1]}]` : "";
@@ -150,10 +151,11 @@ export function nextMove(rec = {}, at = null, to = null) {
   return same(at, to) ? "arrived" : "ask";
 }
 /** What to do next with a Stand. Its card is posted and Prone removed in one go, so a Stand begun before a reload is never sent again: if the monster
-    is no longer prone it counts as done; still prone, the GM looks. */
+    is no longer prone it counts as done; still prone, the GM looks. Not begun and no longer prone (something stood it up first): done, with nothing
+    posted. */
 export function nextStand(rec = {}, prone = true) {
   if (rec.stood) return "next";
-  if (!rec.started) return "stand";
+  if (!rec.started) return prone ? "stand" : "stood";
   return prone ? "ask" : "stood";
 }
 /** This turn's unfinished request. By round and combatant, not turn number: an initiative change can move the number during the turn. */

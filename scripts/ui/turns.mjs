@@ -1,5 +1,5 @@
 /* The Monster Turns window: GM only. Who's ticked, and the plan card for the turn in hand. PF2e HUD's tracker is left alone. */
-import { describeChanges, describeStep } from "../turn.mjs";
+import { describeChanges, describeStep, isMove } from "../turn.mjs";
 import { esc } from "../journal.mjs";
 import { describeKnows } from "../perceive.mjs";
 import { ID } from "../builder.mjs";
@@ -23,7 +23,7 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     if (r) { const tok = c.scene.tokens.get(r.tokenId), pos = r.pos ?? 0, n = r.steps?.length ?? 0, knows = describeKnows(r.packet, nameOf);
       const words = { requested: r.why ? "Asked again: waiting for a new plan." : "Waiting for a plan.", submitted: "Checking the plan.", ready: pos ? `Step ${pos + 1} of ${n} next.` : "Ready.", running: "Carrying it out.", held: "Held.", stopped: "Stopped." }[r.state] ?? r.state;
       const strikeName = id => r.packet?.you?.strikes?.find(x => x.id === id)?.name ?? id;
-      const done = (r.done ?? []).map(d => d.do === "strike" ? `${strikeName(d.item)} at ${nameOf(d.target) ?? d.target} (${d.result})` : d.do === "stride" || d.do === "step" ? `${d.do === "step" ? "Step" : "Stride"} to square ${d.to?.[0]}, ${d.to?.[1]} (${d.result})` : d.do === "stand" ? `Stand (${d.result})` : d.do).join(", ");
+      const done = (r.done ?? []).map(d => d.do === "strike" ? `${strikeName(d.item)} at ${nameOf(d.target) ?? d.target} (${d.result})` : isMove(d) ? `${d.do === "step" ? "Step" : "Stride"} to square ${d.to?.[0]}, ${d.to?.[1]} (${d.result})` : d.do === "stand" ? `Stand (${d.result})` : d.do).join(", ");
       const steps = r.steps ? `<ol>${r.steps.map((s, i) => `<li class="${i < pos ? "leb-done" : i === pos && r.state !== "requested" ? "leb-next" : ""}">${i < pos ? "✓ " : ""}${esc(named(describeStep(s)))}</li>`).join("")}</ol>` : "";
       const go = pos ? `<i class="fa-solid fa-forward-step"></i> Next step` : `<i class="fa-solid fa-play"></i> Do it`;
       card = `<div class="leb-card" data-request="${r.id}"><b>${esc(tok?.name)}</b>: ${esc(words)}${r.why ? `<p class="leb-warn">${esc(named(describeChanges(r.why, nameOf, tok?.name ?? "It")))}</p>` : ""}${done ? `<p>Done this turn: ${esc(done)}.</p>` : ""}${knows ? `<p>${esc(knows)}</p>` : ""}${r.plan?.reason ? `<p>${esc(r.plan.reason)}</p>` : ""}${steps}${r.verdict ? `<p class="leb-warn">${esc(named(r.verdict))}</p>` : ""}${deaf}${r.note ? `<p class="leb-warn">${esc(named(r.note))}</p>` : ""}<div class="leb-btns">${["ready", "held", "stopped"].includes(r.state) && !r.go ? `<button type="button" data-do="doit" ${problem ? "disabled" : ""}>${go}</button>` : ""}${r.state === "running" ? `<button type="button" data-do="hold"><i class="fa-solid fa-hand"></i> Hold</button>` : ""}<button type="button" data-do="manual"><i class="fa-solid fa-user"></i> Play it myself</button></div></div>`; }

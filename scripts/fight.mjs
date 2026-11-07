@@ -95,6 +95,9 @@ function abilitiesOf(actor) { return (actor.itemTypes?.action ?? []).map(i => ({
 function tacticsOf(scene, tok) { const page = game.journal.get(scene.getFlag(ID, "build")?.entry)?.pages.find(p => p.name === "Tactics"); return page ? tacticsFor(page.text?.content, tok.getFlag(ID, "group"), localize) : null; }
 /* Allies know where each other are, by default. */
 function alliesOf(scene, tok) { return scene.tokens.contents.filter(t => t.id !== tok.id && t.actor?.isOfType?.("creature") && t.actor.isAllyOf?.(tok.actor)); }
+/** What its next diagonal costs this turn, 5 or 10 ft: the 5-10 count runs across all its movement in the turn (Rules ID 444), and Foundry keeps that
+    movement as the token's history until the turn changes. The thinker can't see the history, so the packet says it. */
+function nextDiagonalFt(tok, scene) { const px = scene.grid.size, d = scene.dimensions; return diagonalsIn((tok.movementHistory ?? []).map(w => [Math.round((w.x - d.sceneX) / px), Math.round((w.y - d.sceneY) / px)])) % 2 ? 10 : 5; }
 /** A monster's packet as things stand, plus the labels it needs. Writes nothing. turn: what this turn already used ({ spent, attacks, done, note }), on a re-plan. */
 async function buildPacket(combat, tok, turn = {}) {
   const scene = combat.scene, t = turns(combat), memory = t.memory?.[tok.id] ?? {}, others = sense(combat, tok, memory), allies = alliesOf(scene, tok);
@@ -102,7 +105,7 @@ async function buildPacket(combat, tok, turn = {}) {
   const fresh = { ...assignLabels(labels, known.map(o => o.id), "E"), ...assignLabels(labels, [tok.id, ...allies.map(a => a.id)], "M") }; Object.assign(labels, fresh);
   const { model } = await readMap(scene), a = tok.actor, h = a.hitPoints, square = squareOf(tok, scene);
   const speeds = a.system.movement?.speeds ?? {}, extra = Object.fromEntries(["fly", "swim", "climb", "burrow"].filter(k => speeds[k]?.value).map(k => [k, speeds[k].value]));
-  const you = { label: labels[tok.id], name: tok.name, square, size: a.size, actionsLeft: Math.max(0, actionsOf(a, combat) - (turn.spent ?? 0)), attacksMade: turn.attacks ?? 0, hp: `${h.value}/${h.max}`, speed: speeds.land?.value ?? 0, ...(Object.keys(extra).length ? { speeds: extra } : {}), conditions: (a.conditions?.active ?? []).map(c => c.value ? `${c.slug} ${c.value}` : c.slug), strikes: await strikesOf(a), abilities: abilitiesOf(a), tactics: tacticsOf(scene, tok) };
+  const you = { label: labels[tok.id], name: tok.name, square, size: a.size, nextDiagonal: nextDiagonalFt(tok, scene), actionsLeft: Math.max(0, actionsOf(a, combat) - (turn.spent ?? 0)), attacksMade: turn.attacks ?? 0, hp: `${h.value}/${h.max}`, speed: speeds.land?.value ?? 0, ...(Object.keys(extra).length ? { speeds: extra } : {}), conditions: (a.conditions?.active ?? []).map(c => c.value ? `${c.slug} ${c.value}` : c.slug), strikes: await strikesOf(a), abilities: abilitiesOf(a), tactics: tacticsOf(scene, tok) };
   const cover = game.modules.get(VISIONER)?.active ? game.modules.get(VISIONER).api : null;
   const packet = packetOf({ you, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], ground: groundAround(model, square, GROUND_RADIUS),
     allies: allies.map(x => ({ label: labels[x.id], name: x.name, square: squareOf(x, scene), healthWord: wordsFor(x.actor), conditions: visibleConditions(conditionsOn(x.actor)) })),
@@ -202,7 +205,7 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
   const speed = landSpeed(actor); let route = null;
   if (moves) { try { route = await mover(combat, tok, speed, knownTo(combat, tok, [...now.values()])); } catch (e) { console.error(`${ID} | moves`, e); const why = `I couldn't work out moves here (${e.message}).`; route = () => ({ ok: false, reason: why }); } }
   return { actions: Math.max(0, actionsOf(actor, combat) - (req.spent ?? 0) - used.actions), attacksBefore: (req.attacks ?? 0) + used.attacks, strikes, targets,
-    me: { square: squareOf(tok, scene), size: sizeOf(tok), ...heightOf(tok) }, speed, cantAct: cantAct(actor), cantMove: cantMove(actor), prone: !!actor.hasCondition?.("prone"), route };
+    me: { square: squareOf(tok, scene), size: sizeOf(tok), ...heightOf(tok) }, speed, cantAct: cantAct(actor), cantMove: cantMove(actor), cantAttack: cantAttack(actor), prone: !!actor.hasCondition?.("prone"), route };
 }
 
 /* ---------- moving ---------- */
@@ -225,6 +228,8 @@ function cantAct(actor) {
   for (const c of ["paralyzed", "petrified", "unconscious"]) if (actor.hasCondition?.(c)) return `it is ${c} and can't act.`;
   return null;
 }
+/** Why it can't attack, or null. Rules: Restrained (Player Core) bars actions with the attack or manipulate trait except to Escape or Force Open. */
+function cantAttack(actor) { return actor.hasCondition?.("restrained") ? "it is restrained, so it can't attack." : null; }
 /** Why it can't use any move action (Stride, Step, Stand), or null. Rules: Immobilized bars every action with the move trait, and Grabbed and
     Restrained creatures are Immobilized. Grabbed and Restrained are named first because PF2e adds Immobilized with them, and the cause is what the reader
     needs. Prone (Stand first) and no land Speed are checkPlan's, because a Stand earlier in the plan changes the first. */
@@ -471,12 +476,15 @@ async function runStride(combat, id, i, step, tok) {
   return "next";
 }
 /** Stand: PF2e's own Stand action, which posts its card and removes Prone (PF2e 8.7.0, `StandActionVariant`), with no dialog. Never sent twice: one begun
-    before a reload counts as done if the monster is no longer prone, and the GM looks if it still is. Afterwards the monster's own conditions in `seen`
+    before a reload counts as done if the monster is no longer prone, and the GM looks if it still is. One not begun with the monster no longer prone
+    (something stood it up first) is counted as done with no card, rather than posting a Stand that does nothing. Afterwards the monster's own conditions in `seen`
     are taken again, so the look before the next action doesn't take its own Stand for a change. Not built: Reactive Strike and the like, which a Stand
     can trigger at the end of the action (Rules ID 446). */
 async function runStand(combat, id, i, tok) {
   const record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {}, actor = tok.actor;
-  const after = async () => { if (request(combat, id).seen) await save(combat, id, { seen: { me: { conditions: situationOf({ me: { conditions: conditionWords(actor) } }).me.conditions } } }); };
+  /* only what the Stand took away is its own doing (Prone, and the Off-Guard it brings); anything a reaction added still counts as a change */
+  const after = async () => { const seen = request(combat, id).seen; if (!seen?.me) return; const now = new Set(conditionWords(actor));
+    await save(combat, id, { seen: { me: { conditions: (seen.me.conditions ?? []).filter(c => now.has(c)) } } }); };
   const now = nextStand(get(), !!actor.hasCondition?.("prone"));
   if (now === "next") return "next";
   if (now === "stood") { await record({ stood: { message: null } }); await after(); return "next"; }
@@ -484,6 +492,7 @@ async function runStand(combat, id, i, tok) {
   if (!stepGate("stand", id)) return "stopped";
   await record({ started: true });
   const out = await watched(() => game.pf2e.actions.get("stand").use({ actors: [actor] }));
+  for (let t = 0; t < 2000 && actor.hasCondition?.("prone"); t += 100) await new Promise(res => setTimeout(res, 100));   /* PF2e awaits its toggle, but give the update a moment */
   if (actor.hasCondition?.("prone")) { await save(combat, id, { note: `${tok.name} used Stand but is still prone.` }); return "ask"; }
   await record({ stood: { message: out?.[0]?.message?.id ?? null } });
   await after();

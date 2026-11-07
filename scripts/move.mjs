@@ -120,7 +120,7 @@ export function routeWords(r, to, speed) {
     case "same": return `it is already at ${sq}.`;
     case "off": return `${sq} is off the map.`;
     case "blocked": return `it can't stand at ${sq}: something solid is there.`;
-    case "terrain": return `${sq} is deep water: it would have to Swim, which a Stride isn't.`;
+    case "terrain": return `${sq} is deep water: it would have to Swim, which a Stride or Step isn't.`;
     case "occupied": return `another creature is at ${sq}.`;
     case "notNext": return `[${to[0]}, ${to[1]}] isn't next to it: a Step moves one square (5 ft).`;
     case "difficult": return `[${to[0]}, ${to[1]}] is difficult terrain, and a Step can't go into difficult terrain.`;

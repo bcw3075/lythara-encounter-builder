@@ -293,7 +293,17 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("paralyzed: no stand", /paralyzed/.test(checkPlan({ steps: [{ do: "stand" }] }, { ...sctx, prone: true, cantAct: "it is paralyzed and can't act." }).reason));
   check("spent: step and stand", spentBy([{ do: "stand" }, { do: "step" }, { do: "strike" }]).actions === 3 && spentBy([{ do: "stand" }, { do: "step" }]).attacks === 0);
   check("done: step and stand", doneStep({ do: "step", to: [1, 5] }, { moved: { to: [1, 5] } }).result === "arrived" && doneStep({ do: "stand" }, { stood: { message: "x" } }).result === "stood" && doneStep({ do: "stand" }, { started: true }).result === "unknown");
-  check("next stand", nextStand({}, true) === "stand" && nextStand({ started: true }, true) === "ask" && nextStand({ started: true }, false) === "stood" && nextStand({ started: true, stood: {} }, false) === "next");
+  check("next stand", nextStand({}, true) === "stand" && nextStand({}, false) === "stood" && nextStand({ started: true }, true) === "ask" && nextStand({ started: true }, false) === "stood" && nextStand({ started: true, stood: {} }, false) === "next");
+  /* the review's findings (2026-11-07): a Step after a Stride, with the diagonal count carried the way mover does it (history plus earlier routes) */
+  { const cw = W(), carried = (from, to, before = [], o = {}) => { const prefix = []; for (const r of before) prefix.push(...(prefix.length ? r.slice(1) : r)); if (!prefix.length) prefix.push(from);
+      const odd = diagonalsIn(prefix) % 2 === 1, x = o.step ? findStep({ from, to, odd }, cw) : findRoute({ from, to, budget: 35, odd }, cw); return x.ok ? x : { ok: false, reason: routeWords(x, to, 35) }; };
+    const c = { ...mctx, route: carried, targets: {} };
+    check("one diagonal then a diagonal step: 10 ft, refused", /counts as 10 ft, and a Step moves only 5 ft \(every second diagonal/.test(checkPlan({ steps: [{ do: "stride", to: [1, 6] }, { do: "step", to: [2, 7] }] }, c).reason ?? ""), checkPlan({ steps: [{ do: "stride", to: [1, 6] }, { do: "step", to: [2, 7] }] }, c).reason);
+    check("two diagonals then a diagonal step: fine", checkPlan({ steps: [{ do: "stride", to: [2, 7] }, { do: "step", to: [3, 8] }] }, c).ok);
+    check("one diagonal then a straight step: fine", checkPlan({ steps: [{ do: "stride", to: [1, 6] }, { do: "step", to: [2, 6] }] }, c).ok); }
+  check("restrained can't strike", /restrained, so it can't attack/.test(checkPlan({ steps: [st({ item: "bite", target: "E1" })] }, { ...mctx, me: { square: [5, 5], size: 1 }, cantAttack: "it is restrained, so it can't attack." }).reason) && checkPlan({ steps: [st({ item: "bite", target: "E1" })] }, { ...mctx, me: { square: [5, 5], size: 1 }, cantAttack: null }).ok);
+  check("deep water words name both moves", /a Stride or Step isn't/.test(routeWords({ why: "terrain" }, [3, 1], 35)));
+  check("prompt names the next diagonal", hello(1).prompt.includes("you.nextDiagonal") && /Restrained: it can't Strike/.test(hello(1).prompt));
   check("isMove", isMove({ do: "step" }) && isMove({ do: "stride" }) && !isMove({ do: "stand" }) && !isMove(null));
   check("hello can step and stand", hello(1).canDo.includes("step") && hello(1).canDo.includes("stand") && hello(1).prompt.includes('"do": "step"') && hello(1).prompt.includes('"do": "stand"'));
   check("plan keeps a stand", cleanPlan({ steps: [{ do: "stand" }, { do: "step", to: [1, 2] }] }).plan.steps.map(x => x.do).join() === "stand,step");
