@@ -2,7 +2,7 @@
 import { ID, build, clear, findCreatures, markDrawn, markReady, nextToParty, place, prepare, readMap, submitBrief, summary } from "./builder.mjs";
 import { BuildApp, askClear, askReplace } from "./ui/build.mjs";
 import { TurnsApp } from "./ui/turns.mjs";
-import { busy, checkOnly, currentRequest, doIt, fightState, hold, onCombatUpdate, onCreateMessage, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, perceived, playMyself, reportFailure, submitPlan, waitForEvent } from "./fight.mjs";
+import { busy, checkOnly, keepTurn, saveTurn, currentRequest, doIt, fightState, hold, onCombatUpdate, onCreateMessage, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, perceived, playMyself, reportFailure, submitPlan, waitForEvent } from "./fight.mjs";
 
 const CONTROL = "encounters", apps = new Map(); let turnsApp = null;
 Hooks.once("init", () => {
@@ -46,6 +46,8 @@ Hooks.on("activateNote", note => {
 /* the fight */
 Hooks.on("preCreateChatMessage", message => { onPreCreateMessage(message); });
 Hooks.on("createChatMessage", message => { onCreateMessage(message); });
+Hooks.on("preUpdateCombatant", (combatant, change, options) => { keepTurn(combatant, change, options); });
+Hooks.on("updateCombatant", (combatant, change, options, userId) => { saveTurn(combatant, options, userId); });
 Hooks.on("renderChatMessageHTML", (message, html) => { onRenderMessage(message, html); });
 Hooks.on("updateCombat", (combat, change) => { if (turnsApp?.rendered && (foundry.utils.hasProperty(change, `flags.${ID}`) || "turn" in change || "round" in change)) turnsApp.render(); onCombatUpdate(combat, change); });
 Hooks.on("updateToken", (tok, change) => { onTokenFlag(tok, change); });
