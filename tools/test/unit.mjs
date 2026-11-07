@@ -537,6 +537,17 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
     && doneStep({ do: "spell", item: "heal", rank: 1, mode: "card" }, { cast: {} }).result === "card posted for the GM to apply" && doneStep({ do: "spell", item: "x", mode: "attack" }, {}).result === "unknown" && doneStep({ do: "spell", item: "x", mode: "save" }, { cast: {} }).result === "waiting for the save");
   check("a cleaned plan keeps a spell's rank and actions", (c => c.ok && c.plan.steps[0].rank === 2 && c.plan.steps[0].actions === 1)(cleanPlan({ steps: [{ do: "spell", item: "heal", target: "M2", rank: 2, actions: 1 }] }))
     && /"rank" is a spell rank/.test(cleanPlan({ steps: [{ do: "spell", item: "heal", rank: 0 }] }).reason) && /"actions" is 0 to 3/.test(cleanPlan({ steps: [{ do: "spell", item: "heal", actions: 4 }] }).reason));
+  /* found by the review of the spells change */
+  const focusSp = { id: "fire-ray", name: "Fire Ray", ranks: [{ rank: 1, pool: "focus", left: 1, cost: 2 }], minActions: 2, maxActions: 2, range: 60, targets: 1, area: null, attack: true, save: null, damaging: true, traits: ["attack"] };
+  check("a focus spell costing 2 with 1 point left", /no uses or slots left \(it costs 2 focus points\)/.test(checkPlan({ steps: [sp("fire-ray", "E1")] }, { ...sctx, spells: [...SP, focusSp] }).reason ?? ""));
+  const harm = { id: "harm", name: "Harm", ranks: [{ rank: 1, pool: "slots:e1:1", left: 2 }], minActions: 1, maxActions: 3, range: null, touch: false, targets: 1, area: null, attack: false, save: { stat: "fortitude", basic: true }, damaging: true, variants: true, traits: ["manipulate"] };
+  check("a spell with variants is the GM's, at any range", (q => q.ok && q.steps[0].mode === "card")(checkPlan({ steps: [sp("harm", "E2", { actions: 2 })] }, { ...sctx, spells: [...SP, harm] })));
+  check("a save spell at an ally is the GM's", checkPlan({ steps: [sp("thunderstrike", "M2")] }, sctx).steps?.[0].mode === "card");
+  check("an area aimed at a hidden creature has no flat check", checkPlan({ steps: [sp("breathe-fire", "E3")] }, sctx).steps?.[0].flat === 0);
+  check("a card spell at a hidden creature rolls its flat check first", nextSpell({ castStarted: true, cast: {} }, { mode: "card", flat: 11 }) === "flat" && nextSpell({ castStarted: true, cast: {}, flatStarted: true, flat: { ok: true } }, { mode: "card", flat: 11 }) === "gm"
+    && nextSpell({ castStarted: true, cast: {}, flatStarted: true, flat: { ok: false } }, { mode: "card", flat: 11 }) === "next" && /after a DC 11 flat check: its card/.test(describeStep({ do: "spell", itemName: "Fear", rank: 1, actions: 2, mode: "card", targetName: "E3", flat: 11 })));
+  check("a card with no rows", nextSpell({ castStarted: true, cast: {}, noRows: true }, S) === "gm" && doneStep({ do: "spell", item: "x", mode: "save" }, { cast: {}, noRows: true }).result === "card posted for the GM to apply");
+  check("creatures by kind", spellTargets("1 animal") === 1 && spellTargets("1 humanoid") === 1 && spellTargets("1 creature or unattended object") === 1 && spellTargets("1 unattended object") === 0 && spellTargets("1 corpse") === 0);
   check("hello can cast spells", hello(1).canDo.includes("spell") && hello(1).prompt.includes('"do": "spell"') && hello(1).prompt.includes("you.spells"));
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */

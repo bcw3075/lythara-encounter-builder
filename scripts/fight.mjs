@@ -123,8 +123,12 @@ function abilitiesOf(actor) {
    Cantrips and at-will spells have none. Rituals and staffs, wands and scrolls aren't here. */
 const CASTERS = ["prepared", "spontaneous", "innate", "focus"];
 async function spellBook(actor) {
-  const book = new Map(), counts = {}, slugs = new Map(), focus = Number(actor.system.resources?.focus?.value) || 0;
-  for (const e of (actor.spellcasting?.regular ?? []).filter(e => e.statistic && !e.isRitual && CASTERS.includes(e.category))) {
+  const book = new Map(), counts = {}, focus = Number(actor.system.resources?.focus?.value) || 0, entries = (actor.spellcasting?.regular ?? []).filter(e => e.statistic && !e.isRitual && CASTERS.includes(e.category));
+  /* ids stay the same through the turn: a spell known in two entries is "slug" in the first and "slug-2" in the second, whatever is left to cast, so a plan
+     can't end up casting from the other entry once one runs out */
+  const slugOf = s => s.slug ?? game.pf2e.system.sluggify(s.name), owners = new Map();
+  for (const e of entries) for (const s of e.spells?.contents ?? []) { const k = slugOf(s), list = owners.get(k) ?? []; if (!list.includes(e.id)) list.push(e.id); owners.set(k, list); }
+  for (const e of entries) {
     let sd; try { sd = await e.getSheetData(); } catch (x) { console.warn(`${ID} | spells`, x); continue; }
     for (const g of sd.groups ?? []) {
       const cantrips = g.id === "cantrips", groupRank = Number(g.id);
@@ -139,13 +143,13 @@ async function spellBook(actor) {
         else { pool = `slots:${e.id}:${rank}`; left = Number(g.uses?.value) || 0; }
         const key = `${e.id}:${base.id}`;
         if (!book.has(key)) {
-          const slug = base.slug ?? game.pf2e.system.sluggify(base.name), n = (slugs.get(slug) ?? 0) + 1; slugs.set(slug, n);
+          const slug = slugOf(base), n = Math.max(1, (owners.get(slug) ?? [e.id]).indexOf(e.id) + 1);
           const act = spellActions(base.system.time?.value), rng = spellRange(base.system.range?.value), save = base.system.defense?.save, text = plainText(base.system.description?.value, localize);
           book.set(key, { id: n === 1 ? slug : `${slug}-${n}`, name: base.name, entryId: e.id, spellId: base.id, ranks: [], minActions: act.min, maxActions: act.max, time: base.system.time?.value ?? "",
             range: rng.range, touch: rng.touch, rangeText: base.system.range?.value ?? "", targets: spellTargets(base.system.target?.value), targetText: base.system.target?.value ?? "",
             area: base.system.area?.type ? { type: base.system.area.type, size: base.system.area.value } : null, attack: !!base.isAttack, save: save?.statistic ? { stat: save.statistic, basic: !!save.basic } : null,
             damaging: Object.keys(base.system.damage ?? {}).length > 0, damage: Object.values(base.system.damage ?? {}).map(d => `${d.formula} ${d.type ?? ""}`.trim()).join(" + "),
-            traits: [...(base.system.traits?.value ?? [])], critText: /critical success/i.test(text), dc: e.statistic.dc?.value ?? null, attackMod: e.statistic.check?.mod ?? null, text });
+            variants: !!base.hasVariants, traits: [...(base.system.traits?.value ?? [])], critText: /critical success/i.test(text), dc: e.statistic.dc?.value ?? null, attackMod: e.statistic.check?.mod ?? null, text });
         }
         const s = book.get(key), had = s.ranks.find(r => r.rank === rank);
         if (had) { if (pool?.startsWith("prep:")) had.left = left; } else s.ranks.push({ rank, pool, left, cost });
@@ -160,7 +164,7 @@ function spellsOf(book) {
   return book.map(s => ({ id: s.id, name: s.name, ranks: Object.fromEntries(s.ranks.map(r => [r.rank, r.pool == null ? "at will" : r.pool === "focus" ? `${r.left} focus point${r.left === 1 ? "" : "s"} (costs ${r.cost})` : r.left])),
     actions: s.time, ...(s.rangeText ? { range: s.rangeText } : {}), ...(s.targetText ? { targets: s.targetText } : {}), ...(s.area ? { area: `${s.area.size}-foot ${s.area.type}` } : {}),
     ...(s.attack ? { defense: "AC", attackMod: s.attackMod } : s.save ? { defense: `${s.save.basic ? "basic " : ""}${s.save.stat[0].toUpperCase()}${s.save.stat.slice(1)} save`, dc: s.dc } : {}),
-    ...(s.damage ? { damage: s.damage } : {}), traits: s.traits, text: cap(s.text, 900) }));
+    ...(s.damage ? { baseDamage: s.damage } : {}), ...(s.variants ? { variants: "what it does depends on the actions spent: the GM applies it from its card" } : {}), traits: s.traits, text: cap(s.text, 900) }));
 }
 /** The spell a step casts, found again by its entry and item. */
 const spellFor = (actor, step) => { const entry = actor.spellcasting?.get(step.entryId); const spell = entry?.spells?.get(step.spellId) ?? actor.items.get(step.spellId); return entry && spell ? { entry, spell } : null; };
@@ -245,12 +249,24 @@ function situationNow(combat, tok, labels = {}, others = null) {
 /** The runner's answer to any change on the Combat. */
 export function onCombatUpdate(combat, change) {
   if (!isRunner()) return;
+  if ("turn" in change || "round" in change) leaveWaiting(combat).catch(e => console.warn(`${ID} | waiting`, e));
   if ("turn" in change || "round" in change) noteWhatTheySense(combat).catch(e => console.warn(`${ID} | memory`, e)).then(() => onTurnChange(combat)).catch(e => console.error(`${ID} | turn`, e));
   act(combat);
+}
+/** The turn moved on while a monster's spell waited for a save: that request ends, and the note tells the GM what's left on the card. */
+async function leaveWaiting(combat) {
+  const change = {};
+  for (const [id, r] of Object.entries(turns(combat).requests ?? {})) {
+    if (r.state !== "saves" || (r.round === combat.round && r.combatantId === combat.combatant?.id)) continue;
+    const step = r.steps?.[r.pos ?? 0];
+    change[`requests.${id}.state`] = "done"; change[`requests.${id}.note`] = [r.note, `The turn moved on while ${step?.itemName ?? "a spell"} waited for ${step?.target ? `${step.target}'s` : "a"} save: apply what's left from its card.`].filter(Boolean).join(" ");
+  }
+  if (Object.keys(change).length) await saveTurns(combat, change);
 }
 function act(combat) {
   const r = currentRequest(combat); if (!r) return;
   if (r.state === "submitted") judge(combat, r.id).catch(e => console.error(`${ID} | plan`, e));
+  else if (r.state === "saves" && Object.values(r.rollFor ?? {}).some(Boolean)) doIt(combat, r.id).catch(e => console.error(`${ID} | turn`, e));   /* Roll it for them */
   else if (r.go && RESUMABLE.includes(r.state)) doIt(combat, r.id).catch(e => console.error(`${ID} | turn`, e));
 }
 /** A monster ticked during its own turn. */
@@ -289,7 +305,7 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
     /* abilities, and its last action before this plan (a Grab or Knockdown needs it): the step just done, or the last thing done before a re-plan */
     abilities: abilityList(actor).map(({ item, ...a }) => a), last: lastAction({ ...(before ?? { done: req.done?.at(-1) ?? null }), strikes }),
     /* spells: what it can cast now, and for a spell at a friend its allies (not hidden by the GM) and itself, by their labels */
-    ...(spells ? { spells: await spellBook(actor), allies: alliesByLabel(combat, tok), saveRows: targetHelperOn(), reach: Math.max(5, ...strikes.filter(s => !s.ranged).map(s => s.reach ?? 5)) } : {}) };
+    ...(spells ? { spells: await spellBook(actor), allies: alliesByLabel(combat, tok), saveRows: targetHelperOn(), reach: actor.getReach?.({ action: "interact" }) ?? 5 } : {}) };   /* touch: the creature's own reach, not a weapon's */
 }
 /** Its allies the GM hasn't hidden, and itself, by label, for a spell aimed at a friend. */
 function alliesByLabel(combat, tok) {
@@ -451,7 +467,7 @@ export async function checkOnly(combat, requestId, plan) {
   const r = request(combat, requestId); if (!r) throw new Error("No such request.");
   if (!onFightScene(combat)) throw new Error("This page doesn't have the fight's map open, so it can't tell.");
   const clean = cleanPlan(plan); if (!clean.ok) return { ok: false, reason: clean.reason };
-  return checkPlan(clean.plan, await gather(combat, r, undefined, { moves: hasMove(clean.plan.steps) }));
+  return checkPlan(clean.plan, await gather(combat, r, undefined, { moves: hasMove(clean.plan.steps), spells: hasSpell(clean.plan.steps) }));
 }
 /** The thinker can't make a plan: the card says so and the GM plays. */
 export async function reportFailure(combat, requestId, reason, meta = {}) {
@@ -819,7 +835,7 @@ const SAVE_WORD = s => s[0].toUpperCase() + s.slice(1);
 async function awaitSave(combat, id, i, step, tok, target) {
   const get = () => request(combat, id).log?.[i] ?? {}, card = game.messages.get(get().cast?.message);
   if (!card) { await addNote(combat, id, `${step.itemName}'s card is gone, so I can't read ${step.target}'s save.`); return "ask"; }
-  if (!card.flags?.[TOOLBELT]?.targetHelper) { await addNote(combat, id, `${step.itemName}'s card has no target rows (is Toolbelt's Target Helper on?): roll ${step.target}'s save and apply it yourself.`); return "gm"; }
+  if (!card.flags?.[TOOLBELT]?.targetHelper) { await save(combat, id, { log: { [i]: { noRows: true } }, note: joinNote(combat, id, `${step.itemName}'s card has no target rows (is Toolbelt's Target Helper on?): roll ${step.target}'s save and apply it yourself.`) }); return "gm"; }
   let degree = savedDegree(card, target.id);
   if (degree == null) {
     const asked = !!request(combat, id).rollFor?.[target.id], npc = !target.actor?.hasPlayerOwner, rolled = get().rollStarted ?? 0;
@@ -831,8 +847,10 @@ async function awaitSave(combat, id, i, step, tok, target) {
     }
   }
   if (degree == null) { if (!get().waiting) await save(combat, id, { log: { [i]: { waiting: [target.id] } } }); return "wait"; }
-  const gm = !step.damaging || !step.basic ? `Apply ${step.itemName} for ${step.target}'s ${CHECK_OUTCOMES[degree]} ${SAVE_WORD(step.save)} save from its card.` : null;
-  await save(combat, id, { log: { [i]: { save: { degree }, waiting: null } }, ...(gm ? { note: joinNote(combat, id, gm) } : {}) });
+  const gm = !step.damaging || !step.basic ? `Apply ${step.itemName} for ${step.target}'s ${CHECK_OUTCOMES[degree]} ${SAVE_WORD(step.save)} save from its card.`
+    : step.critText ? `Anything ${step.itemName}'s text gives for ${step.target}'s ${CHECK_OUTCOMES[degree]} beyond its damage is yours to apply from its card.` : null;
+  /* the result, a Roll it for them it made unnecessary, and the GM's note in one save */
+  await saveTurns(combat, { [`requests.${id}.log.${i}.save`]: { degree }, [`requests.${id}.log.${i}.waiting`]: null, [`requests.${id}.rollFor.${target.id}`]: null, ...(gm ? { [`requests.${id}.note`]: joinNote(combat, id, gm) } : {}) });
   return "saved";
 }
 const cardWords = (step) => `Apply ${step.itemName}${step.area ? `: place its ${step.area.size}-foot ${step.area.type}${step.target ? ` aimed at ${step.target}` : ""} from its card and resolve it` : `${step.target ? ` at ${step.target}` : ""} from its card`}.`;
@@ -862,9 +880,14 @@ async function runSpell(combat, id, i, step, tok, target) {
       } else if (now === "attack") {
         aimAt(target); await record({ started: true });
         const { message, roll } = await watched(async () => { const card = waitForAny(["spell-attack-roll", "attack-roll"]), roll = await spell.rollAttack(clickWith("showCheckDialogs"), (step.variant ?? 0) + 1); return { message: await card, roll }; });
-        const degree = roll?.degreeOfSuccess ?? message.rolls?.[0]?.degreeOfSuccess ?? 0;
-        const gm = degree >= 2 && !step.damaging ? `Apply ${step.itemName}'s ${OUTCOMES[degree]} at ${step.target} from its card.` : degree === 3 && step.critText ? `${step.itemName} critically hit ${step.target}: its damage is doubled; anything else its critical success adds is yours to apply from its card.` : null;
-        await save(combat, id, { log: { [i]: { attack: { message: message.id, degree } } }, ...(gm ? { note: joinNote(combat, id, gm) } : {}) });
+        const degree = roll?.degreeOfSuccess ?? message.rolls?.[0]?.degreeOfSuccess ?? null;
+        if (degree == null) { await addNote(combat, id, `${step.itemName}'s attack card has no result (did it have a target?).`); return "ask"; }   /* never a silent critical miss */
+        const gm = degree >= 2 && !step.damaging ? `Apply ${step.itemName}'s ${OUTCOMES[degree]} at ${step.target} from its card.`
+          : degree >= 2 && step.critText ? `${step.itemName} ${degree === 3 ? "critically hit" : "hit"} ${step.target}${degree === 3 && applySetting() ? ": its damage is doubled" : ""}; anything else its ${degree === 3 ? "critical success" : "success"} gives is yours to apply from its card.` : null;
+        /* PF2e rolls a spell attack's damage as a hit: with automatic damage off, the GM doubles it */
+        const double = degree === 3 && step.damaging && !applySetting() ? `It was a critical hit: use Double on ${step.itemName}'s damage card.` : null;
+        const words = [gm, double].filter(Boolean).join(" ");
+        await save(combat, id, { log: { [i]: { attack: { message: message.id, degree } } }, ...(words ? { note: joinNote(combat, id, words) } : {}) });
       } else if (now === "damage") {
         aimAt(target); await record({ damageStarted: true });
         /* the damage at the rank it was cast at (PF2e reads that from the card's button, which a script has none of) */
@@ -886,8 +909,13 @@ async function runSpell(combat, id, i, step, tok, target) {
 export async function rollFor(combat, requestId, tokenId) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
   const r = request(combat, requestId); if (r?.state !== "saves") throw new Error("That turn isn't waiting for a save.");
-  await save(combat, requestId, { rollFor: { [tokenId]: true } });
-  return doIt(combat, requestId);
+  await save(combat, requestId, { rollFor: { [tokenId]: true } });   /* no "go": the runner acts on this only while the turn still waits for that save */
+  if (isRunner()) return doIt(combat, requestId);
+}
+/** Whether a turn waiting on a save has it now (the save landed while the step was still deciding to wait). */
+function saveArrived(combat, r) {
+  const rec = r?.log?.[r.pos ?? 0], card = game.messages.get(rec?.cast?.message);
+  return !!card && (rec.waiting ?? []).some(t => savedDegree(card, t) != null);
 }
 /** A spell's card changed: a save on its Toolbelt row may be what a waiting turn needs. Runner only. */
 export function onMessageUpdate(message, change) {
@@ -913,6 +941,8 @@ export async function doIt(combat, requestId) {
   if (!isRunner()) { const why = runnerProblem(); if (why) throw new Error(why); return save(combat, requestId, { go: true }); }
   if (running.has(requestId)) return;
   running.add(requestId); try { await runTurn(combat, requestId); } finally { running.delete(requestId); stopAiming(); }
+  /* a save that landed between reading the card and writing "saves" fired no hook this page would act on: look once more */
+  const n = request(combat, requestId); if (n?.state === "saves" && saveArrived(combat, n)) setTimeout(() => doIt(combat, requestId).catch(e => console.error(`${ID} | turn`, e)), 0);
 }
 const autoPause = () => Math.max(0, Number(game.settings.get(ID, "autoPause")) || 0);
 /* Auto's pause between actions, so each roll can be followed. Hold and Play it myself end it at once. */

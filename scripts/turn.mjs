@@ -147,11 +147,11 @@ function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools }) {
     actions = step.actions;
   } else if (step.actions != null && step.actions !== sp.minActions) return no(`${sp.name} always takes ${sp.minActions} action${sp.minActions === 1 ? "" : "s"}.`);
   /* the rank: the one asked for, or the lowest it still has a use or slot for */
-  const leftIn = r => r.pool == null ? Infinity : r.pool in pools ? pools[r.pool] : r.left;
-  const ranks = sp.ranks ?? [], open = ranks.filter(r => leftIn(r) > 0), list = ranks.map(r => r.rank).join(", ");
-  const at_ = step.rank != null ? ranks.find(r => r.rank === step.rank) : open[0];
+  const leftIn = r => r.pool == null ? Infinity : r.pool in pools ? pools[r.pool] : r.left, enough = r => leftIn(r) >= (r.cost ?? 1);   /* a focus spell can cost more than 1 point */
+  const ranks = sp.ranks ?? [], open = ranks.filter(enough), list = ranks.map(r => r.rank).join(", ");
+  const at_ = step.rank != null ? ranks.find(r => r.rank === step.rank) : open[0] ?? ranks[0];
   if (step.rank != null && !at_) return no(`it can't cast ${sp.name} at rank ${step.rank} (it can at ${list || "no rank"}).`);
-  if (!at_ || leftIn(at_) <= 0) return no(`${sp.name} has no ${step.rank != null ? `rank ${step.rank} ` : ""}uses or slots left.`);
+  if (!at_ || !enough(at_)) return no(`${sp.name} has no ${step.rank != null ? `rank ${step.rank} ` : ""}uses or slots left${at_?.pool === "focus" ? ` (it costs ${at_.cost} focus point${at_.cost === 1 ? "" : "s"})` : ""}.`);
   /* the target: a creature it perceives, or one of its allies or itself */
   let t = null, tLabel = null;
   if (step.target) {
@@ -159,15 +159,17 @@ function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools }) {
     t = ctx.targets?.[step.target] ?? ctx.allies?.[step.target] ?? null; if (!t) return no(`it doesn't know of "${step.target}".`);
     tLabel = step.target;
   } else if (sp.targets && !sp.area) return no(`${sp.name} needs a target: give "target", a label.`);
-  if (t && (sp.range != null || sp.touch) && !sp.area) {
+  if (t && (sp.range != null || sp.touch) && !sp.area && !sp.variants) {
     const reach = sp.touch ? Math.max(5, ctx.reach ?? 5) : sp.range, d = distanceTo(t, sp.touch ? reach : null);
     if (d > reach) return no(`${t.name ?? tLabel} is ${d} ft away, out of ${sp.touch ? "reach for" : "range of"} ${sp.name} (${reach} ft).`);
   }
   if (t && sp.area && sp.range != null) { const d = distanceTo(t, null); if (d > sp.range) return no(`${t.name ?? tLabel} is ${d} ft away, beyond ${sp.name}'s range (${sp.range} ft).`); }
-  const one = !sp.area && (sp.targets ?? 0) === 1 && !!t;
+  /* run for real only at one creature it perceives, and never a spell whose range, targets or damage change with its actions (Heal, Harm: PF2e's
+     variants, whose base item reads as a basic save at touch), nor at an ally: those are the GM's from the card */
+  const one = !sp.area && !sp.variants && (sp.targets ?? 0) === 1 && !!t && !t.ally;
   const mode = one && sp.attack ? "attack" : one && sp.save && ctx.saveRows ? "save" : "card";
   const isAttack = traits.includes("attack");
-  const out = { do: "spell", item: sp.id, itemName: sp.name, ...(sp.entryId ? { entryId: sp.entryId, spellId: sp.spellId } : {}), rank: at_.rank, actions, mode, ...(t ? { target: tLabel, targetName: t.name ?? tLabel, flat: t.flat ?? 0 } : {}),
+  const out = { do: "spell", item: sp.id, itemName: sp.name, ...(sp.entryId ? { entryId: sp.entryId, spellId: sp.spellId } : {}), rank: at_.rank, actions, mode, ...(t ? { target: tLabel, targetName: t.name ?? tLabel, flat: sp.area ? 0 : t.flat ?? 0 } : {}),
     ...(isAttack ? { attack: true, mapCounts: true, variant: Math.min(attacks, 2) } : {}), ...(sp.area ? { area: { ...sp.area } } : {}),
     ...(mode === "save" ? { save: sp.save.stat, basic: !!sp.save.basic } : {}), damaging: !!sp.damaging, ...(sp.critText ? { critText: true } : {}) };
   return { ok: true, step: out, pool: at_.pool, poolLeft: at_.left, poolCost: at_.cost ?? 1 };
@@ -175,12 +177,13 @@ function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools }) {
 /** What to do next with a spell step, from its record. Never repeated: when the record can't tell whether a stage finished, "ask". The spell is cast first
     (its slot or use is spent and its card posted), then a flat check for a concealed or hidden target, then by mode: "attack" rolls the spell attack and,
     for a damaging spell that hits, its damage; "save" waits for the target's save ("wait") and, for a basic save, rolls the damage and applies it by
-    degree; "card", and anything a non-damaging or non-basic spell does, is the GM's ("gm"). */
+    degree; "card" (after a flat check at a creature it can't see clearly), and anything a non-damaging or non-basic spell does, is the GM's ("gm"). */
 export function nextSpell(rec = {}, { mode = "card", flat = 0, apply = false, damaging = false, basic = false } = {}) {
   if (!rec.castStarted) return "cast";
   if (!rec.cast) return "ask";
+  if (rec.noRows) return "gm";
+  if (flat) { if (!rec.flatStarted) return "flat"; if (!rec.flat) return "ask"; if (!rec.flat.ok) return "next"; }   /* a concealed or hidden target, card mode too: a failure means it isn't affected */
   if (mode === "card") return "gm";
-  if (flat) { if (!rec.flatStarted) return "flat"; if (!rec.flat) return "ask"; if (!rec.flat.ok) return "next"; }
   if (mode === "attack") {
     if (!rec.started) return "attack";
     if (!rec.attack) return "ask";
@@ -216,7 +219,7 @@ export function spellRange(range = "") {
 /** How many creatures a spell targets, from PF2e's target text: "1 creature" 1, "up to 3 creatures" 3; 0 for none, "you", or only objects. */
 export function spellTargets(target = "") {
   const t = String(target).trim().toLowerCase();
-  if (!t || t === "you" || !/creature|ally|allies|enemy|enemies|you and/.test(t)) return 0;
+  if (!t || t === "you" || (/object|item|weapon|armor|corpse|square/.test(t) && !/creature|ally|allies|enemy|enemies/.test(t))) return 0;   /* "1 animal", "1 humanoid" target creatures too */
   const n = t.match(/(\d+)/); return n ? Math.max(1, +n[1]) : 1;
 }
 /** Actions an ability takes: its own count, 0 for a free action. */
@@ -296,8 +299,8 @@ export function doneStep(step, rec = {}) {
 /** How a spell step came out, in words the thinker and the GM read. */
 function spellResult(step, rec = {}) {
   if (!rec.cast) return "unknown";
-  if (step.mode === "card") return "card posted for the GM to apply";
   if (rec.flat && !rec.flat.ok) return "flat check failed";
+  if (step.mode === "card" || rec.noRows) return "card posted for the GM to apply";
   if (step.mode === "attack") return rec.attack ? OUTCOMES[rec.attack.degree] ?? "unknown" : "unknown";
   return rec.save ? `target's save: ${CHECK_OUTCOMES[rec.save.degree] ?? "unknown"}` : "waiting for the save";
 }
@@ -364,7 +367,7 @@ export function describeStep(s) {
     const head = `Casts ${s.itemName} (rank ${s.rank}${s.actions !== 2 ? `, ${s.actions} action${s.actions === 1 ? "" : "s"}` : ""})`, flat = s.flat ? `, after a DC ${s.flat} flat check` : "";
     if (s.mode === "attack") return `${head} at ${s.targetName}: a spell attack${s.variant ? `, attack ${s.variant + 1}` : ""}${flat}.`;
     if (s.mode === "save") return `${head} at ${s.targetName}: a ${s.basic ? "basic " : ""}${s.save[0].toUpperCase() + s.save.slice(1)} save${flat}${s.damaging && s.basic ? "" : ", then you apply its effects"}.`;
-    return `${head}${s.targetName ? `${s.area ? " aimed at" : " at"} ${s.targetName}` : ""}: its card goes to chat for you to apply${s.area ? ` (place its ${s.area.size}-foot ${s.area.type})` : ""}.`;
+    return `${head}${s.targetName ? `${s.area ? " aimed at" : " at"} ${s.targetName}` : ""}${flat}: its card goes to chat for you to apply${s.area ? ` (place its ${s.area.size}-foot ${s.area.type})` : ""}${s.attack ? `, as attack ${(s.variant ?? 0) + 1}` : ""}.`;
   }
   if (s.do === "take-cover") return s.why === "prone" ? "Takes Cover while prone." : s.why === "near" ? "Takes Cover by the wall or trunk next to it." : `Takes Cover behind its cover from ${s.from}.`;
   return `${s.itemName} at ${s.targetName}${s.variant ? `, attack ${s.variant + 1}` : ""}${s.flat ? `, after a DC ${s.flat} flat check` : ""}.`;
