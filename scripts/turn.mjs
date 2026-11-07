@@ -22,7 +22,7 @@ const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
     when the reason goes to the thinker. */
 export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
-  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, prone = !!ctx.prone, took = !!ctx.tookCover, moved = false; const steps = [], routes = [];
+  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false; const steps = [], routes = [];
   const distanceTo = (t, reach) => here && t.square ? distanceBetween({ x: here[0], y: here[1], size: ctx.me.size ?? 1, elev: ctx.me.elev, depth: ctx.me.depth }, { x: t.square[0], y: t.square[1], size: t.size ?? 1, elev: t.elev, depth: t.depth }, { reach }) : t.distance;
   for (const [n, step] of plan.steps.entries()) {
     const at = `Step ${n + 1}`;
@@ -36,6 +36,8 @@ export function checkPlan(plan, ctx) {
       if (step.do === "stand" && !prone) return { ok: false, reason: `${at}: it isn't prone, so it has nothing to Stand up from.` };
       if (step.do === "drop-prone" && prone) return { ok: false, reason: `${at}: it is already prone.` };
       if (step.do === "drop-prone" && (ctx.me?.elev ?? 0) > 0) return { ok: false, reason: `${at}: it is ${Math.round(ctx.me.elev)} ft up, and a creature knocked or dropping prone in the air falls instead.` };
+      /* a Take Cover taken while prone gives its greater cover against ranged attacks only while prone, so Standing ends it (Visioner removes its effect) */
+      if (step.do === "stand" && tookProne) took = tookProne = false;
       steps.push({ do: step.do }); prone = POSTURES[step.do]; continue;
     }
     if (step.do === "take-cover") {
@@ -45,7 +47,7 @@ export function checkPlan(plan, ctx) {
       const from = moved ? null : Object.entries(ctx.coverFrom ?? {}).find(([, l]) => l === "standard" || l === "greater")?.[0] ?? null;
       const why = prone ? "prone" : here && ctx.nearCover?.(here, ctx.me?.size ?? 1) ? "near" : from ? "cover" : null;
       if (!why) return { ok: false, reason: `${at}: Take Cover needs it to be prone, next to a wall or a trunk thick enough to hide behind, or behind standard cover from a creature it sees${moved ? ` (after a move in the same plan only a wall or trunk next to its new square counts, because cover from a square it isn't on yet can't be read)` : ""}.` };
-      steps.push({ do: "take-cover", why, ...(why === "cover" ? { from } : {}) }); took = true; continue;
+      steps.push({ do: "take-cover", why, ...(why === "cover" ? { from } : {}) }); took = true; tookProne = why === "prone"; continue;
     }
     if (MOVES.includes(step.do)) {
       const word = WORD[step.do], small = ONE_SQUARE.includes(step.do);
@@ -62,7 +64,7 @@ export function checkPlan(plan, ctx) {
       if (small && way.cost > STEP_FT) return { ok: false, reason: `${at}: ${step.do === "crawl" ? "crawling" : "stepping"} to [${step.to[0]}, ${step.to[1]}] counts as ${way.cost} ft, and a ${word} moves only ${STEP_FT} ft${way.route?.length === 2 && way.route[0][0] !== way.route[1][0] && way.route[0][1] !== way.route[1][1] ? " (every second diagonal in a turn counts 10 ft)" : ""}.` };
       if (way.cost > ctx.speed) return { ok: false, reason: `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, more than its Speed of ${ctx.speed} ft.` };
       steps.push({ do: step.do, from: [...here], to: [...step.to], route: way.route, cost: way.cost }); routes.push(way.route);
-      here = [...step.to]; moved = true; took = false; continue;
+      here = [...step.to]; moved = true; took = tookProne = false; continue;
     }
     if (ctx.cantAttack) return { ok: false, reason: `${at}: ${ctx.cantAttack}` };
     const s = ctx.strikes.find(x => x.id === step.item); if (!s) return { ok: false, reason: `${at}: it has no attack called "${step.item}".` };
@@ -71,7 +73,7 @@ export function checkPlan(plan, ctx) {
     if (s.ranged) { const d = distanceTo(t, null); if (s.maxRange && d > s.maxRange) return { ok: false, reason: `${at}: ${t.name} is ${d} ft away${where}, out of range of ${s.name} (${s.maxRange} ft).` }; }
     else { const d = distanceTo(t, s.reach); if (d > s.reach) return { ok: false, reason: `${at}: ${t.name} is ${d} ft away${where}, out of reach of ${s.name} (${s.reach} ft).` }; }
     steps.push({ do: "strike", item: s.id, itemName: s.name, target: step.target, targetName: t.name ?? step.target, variant: Math.min(attacks, 2), flat: t.flat ?? 0 });
-    attacks++; took = false;
+    attacks++; took = tookProne = false;
   }
   return { ok: true, steps };
 }
@@ -179,22 +181,23 @@ export function nextPosture(rec = {}, already = false) {
   if (!rec.started) return already ? "already" : "act";
   return already ? "already" : "ask";
 }
-/** What to do next with a Take Cover. Its cover is set in one go, so one begun before a reload is never sent again: if the monster is Taking Cover, it
-    counts as done; otherwise the GM looks. Not begun and already Taking Cover: done, with nothing posted. active: whether it is Taking Cover now. */
+/** What to do next with a Take Cover. One begun before a reload is never sent again, and the GM looks: its cover is set creature by creature, so Taking
+    Cover now doesn't show it reached them all. Not begun and already Taking Cover: done, with nothing posted. active: whether it is Taking Cover now. */
 export function nextCover(rec = {}, active = false) {
   if (rec.covered) return "next";
   if (!rec.started) return active ? "already" : "act";
-  return active ? "already" : "ask";
+  return "ask";
 }
 /** The cover Take Cover gives against one creature, from the cover it has against that creature now, as Visioner's own Take Cover works it out (8.14.17):
     standard or greater becomes greater, anything less becomes standard; prone with none at all gives greater cover against ranged attacks only. */
 export const coverAfterTaking = (now = "none", prone = false) => now === "standard" || now === "greater" ? "greater" : prone && (!now || now === "none") ? "prone-ranged" : "standard";
 /** Whether this request's steps before `upto` ended a Take Cover: an attack made (or its flat check rolled: the action is spent either way) or a move out of
     its space, after the last Take Cover among them (or from the start, for one taken on an earlier turn). Rules: it lasts until you move from your space,
-    make an attack, become unconscious, or end it. */
-export function endsCover(steps = [], log = {}, upto = steps.length) {
+    make an attack, become unconscious, or end it. `from`: only steps from there on count (the earlier ones were settled already, so a Take Cover the GM
+    gave it after them stands). */
+export function endsCover(steps = [], log = {}, upto = steps.length, from = 0) {
   let k0 = 0; for (let k = 0; k < upto; k++) if (steps[k]?.do === "take-cover") k0 = k + 1;
-  for (let k = k0; k < upto; k++) {
+  for (let k = Math.max(k0, from); k < upto; k++) {
     const s = steps[k], rec = log?.[k] ?? {};
     if (s?.do === "strike" && (rec.started || rec.flatStarted)) return true;
     if (isMove(s) && rec.moved?.to && !same(rec.moved.to, s.from)) return true;

@@ -358,18 +358,23 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
     check("take cover again after a strike or a move", checkPlan({ steps: [st({ item: "bow", target: "E1" }), tc] }, { ...c, prone: true, tookCover: true }).ok && checkPlan({ steps: [{ do: "stride", to: [3, 5] }, tc] }, { ...c, tookCover: true }).ok);
     check("take cover: drop prone then take cover", why(checkPlan({ steps: [{ do: "drop-prone" }, tc] }, c)) === "prone");
     check("take cover: stand first, then nothing", !checkPlan({ steps: [{ do: "stand" }, tc] }, { ...c, prone: true }).ok);
+    check("take cover while prone ends on Stand", checkPlan({ steps: [tc, { do: "stand" }, { do: "stride", to: [3, 5] }] }, { ...c, prone: true, actions: 3 }).ok && checkPlan({ steps: [{ do: "drop-prone" }, tc, { do: "stand" }] }, { ...c, me: { square: [3, 5], size: 1 } }).ok
+      && why(checkPlan({ steps: [{ do: "drop-prone" }, tc, { do: "stand" }] }, { ...c, me: { square: [3, 5], size: 1 } })) === "prone"
+      && checkPlan({ steps: [tc, { do: "stand" }, tc] }, { ...c, prone: true, me: { square: [3, 5], size: 1 } }).ok
+      && /already Taking Cover/.test(checkPlan({ steps: [tc, { do: "drop-prone" }, tc] }, { ...c, me: { square: [3, 5], size: 1 } }).reason));
     check("take cover costs an action", /no actions left/.test(checkPlan({ steps: [tc, tc] }, { ...c, prone: true, actions: 1 }).reason) && spentBy([tc]).actions === 1);
     check("take cover: can't act", /paralyzed/.test(checkPlan({ steps: [tc] }, { ...c, prone: true, cantAct: "it is paralyzed and can't act." }).reason));
     check("take cover: immobilized may", checkPlan({ steps: [tc] }, { ...c, prone: true, cantMove: "it is immobilized" }).ok);
     check("take cover words", describeStep({ do: "take-cover", why: "prone" }) === "Takes Cover while prone." && describeStep({ do: "take-cover", why: "cover", from: "E1" }) === "Takes Cover behind its cover from E1." && /wall or trunk/.test(describeStep({ do: "take-cover", why: "near" })));
     check("take cover done", doneStep(tc, { covered: {} }).result === "took cover" && doneStep(tc, {}).result === "unknown"); }
   check("cover after taking", coverAfterTaking("standard") === "greater" && coverAfterTaking("greater") === "greater" && coverAfterTaking("lesser") === "standard" && coverAfterTaking("none") === "standard" && coverAfterTaking("none", true) === "prone-ranged" && coverAfterTaking("lesser", true) === "standard" && coverAfterTaking("standard", true) === "greater" && coverAfterTaking(undefined, true) === "prone-ranged");
-  check("next cover", nextCover({}, false) === "act" && nextCover({}, true) === "already" && nextCover({ started: true }, true) === "already" && nextCover({ started: true }, false) === "ask" && nextCover({ covered: {} }, false) === "next");
+  check("next cover", nextCover({}, false) === "act" && nextCover({}, true) === "already" && nextCover({ started: true }, true) === "ask" && nextCover({ started: true }, false) === "ask" && nextCover({ covered: {} }, false) === "next");
   { const S = [{ do: "take-cover" }, { do: "strike" }, { do: "stride", from: [1, 1], to: [3, 1] }];
     check("ends cover: a strike after it", endsCover(S, { 1: { started: true } }, 2) && !endsCover(S, {}, 2) && endsCover(S, { 1: { flatStarted: true } }, 2));
     check("ends cover: not its own step", !endsCover(S, { 0: { covered: {} } }, 1));
     check("ends cover: a move out of its space", endsCover([{ do: "take-cover" }, { do: "stride", from: [1, 1], to: [3, 1] }], { 1: { moved: { to: [2, 1] } } }, 2) && !endsCover([{ do: "take-cover" }, { do: "stride", from: [1, 1], to: [3, 1] }], { 1: { moved: { to: [1, 1] } } }, 2));
     check("ends cover: from an earlier turn", endsCover([{ do: "strike" }], { 0: { started: true } }, 1) && !endsCover([{ do: "stand" }], { 0: { changed: {} } }, 1));
+    check("ends cover: only steps not settled yet", !endsCover([{ do: "strike" }, { do: "stride", from: [1, 1], to: [1, 1] }], { 0: { started: true }, 1: { moved: { to: [1, 1] } } }, 2, 1) && endsCover([{ do: "strike" }, { do: "strike" }], { 0: { started: true }, 1: { started: true } }, 2, 1) && endsCover([{ do: "strike" }], { 0: { started: true } }, 1, 0));
     check("ends cover: only after the last take cover", !endsCover([{ do: "strike" }, { do: "take-cover" }, { do: "stand" }], { 0: { started: true } }, 3)); }
   check("feature next to it", featureNear([5, 5], 1, [[7, 4, 7, 8]]) && !featureNear([5, 5], 1, [[8, 4, 8, 8]]) && featureNear([5, 5], 1, [[6.5, 6.5, 6.6, 6.6]]) && !featureNear([5, 5], 1, [[7, 7, 8, 8]]) && featureNear([5, 5], 2, [[8, 2, 8, 9]]) && !featureNear([5, 5], 1, []));
   check("hello can take cover", hello(1).canDo.includes("take-cover") && hello(1).prompt.includes('"do": "take-cover"') && hello(1).prompt.includes("you.takeCover.standardCoverFrom"));
