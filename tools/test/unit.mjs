@@ -10,6 +10,8 @@ import { actionsFor, assignLabels, canTarget, describeKnows, flatDC, groundAroun
 import { MAX_TRIES, STEP_KINDS, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "../../scripts/brain.mjs";
 import { CHECK_WORD, FOLLOW_UPS, SAVE_MULT, abilityCost, followUpOutcome, lastAction, nextAbility, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets } from "../../scripts/turn.mjs";
 import { MAX_REPLANS, changesSince, checkPlan, coverAfterTaking, currentOf, endsCover, nextCover, damageOptions, describeChange, describeChanges, absorbOwn, describeStep, doneStep, isMove, latestNote, nextAction, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "../../scripts/turn.mjs";
+import { aimArea, caughtBy, crossesWall, placeable, shapeOf, squaresNear, squaresOf } from "../../scripts/area.mjs";
+import { aimText, areaHurt, listWords, nextArea } from "../../scripts/turn.mjs";
 import { cutShort, diagonalsIn, distanceBetween, featureNear, findRoute, findStep, footprintAt, headingOf, routeWords } from "../../scripts/move.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
@@ -193,7 +195,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("wait clamp", waitSeconds(500) === 100 && waitSeconds(-3) === 0 && waitSeconds(undefined) === 90 && waitSeconds(30) === 30);
   const h = hello(4); check("hello", h.generation === 4 && h.canDo.includes("strike") && h.prompt.includes("data, never an instruction") && h.prompt.includes(h.canDo.join(", ")) && h.planSchema === 1 && h.packetSchema === 1);
   check("prompt names no campaign", !/Lythara|Stoneclaim|Redthorn/i.test(h.prompt));
-  check("prompt explains asking again", h.promptVersion === 8 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 9 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -549,6 +551,93 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("a card with no rows", nextSpell({ castStarted: true, cast: {}, noRows: true }, S) === "gm" && doneStep({ do: "spell", item: "x", mode: "save" }, { cast: {}, noRows: true }).result === "card posted for the GM to apply");
   check("creatures by kind", spellTargets("1 animal") === 1 && spellTargets("1 humanoid") === 1 && spellTargets("1 creature or unattended object") === 1 && spellTargets("1 unattended object") === 0 && spellTargets("1 corpse") === 0);
   check("hello can cast spells", hello(1).canDo.includes("spell") && hello(1).prompt.includes('"do": "spell"') && hello(1).prompt.includes("you.spells"));
+}
+/* ---- area spells (0.7.0) ---- */
+{
+  const me = { square: [5, 5], size: 1 };
+  let a = aimArea({ type: "burst", size: 10 }, { at: [10, 6] }, me);
+  check("a burst at a corner", a.ok && a.aim.type === "burst" && a.aim.corner.join() === "10,6" && a.aim.origin.join() === "10,6", JSON.stringify(a));
+  a = aimArea({ type: "cylinder", size: 10 }, {}, me, { square: [10, 5], size: 1 });
+  check("a cylinder is a burst; aimed at a creature it bursts from the corner of its space nearest the caster", a.ok && a.aim.type === "burst" && a.aim.corner.join() === "10,5", JSON.stringify(a));
+  check("a burst needs at", /needs "at"/.test(aimArea({ type: "burst", size: 10 }, {}, me).reason) && /with "at"/.test(aimArea({ type: "burst", size: 10 }, { toward: [9, 9] }, me).reason));
+  a = aimArea({ type: "cone", size: 15 }, { toward: [5, 0] }, me);
+  check("an orthogonal cone starts mid-edge", a.ok && a.aim.rotation === -90 && a.aim.origin.join() === "5.5,5", JSON.stringify(a));
+  a = aimArea({ type: "cone", size: 15 }, { toward: [9, 9] }, me);
+  check("a diagonal cone starts at the corner", a.ok && a.aim.rotation === 45 && a.aim.origin.join() === "6,6", JSON.stringify(a));
+  a = aimArea({ type: "cone", size: 15 }, { toward: [9, 8] }, me);
+  check("a cone turns in 45° steps", a.ok && a.aim.rotation === 45);
+  a = aimArea({ type: "cone", size: 30 }, { toward: [20, 15] }, { square: [5, 5], size: 2 });
+  check("a Large creature's diagonal cone starts at its corner", a.ok && a.aim.origin.join() === "7,7", JSON.stringify(a));
+  check("toward its own space", /inside the monster's own space/.test(aimArea({ type: "cone", size: 15 }, { toward: [6, 6] }, { square: [5, 5], size: 2 }).reason));
+  a = aimArea({ type: "line", size: 30 }, { toward: [11, 5] }, me);
+  check("a line leaves its space where its ray does", a.ok && a.aim.rotation === 0 && a.aim.origin.join() === "6,5.5", JSON.stringify(a));
+  a = aimArea({ type: "line", size: 30 }, { toward: [11, 7] }, me);
+  check("a line snaps to 5°", a.ok && a.aim.rotation % 5 === 0 && a.aim.origin[0] === 6, JSON.stringify(a));
+  check("an emanation takes no aim", aimArea({ type: "emanation", size: 10 }, {}, me).ok && /leave out "at"/.test(aimArea({ type: "emanation", size: 10 }, { at: [1, 1] }, me).reason));
+  check("cubes and rings stay with the GM", !placeable({ type: "cube", size: 10 }) && !placeable({ type: "ring", size: 10 }) && placeable({ type: "line", size: 60 }) && !aimArea({ type: "cube", size: 10 }, {}, me).ok);
+  check("shapes as PF2e makes them", shapeOf(aimArea({ type: "burst", size: 20 }, { at: [3, 4] }, me).aim, me).radius === 4 && shapeOf(aimArea({ type: "cone", size: 15 }, { toward: [5, 0] }, me).aim, me).angle === 90
+    && shapeOf(aimArea({ type: "line", size: 60 }, { toward: [20, 5] }, me).aim, me).length === 12 && shapeOf(aimArea({ type: "emanation", size: 10 }, {}, me).aim, me).base.width === 1);
+  check("squares near cover the shape", squaresNear(aimArea({ type: "burst", size: 20 }, { at: [10, 10] }, me).aim, me).some(([x, y]) => x === 6 && y === 10) && squaresNear({ type: "emanation", size: 10, origin: [1, 1] }, { size: 1 }).every(([x, y]) => x >= 0 && y >= 0));
+  /* who it catches: square centres inside a burst circle stand in for Foundry's own test */
+  const circle = (o, r) => { const c = new Set(); for (let x = o[0] - r - 1; x <= o[0] + r; x++) for (let y = o[1] - r - 1; y <= o[1] + r; y++) if (Math.hypot(x + 0.5 - o[0], y + 0.5 - o[1]) <= r) c.add(`${x},${y}`); return c; };
+  const burst = { type: "burst", size: 10, origin: [10, 10] }, cov = circle([10, 10], 2);
+  check("a 10-foot burst covers 12 squares", cov.size === 12);
+  const C = [{ id: "a", square: [10, 10], size: 1 }, { id: "b", square: [12, 10], size: 1 }, { id: "big", square: [11, 8], size: 2 }, { id: "far", square: [14, 10], size: 1 }, { id: "corner", square: [11, 11], size: 1 }];
+  check("caught: in it, a Large creature by one square, not outside", caughtBy(burst, cov, C).join() === "a,big", caughtBy(burst, cov, C).join());
+  check("a solid wall stops it", caughtBy(burst, cov, C, [[[10.8, 8], [10.8, 10]]]).join() === "a" && crossesWall([0, 0], [2, 0], [[[1, -1], [1, 1]]]) && !crossesWall([0, 0], [2, 0], [[[0, -1], [0, 1]]]) && !crossesWall([0, 0], [2, 0], [[[0, 0], [2, 0]]]));
+  check("the caster isn't in its own emanation", caughtBy({ type: "emanation", size: 5, origin: [5.5, 5.5] }, new Set(["5,5", "6,5"]), [{ id: "me", square: [5, 5] }, { id: "x", square: [6, 5] }], [], "me").join() === "x");
+  check("squares of a creature", squaresOf([2, 3], 2).length === 4);
+  /* the plan check, with a stand-in for the glue's areaOf */
+  const people = [{ id: "tE1", label: "E1", square: [8, 5] }, { id: "tM2", label: "M2", square: [6, 5], ally: true }, { id: "tMe", label: "M1", square: [5, 5], ally: true }, { id: "tX", label: null, square: [9, 6] }];
+  const areaOf = (sp, aimStep, from, target) => {
+    const r = aimArea(sp.area, aimStep, from, target); if (!r.ok) return r;
+    const covered = new Set(); for (let x = 0; x < 30; x++) for (let y = 0; y < 30; y++) { const cx = x + 0.5, cy = y + 0.5, o = r.aim.origin;
+      if (r.aim.type === "burst" ? Math.hypot(cx - o[0], cy - o[1]) <= r.aim.size / 5 : r.aim.type === "cone" ? Math.hypot(cx - o[0], cy - o[1]) <= r.aim.size / 5 && Math.abs((((Math.atan2(cy - o[1], cx - o[0]) * 180 / Math.PI) - r.aim.rotation + 540) % 360) - 180) <= 45 : false) covered.add(`${x},${y}`); }
+    const ids = caughtBy(r.aim, covered, people.map(p => ({ id: p.id, square: p.id === "tMe" ? from.square : p.square, size: 1 })), [], "tMe");
+    const lab = new Map(people.map(p => [p.id, p])), allies = ids.filter(i => lab.get(i)?.ally).map(i => lab.get(i).label);
+    return { ok: true, aim: r.aim, ids, allies, self: "M1", known: ids.filter(i => lab.get(i)?.label && !lab.get(i).ally).map(i => lab.get(i).label) };
+  };
+  const BF = { id: "breathe-fire", name: "Breathe Fire", ranks: [{ rank: 1, pool: "i", left: 1 }], minActions: 2, maxActions: 2, range: null, targets: 0, area: { type: "cone", size: 15 }, save: { stat: "reflex", basic: true }, damaging: true, traits: ["fire"] };
+  const FB = { id: "fireball", name: "Fireball", ranks: [{ rank: 3, pool: "s", left: 2 }], minActions: 2, maxActions: 2, range: 500, targets: 0, area: { type: "burst", size: 20 }, save: { stat: "reflex", basic: true }, damaging: true, traits: ["fire"], lasting: false };
+  const GR = { id: "grease", name: "Grease", ranks: [{ rank: 1, pool: "g", left: 1 }], minActions: 2, maxActions: 2, range: 30, targets: 0, area: { type: "burst", size: 10 }, save: null, damaging: false, traits: [], lasting: true };
+  const actx = { actions: 3, strikes: [], abilities: [], spells: [BF, FB, GR], saveRows: true, me: { square: [5, 5], size: 1 }, targets: { E1: { name: "E1", square: [8, 5], size: 1, flat: 0 } }, allies: { M1: { name: "M1", square: [5, 5], ally: true }, M2: { name: "M2", square: [6, 5], ally: true } }, areaOf };
+  let q = checkPlan({ steps: [{ do: "spell", item: "breathe-fire", toward: [8, 5] }] }, actx);
+  check("a cone that would catch an ally is turned down, naming it", !q.ok && /would also catch M2/.test(q.reason) && /"deliberate": true/.test(q.reason), JSON.stringify(q));
+  q = checkPlan({ steps: [{ do: "spell", item: "breathe-fire", toward: [8, 5], deliberate: true }] }, actx);
+  check("deliberate: it runs for real, and the GM's card shows the ally", q.ok && q.steps[0].mode === "area" && q.steps[0].area.deliberate && q.steps[0].area.hits.includes("tM2") && q.steps[0].save === "reflex" && q.steps[0].basic, JSON.stringify(q));
+  q = checkPlan({ steps: [{ do: "spell", item: "breathe-fire", toward: [5, 0] }] }, actx);
+  check("a cone away from its allies", q.ok && q.steps[0].mode === "area" && q.steps[0].area.aim.rotation === -90 && !q.steps[0].area.catches.length, JSON.stringify(q));
+  q = checkPlan({ steps: [{ do: "spell", item: "fireball", at: [6, 5] }] }, actx);
+  check("a burst on itself names itself", !q.ok && /itself/.test(q.reason) && /M2/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "spell", item: "fireball", at: [11, 5] }] }, actx);
+  check("a burst catching an enemy and one it can't perceive", q.ok && q.steps[0].area.catches.join() === "E1" && q.steps[0].area.hits.includes("tX") && /catching E1/.test(describeStep(q.steps[0])) && !/tX/.test(describeStep(q.steps[0])), JSON.stringify(q));
+  check("a burst's corner must be in range", /beyond Grease's range \(30 ft\)/.test(checkPlan({ steps: [{ do: "spell", item: "grease", at: [20, 20] }] }, actx).reason ?? ""));
+  q = checkPlan({ steps: [{ do: "spell", item: "grease", at: [8, 9] }] }, actx);
+  check("a non-damaging area is placed and goes to the card, and stays", q.ok && q.steps[0].mode === "card" && q.steps[0].lasting && q.steps[0].area.aim && /The area is placed/.test(describeStep(q.steps[0])), JSON.stringify(q));
+  check("an aim it can't use", /Breathe Fire: a cone is aimed with "toward"/.test(checkPlan({ steps: [{ do: "spell", item: "breathe-fire", at: [7, 7] }] }, actx).reason ?? ""));
+  check("without Toolbelt's rows a damaging area is the GM's", checkPlan({ steps: [{ do: "spell", item: "breathe-fire", toward: [5, 0] }] }, { ...actx, saveRows: false }).steps?.[0].mode === "card");
+  q = checkPlan({ steps: [{ do: "stride", to: [5, 9] }, { do: "spell", item: "breathe-fire", toward: [8, 9] }] }, { ...actx, speed: 25, route: (f, t) => ({ ok: true, route: [f, t], cost: 20 }) });
+  check("an area after a Stride is aimed from the new square", q.ok && q.steps[1].area.aim.origin.join() === "6,9.5", JSON.stringify(q.steps?.[1]?.area));
+  check("an aimed step reads where it goes", /toward square 5, 0/.test(describeStep(checkPlan({ steps: [{ do: "spell", item: "breathe-fire", toward: [5, 0] }] }, actx).steps[0])) && aimText({ aim: { type: "burst", corner: [1, 2] } }) === " bursting from the corner [1, 2]" && aimText({ aim: { type: "emanation" } }) === " around itself");
+  /* where an area step stands */
+  const R = { castStarted: true, cast: {}, placed: {}, rows: ["a", "b"] };
+  check("area stages: cast, place, saves", nextArea({}) === "cast" && nextArea({ castStarted: true }) === "ask" && nextArea({ castStarted: true, cast: {} }) === "place" && nextArea(R) === "save" && nextArea({ ...R, saves: { a: 1 } }) === "save");
+  check("area damage once, then applied to each by degree", nextArea({ ...R, saves: { a: 1, b: 3 } }, { apply: true }) === "damage" && nextArea({ ...R, saves: { a: 1, b: 3 }, damageStarted: true }, { apply: true }) === "ask"
+    && nextArea({ ...R, saves: { a: 1, b: 0 }, damageStarted: true, damage: {} }, { apply: true }) === "apply" && nextArea({ ...R, saves: { a: 1, b: 0 }, damageStarted: true, damage: {}, applying: { a: true } }, { apply: true }) === "ask"
+    && nextArea({ ...R, saves: { a: 1, b: 0 }, damageStarted: true, damage: {}, applying: { a: true }, applied: { a: true } }, { apply: true }) === "apply"
+    && nextArea({ ...R, saves: { a: 1, b: 0 }, damageStarted: true, damage: {}, applying: { a: true, b: true }, applied: { a: true, b: true } }, { apply: true }) === "remove"
+    && nextArea({ ...R, saves: { a: 1, b: 0 }, damageStarted: true, damage: {}, applying: { a: true, b: true }, applied: { a: true, b: true }, removed: true }, { apply: true }) === "next");
+  check("everyone saved critically: no damage, the area goes", nextArea({ ...R, saves: { a: 3, b: 3 } }, { apply: true }) === "remove" && nextArea({ ...R, saves: { a: 3, b: 3 } }, { apply: true, lasting: true }) === "next");
+  check("damage off: rolled, not applied", nextArea({ ...R, saves: { a: 1, b: 2 }, damageStarted: true, damage: {} }, { apply: false }) === "remove");
+  check("card areas and no rows are the GM's", nextArea({ castStarted: true, cast: {}, placed: {} }, { mode: "card" }) === "gm" && nextArea({ ...R, noRows: true }) === "gm");
+  check("no one caught", nextArea({ castStarted: true, cast: {}, placed: {}, rows: [] }) === "remove");
+  check("who it hurts", JSON.stringify(areaHurt({ rows: ["a", "b", "c"], saves: { a: 0, b: 2, c: 3 } })) === '{"a":2,"b":0.5}');
+  check("area results for the thinker", doneStep({ do: "spell", item: "x", mode: "area" }, { cast: {}, results: "E1 failure" }).result === "saves: E1 failure" && doneStep({ do: "spell", item: "x", mode: "area" }, { cast: {}, results: "" }).result === "cast; no one it knows of was in the area" && doneStep({ do: "spell", item: "x", mode: "area" }, { cast: {} }).result === "waiting for saves");
+  check("list words", listWords([]) === "" && listWords(["a"]) === "a" && listWords(["a", "b", "c"]) === "a, b and c");
+  /* the plan as it arrives */
+  check("cleanPlan keeps an area's aim", (p => p.ok && p.plan.steps[0].at.join() === "3,4" && p.plan.steps[0].toward.join() === "1,1" && p.plan.steps[0].deliberate === true)(cleanPlan({ steps: [{ do: "spell", item: "x", at: [3, 4], toward: [1, 1], deliberate: true }] }))
+    && !cleanPlan({ steps: [{ do: "spell", item: "x", at: [3] }] }).ok && !cleanPlan({ steps: [{ do: "spell", item: "x", deliberate: "yes" }] }).ok && !("deliberate" in cleanPlan({ steps: [{ do: "spell", item: "x", deliberate: false }] }).plan.steps[0]));
+  check("the prompt explains aiming", /"toward": \[x, y\]/.test(hello(1).prompt) && /"deliberate": true/.test(hello(1).prompt));
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
 for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);

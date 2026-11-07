@@ -1,5 +1,5 @@
 /* The Monster Turns window: GM only. Who's ticked, and the plan card for the turn in hand. PF2e HUD's tracker is left alone. */
-import { WORD, describeChanges, describeStep, isMove } from "../turn.mjs";
+import { WORD, describeChanges, describeStep, isMove, listWords } from "../turn.mjs";
 import { esc } from "../journal.mjs";
 import { describeKnows } from "../perceive.mjs";
 import { ID } from "../builder.mjs";
@@ -21,10 +21,15 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     const labels = c.getFlag(ID, "turns")?.labels ?? {}, nameOf = l => { const a = Object.entries(labels).find(([, v]) => v === l); return a ? c.scene.tokens.get(a[0])?.name ?? null : null; };
     const named = t => String(t ?? "").replace(/\b[EM]\d{1,3}\b/g, l => nameOf(l) ?? l);
     if (r) { const tok = c.scene.tokens.get(r.tokenId), pos = r.pos ?? 0, n = r.steps?.length ?? 0, knows = describeKnows(r.packet, nameOf);
-      const words = { requested: r.why ? "Asked again: waiting for a new plan." : "Waiting for a plan.", submitted: "Checking the plan.", ready: pos ? `Step ${pos + 1} of ${n} next.` : "Ready.", running: "Carrying it out.", held: "Held.", stopped: "Stopped.", saves: "Waiting for a save." }[r.state] ?? r.state;
+      const words = { requested: r.why ? "Asked again: waiting for a new plan." : "Waiting for a plan.", submitted: "Checking the plan.", ready: pos ? `Step ${pos + 1} of ${n} next.` : "Ready.", running: "Carrying it out.", held: "Held.", stopped: "Stopped.", saves: "Waiting for saves." }[r.state] ?? r.state;
       const strikeName = id => r.packet?.you?.strikes?.find(x => x.id === id)?.name ?? id, abilityName = id => r.packet?.you?.abilities?.find(x => x.id === id)?.name ?? id, spellName = id => r.packet?.you?.spells?.find(x => x.id === id)?.name ?? id;
       const done = (r.done ?? []).map(d => d.do === "strike" ? `${strikeName(d.item)} at ${nameOf(d.target) ?? d.target} (${d.result})` : isMove(d) ? `${WORD[d.do] ?? "Stride"} to square ${d.to?.[0]}, ${d.to?.[1]} (${d.result})` : d.do === "stand" ? `Stand (${d.result})` : d.do === "drop-prone" ? `Drop Prone (${d.result})` : d.do === "take-cover" ? `Take Cover (${d.result})` : d.do === "ability" ? `${abilityName(d.item)}${d.target ? ` at ${nameOf(d.target) ?? d.target}` : ""} (${d.result})` : d.do === "spell" ? `${spellName(d.item)}${d.target ? ` at ${nameOf(d.target) ?? d.target}` : ""} (${named(d.result)})` : d.do).join(", ");
-      const steps = r.steps ? `<ol>${r.steps.map((s, i) => `<li class="${i < pos ? "leb-done" : i === pos && r.state !== "requested" ? "leb-next" : ""}">${i < pos ? "✓ " : ""}${esc(named(describeStep(s)))}</li>`).join("")}</ol>` : "";
+      /* an area also catches creatures the monster doesn't know of (and its allies, when it meant to): the GM sees them all */
+      const also = s => { if (!s.area?.hits?.length) return "";
+        const known = new Set((s.area.catches ?? []).map(l => Object.entries(labels).find(([, v]) => v === l)?.[0]).filter(Boolean));
+        const rest = s.area.hits.filter(t => !known.has(t)).map(t => c.scene.tokens.get(t)?.name).filter(Boolean);
+        return rest.length ? ` Also in the area: ${listWords(rest)}.` : ""; };
+      const steps = r.steps ? `<ol>${r.steps.map((s, i) => `<li class="${i < pos ? "leb-done" : i === pos && r.state !== "requested" ? "leb-next" : ""}">${i < pos ? "✓ " : ""}${esc(named(describeStep(s)) + also(s))}</li>`).join("")}</ol>` : "";
       const go = pos ? `<i class="fa-solid fa-forward-step"></i> Next step` : `<i class="fa-solid fa-play"></i> Do it`;
       /* a save the player rolls from their row on the spell's card; the GM can roll it for them */
       const waiting = r.state === "saves" ? (r.log?.[pos]?.waiting ?? []).map(tid => { const t = c.scene.tokens.get(tid), player = t?.actor?.hasPlayerOwner && game.users.some(u => !u.isGM && u.active && t.actor.testUserPermission(u, "OWNER"));

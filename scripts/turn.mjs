@@ -1,6 +1,7 @@
 /* A monster's turn as plain data: what a plan means, whether it's legal, and where a step stands. Pure: no Foundry globals.
    The glue gathers live values first. Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities and spells so far; the other step kinds come as step 2 goes on. */
 import { distanceBetween, headingOf } from "./move.mjs";
+import { placeable } from "./area.mjs";
 /** What each step kind costs. An ability's cost is its own (0 for a free action); 1 here is only the fallback. */
 export const COSTS = { strike: 1, stride: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, none: 0 };
 /** A basic save's damage by the target's degree of success, 0 critical failure to 3 critical success: double, full, half, none. Rules: Basic Saving Throws
@@ -20,6 +21,8 @@ export const WORD = { stride: "Stride", step: "Step", crawl: "Crawl" };
 /** A Step or a Crawl moves 5 ft; one that Foundry would charge more for (a diagonal after an odd number this turn) is refused. Rules: Step https://2e.aonprd.com/Actions.aspx?ID=2304; Crawl (Player Core): prone, Speed 10+, 5 ft, stays prone. */
 export const STEP_FT = 5;
 const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
+/** "A", "A and B", "A, B and C". */
+export const listWords = (xs = []) => xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`;
 
 /** Check a plan against what the glue gathered. Returns { ok: true, steps } with each step resolved, or { ok: false, reason }.
     ctx: { actions (left this turn), attacksBefore (attacks already made this turn, for the multiple attack penalty), strikes: [{ id, name, reach, ranged, maxRange }],
@@ -51,7 +54,7 @@ export function checkPlan(plan, ctx) {
       if (ctx.cantAct) return { ok: false, reason: `${at}: ${ctx.cantAct}` };
       const sp = (ctx.spells ?? []).find(s => s.id === step.item);
       if (!sp) return { ok: false, reason: `${at}: it has no spell called "${step.item}" it can cast now${(ctx.abilities ?? []).some(a => a.id === step.item) ? ` (${step.item} is an ability: use an "ability" step)` : ""}.` };
-      const r = checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools });
+      const r = checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here });
       if (!r.ok) return r;
       if (r.step.actions > left) return { ok: false, reason: `${at}: no actions left${r.step.actions > 1 ? ` (${sp.name} takes ${r.step.actions})` : ""}.` };
       left -= r.step.actions; if (r.pool) pools[r.pool] = (r.pool in pools ? pools[r.pool] : r.poolLeft) - (r.poolCost ?? 1);
@@ -135,7 +138,7 @@ export function checkPlan(plan, ctx) {
     attack or waits for the save, and applies the damage); anything else (an area, a spell with no attack or save, more than damage) is "card": the
     module casts it, its card goes to chat and the GM applies it. Rules: Cast a Spell (https://2e.aonprd.com/Actions.aspx?ID=2287), spell attacks and
     the multiple attack penalty (Player Core: a spell with the attack trait counts toward it), Restrained (no attack or manipulate actions). */
-function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools }) {
+function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here }) {
   const no = reason => ({ ok: false, reason: `${at}: ${reason}` }), traits = sp.traits ?? [];
   if (ctx.cantAttack && traits.includes("attack")) return no(ctx.cantAttack);
   if (ctx.cantAttack && traits.includes("manipulate")) return no(`it is restrained, so it can't cast ${sp.name} (it has the manipulate trait).`);
@@ -163,15 +166,28 @@ function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools }) {
     const reach = sp.touch ? Math.max(5, ctx.reach ?? 5) : sp.range, d = distanceTo(t, sp.touch ? reach : null);
     if (d > reach) return no(`${t.name ?? tLabel} is ${d} ft away, out of ${sp.touch ? "reach for" : "range of"} ${sp.name} (${reach} ft).`);
   }
-  if (t && sp.area && sp.range != null) { const d = distanceTo(t, null); if (d > sp.range) return no(`${t.name ?? tLabel} is ${d} ft away, beyond ${sp.name}'s range (${sp.range} ft).`); }
+  /* an area the module places (Rhea, 2026-11-07): aimed by "at" (a burst's corner) or "toward" (a cone's or line's square), or at the named creature; it may
+     not catch an ally or the monster itself unless the plan says "deliberate" */
+  let area = null;
+  if (sp.area && placeable(sp.area) && ctx.areaOf && here) {
+    const r = ctx.areaOf(sp, { at: step.at, toward: step.toward }, { square: here, size: ctx.me?.size ?? 1 }, t ? { square: t.square, size: t.size ?? 1 } : null);
+    if (!r.ok) return no(`${sp.name}: ${r.reason}`);
+    if (r.aim.type === "burst" && sp.range != null) {   /* a corner of a square within range: the nearest of the four squares round it */
+      const c = r.aim.corner, d = Math.min(...[[c[0] - 1, c[1] - 1], [c[0], c[1] - 1], [c[0] - 1, c[1]], [c[0], c[1]]].map(q => distanceTo({ square: q, size: 1 }, null)));
+      if (d > sp.range) return no(`the corner [${c[0]}, ${c[1]}] is ${d} ft away, beyond ${sp.name}'s range (${sp.range} ft).`);
+    }
+    if (r.allies.length && !step.deliberate) return no(`${sp.name} there would also catch ${listWords(r.allies.map(l => l === r.self ? "itself" : l))}. Aim it elsewhere, or add "deliberate": true if it means to.`);
+    area = { type: r.aim.type, size: r.aim.size, aim: r.aim, catches: r.known, hits: r.ids, ...(step.deliberate ? { deliberate: true } : {}) };
+  } else if (t && sp.area && sp.range != null) { const d = distanceTo(t, null); if (d > sp.range) return no(`${t.name ?? tLabel} is ${d} ft away, beyond ${sp.name}'s range (${sp.range} ft).`); }
   /* run for real only at one creature it perceives, and never a spell whose range, targets or damage change with its actions (Heal, Harm: PF2e's
      variants, whose base item reads as a basic save at touch), nor at an ally: those are the GM's from the card */
   const one = !sp.area && !sp.variants && (sp.targets ?? 0) === 1 && !!t && !t.ally;
-  const mode = one && sp.attack ? "attack" : one && sp.save && ctx.saveRows ? "save" : "card";
+  /* a basic save area that deals damage runs for real (Rhea, 2026-11-07): everyone in it saves and takes damage by their own degree */
+  const mode = one && sp.attack ? "attack" : one && sp.save && ctx.saveRows ? "save" : area && !sp.variants && !sp.attack && sp.save?.basic && sp.damaging && ctx.saveRows ? "area" : "card";
   const isAttack = traits.includes("attack");
   const out = { do: "spell", item: sp.id, itemName: sp.name, ...(sp.entryId ? { entryId: sp.entryId, spellId: sp.spellId } : {}), rank: at_.rank, actions, mode, ...(t ? { target: tLabel, targetName: t.name ?? tLabel, flat: sp.area ? 0 : t.flat ?? 0 } : {}),
-    ...(isAttack ? { attack: true, mapCounts: true, variant: Math.min(attacks, 2) } : {}), ...(sp.area ? { area: { ...sp.area } } : {}),
-    ...(mode === "save" ? { save: sp.save.stat, basic: !!sp.save.basic } : {}), damaging: !!sp.damaging, ...(sp.critText ? { critText: true } : {}) };
+    ...(isAttack ? { attack: true, mapCounts: true, variant: Math.min(attacks, 2) } : {}), ...(area ? { area, ...(sp.lasting ? { lasting: true } : {}) } : sp.area ? { area: { ...sp.area } } : {}),
+    ...(mode === "save" || mode === "area" ? { save: sp.save.stat, basic: !!sp.save.basic } : {}), damaging: !!sp.damaging, ...(sp.critText ? { critText: true } : {}) };
   return { ok: true, step: out, pool: at_.pool, poolLeft: at_.left, poolCost: at_.cost ?? 1 };
 }
 /** What to do next with a spell step, from its record. Never repeated: when the record can't tell whether a stage finished, "ask". The spell is cast first
@@ -199,6 +215,36 @@ export function nextSpell(rec = {}, { mode = "card", flat = 0, apply = false, da
   if (!apply && !rec.applying) return "next";
   if (!rec.applying) return "apply";
   return rec.applied ? "next" : "ask";
+}
+/** What to do next with an area spell the module placed (Rhea, 2026-11-07), from its record; never repeated. Cast (with the caught creatures targeted, so
+    Toolbelt gives each a row), then place PF2e's area (found again if it already exists, so safe after a reload). Mode "card": the GM resolves it from
+    there. Mode "area" (a damaging basic save): every caught creature with a row saves ("save": the glue rolls what it may and waits for players), the
+    damage is rolled once and applied to each by its own degree, then an instant area is removed; a lasting one stays for the GM.
+    rec.rows: the caught creatures with a row on the card; rec.saves: { tokenId: degree }; rec.applying / rec.applied: { tokenId: true }. */
+export function nextArea(rec = {}, { mode = "area", apply = false, lasting = false } = {}) {
+  if (!rec.castStarted) return "cast";
+  if (!rec.cast) return "ask";
+  if (!rec.placed) return "place";
+  if (mode !== "area" || rec.noRows) return "gm";
+  const ids = rec.rows ?? [];
+  if (ids.some(id => rec.saves?.[id] == null)) return "save";
+  const hurt = ids.filter(id => SAVE_MULT[rec.saves[id]] > 0);
+  if (hurt.length) {
+    if (!rec.damageStarted) return "damage";
+    if (!rec.damage) return "ask";
+    if (apply || rec.applying) for (const id of hurt) if (!rec.applied?.[id]) return rec.applying?.[id] ? "ask" : "apply";
+  }
+  if (!lasting && !rec.removed) return "remove";
+  return "next";
+}
+/** Who an area hurts and by how much: { tokenId: multiplier } for each caught creature whose save lets damage through. */
+export const areaHurt = (rec = {}) => Object.fromEntries((rec.rows ?? []).filter(id => SAVE_MULT[rec.saves?.[id]] > 0).map(id => [id, SAVE_MULT[rec.saves[id]]]));
+/** Where an area was aimed, in words. */
+export function aimText(area) {
+  const a = area?.aim; if (!a) return "";
+  if (a.type === "burst") return ` bursting from the corner [${a.corner[0]}, ${a.corner[1]}]`;
+  if (a.type === "emanation") return " around itself";
+  return a.toward ? ` toward square ${a.toward[0]}, ${a.toward[1]}` : "";
 }
 /** The damage multiplier a spell step applies: double on a spell attack's critical hit; by degree for a basic save. */
 export const spellMultiplier = (step, rec = {}) => step.mode === "attack" ? (rec.attack?.degree === 3 ? 2 : 1) : SAVE_MULT[rec.save?.degree] ?? 1;
@@ -301,6 +347,7 @@ function spellResult(step, rec = {}) {
   if (!rec.cast) return "unknown";
   if (rec.flat && !rec.flat.ok) return "flat check failed";
   if (step.mode === "card" || rec.noRows) return "card posted for the GM to apply";
+  if (step.mode === "area") return rec.results != null ? (rec.results ? `saves: ${rec.results}` : "cast; no one it knows of was in the area") : "waiting for saves";
   if (step.mode === "attack") return rec.attack ? OUTCOMES[rec.attack.degree] ?? "unknown" : "unknown";
   return rec.save ? `target's save: ${CHECK_OUTCOMES[rec.save.degree] ?? "unknown"}` : "waiting for the save";
 }
@@ -366,6 +413,11 @@ export function describeStep(s) {
   if (s.do === "spell") {
     const head = `Casts ${s.itemName} (rank ${s.rank}${s.actions !== 2 ? `, ${s.actions} action${s.actions === 1 ? "" : "s"}` : ""})`, flat = s.flat ? `, after a DC ${s.flat} flat check` : "";
     if (s.mode === "attack") return `${head} at ${s.targetName}: a spell attack${s.variant ? `, attack ${s.variant + 1}` : ""}${flat}.`;
+    if (s.area?.aim) {
+      const what = `a ${s.area.size}-foot ${s.area.type}${aimText(s.area)}${s.area.catches?.length ? `, catching ${listWords(s.area.catches)}` : ""}${s.area.deliberate ? " (its allies on purpose)" : ""}`;
+      if (s.mode === "area") return `${head}: ${what}. Each rolls a basic ${s.save[0].toUpperCase() + s.save.slice(1)} save and takes damage by degree.`;
+      return `${head}: ${what}. The area is placed; its card goes to chat for you to apply.`;
+    }
     if (s.mode === "save") return `${head} at ${s.targetName}: a ${s.basic ? "basic " : ""}${s.save[0].toUpperCase() + s.save.slice(1)} save${flat}${s.damaging && s.basic ? "" : ", then you apply its effects"}.`;
     return `${head}${s.targetName ? `${s.area ? " aimed at" : " at"} ${s.targetName}` : ""}${flat}: its card goes to chat for you to apply${s.area ? ` (place its ${s.area.size}-foot ${s.area.type})` : ""}${s.attack ? `, as attack ${(s.variant ?? 0) + 1}` : ""}.`;
   }

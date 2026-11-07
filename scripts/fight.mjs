@@ -1,10 +1,11 @@
 /* A fight's turns. One named account does the work (the runner: the Claude Bridge unless the setting says otherwise), on its own page with the
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. For now it runs Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities and spells; see claude/encounter-builder-plan.md for the rest of step 2. */
-import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES, WORD, absorbOwn, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "./turn.mjs";
+import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES, WORD, absorbOwn, areaHurt, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "./turn.mjs";
 import { cutShort, diagonalsIn, featureNear, findRoute, findStep, footprintAt, routeWords } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap } from "./builder.mjs";
+import { aimArea, aimWords, alliesCaught, caughtBy, shapeOf, squaresNear } from "./area.mjs";
 import { MAX_TRIES, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "./brain.mjs";
 
 const ID = "lythara-encounter-builder", WORKBENCH = "xdy-pf2e-workbench", TOOLBELT = "pf2e-toolbelt", VISIONER = "pf2e-visioner", GROUND_RADIUS = 10, STEP_MS = 20000, SETTLE_MS = 400, SCENE_MS = 30000, RESUMABLE = ["ready", "running", "held", "stopped", "saves"];
@@ -149,7 +150,7 @@ async function spellBook(actor) {
             range: rng.range, touch: rng.touch, rangeText: base.system.range?.value ?? "", targets: spellTargets(base.system.target?.value), targetText: base.system.target?.value ?? "",
             area: base.system.area?.type ? { type: base.system.area.type, size: base.system.area.value } : null, attack: !!base.isAttack, save: save?.statistic ? { stat: save.statistic, basic: !!save.basic } : null,
             damaging: Object.keys(base.system.damage ?? {}).length > 0, damage: Object.values(base.system.damage ?? {}).map(d => `${d.formula} ${d.type ?? ""}`.trim()).join(" + "),
-            variants: !!base.hasVariants && act.min !== act.max, traits: [...(base.system.traits?.value ?? [])], critText: /critical success/i.test(text), dc: e.statistic.dc?.value ?? null, attackMod: e.statistic.check?.mod ?? null, text });
+            variants: !!base.hasVariants && act.min !== act.max, lasting: !!String(base.system.duration?.value ?? "").trim() || !!base.system.duration?.sustained, traits: [...(base.system.traits?.value ?? [])], critText: /critical success/i.test(text), dc: e.statistic.dc?.value ?? null, attackMod: e.statistic.check?.mod ?? null, text });
         }
         const s = book.get(key), had = s.ranks.find(r => r.rank === rank);
         if (had) { if (pool?.startsWith("prep:")) had.left = left; } else s.ranks.push({ rank, pool, left, cost });
@@ -162,7 +163,8 @@ async function spellBook(actor) {
 function spellsOf(book) {
   const cap = (t, n) => t.length > n ? `${t.slice(0, n - 1)}…` : t;
   return book.map(s => ({ id: s.id, name: s.name, ranks: Object.fromEntries(s.ranks.map(r => [r.rank, r.pool == null ? "at will" : r.pool === "focus" ? `${r.left} focus point${r.left === 1 ? "" : "s"} (costs ${r.cost})` : r.left])),
-    actions: s.time, ...(s.rangeText ? { range: s.rangeText } : {}), ...(s.targetText ? { targets: s.targetText } : {}), ...(s.area ? { area: `${s.area.size}-foot ${s.area.type}` } : {}),
+    actions: s.time, ...(s.rangeText ? { range: s.rangeText } : {}), ...(s.targetText ? { targets: s.targetText } : {}), ...(s.area ? { area: `${s.area.size}-foot ${s.area.type}`, aim: aimWords(s.area.type) ?? "the GM places it" } : {}),
+    ...(s.area && s.lasting ? { lasting: "its area stays on the map after the turn" } : {}),
     ...(s.attack ? { defense: "AC", attackMod: s.attackMod } : s.save ? { defense: `${s.save.basic ? "basic " : ""}${s.save.stat[0].toUpperCase()}${s.save.stat.slice(1)} save`, dc: s.dc } : {}),
     ...(s.damage ? { baseDamage: s.damage } : {}), ...(s.variants ? { variants: "what it does depends on the actions spent: the GM applies it from its card" } : {}), traits: s.traits, text: cap(s.text, 900) }));
 }
@@ -249,7 +251,7 @@ function situationNow(combat, tok, labels = {}, others = null) {
 /** The runner's answer to any change on the Combat. */
 export function onCombatUpdate(combat, change) {
   if (!isRunner()) return;
-  if ("turn" in change || "round" in change) leaveWaiting(combat).catch(e => console.warn(`${ID} | waiting`, e));
+  if ("turn" in change || "round" in change) leaveWaiting(combat).catch(e => console.warn(`${ID} | waiting`, e)).then(() => dropInstantAreas(combat, currentRequest(combat) ? { id: currentRequest(combat).id, pos: 0 } : null)).catch(e => console.warn(`${ID} | areas`, e));
   if ("turn" in change || "round" in change) noteWhatTheySense(combat).catch(e => console.warn(`${ID} | memory`, e)).then(() => onTurnChange(combat)).catch(e => console.error(`${ID} | turn`, e));
   act(combat);
 }
@@ -259,7 +261,7 @@ async function leaveWaiting(combat) {
   for (const [id, r] of Object.entries(turns(combat).requests ?? {})) {
     if (r.state !== "saves" || (r.round === combat.round && r.combatantId === combat.combatant?.id)) continue;
     const step = r.steps?.[r.pos ?? 0];
-    change[`requests.${id}.state`] = "done"; change[`requests.${id}.note`] = [r.note, `The turn moved on while ${step?.itemName ?? "a spell"} waited for ${step?.target ? `${step.target}'s` : "a"} save: apply what's left from its card.`].filter(Boolean).join(" ");
+    change[`requests.${id}.state`] = "done"; change[`requests.${id}.note`] = [r.note, `The turn moved on while ${step?.itemName ?? "a spell"} waited for ${step?.area?.aim ? "saves" : `${step?.target ? `${step.target}'s` : "a"} save`}: apply what's left from its card.`].filter(Boolean).join(" ");
   }
   if (Object.keys(change).length) await saveTurns(combat, change);
 }
@@ -305,7 +307,7 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
     /* abilities, and its last action before this plan (a Grab or Knockdown needs it): the step just done, or the last thing done before a re-plan */
     abilities: abilityList(actor).map(({ item, ...a }) => a), last: lastAction({ ...(before ?? { done: req.done?.at(-1) ?? null }), strikes }),
     /* spells: what it can cast now, and for a spell at a friend its allies (not hidden by the GM) and itself, by their labels */
-    ...(spells ? { spells: await spellBook(actor), allies: alliesByLabel(combat, tok), saveRows: targetHelperOn(), reach: actor.getReach?.({ action: "interact" }) ?? 5 } : {}) };   /* touch: the creature's own reach, not a weapon's */
+    ...(spells ? { spells: await spellBook(actor), allies: alliesByLabel(combat, tok), saveRows: targetHelperOn(), reach: actor.getReach?.({ action: "interact" }) ?? 5, areaOf: areaCheck(combat, tok, req, now) } : {}) };   /* touch: the creature's own reach, not a weapon's */
 }
 /** Its allies the GM hasn't hidden, and itself, by label, for a spell aimed at a friend. */
 function alliesByLabel(combat, tok) {
@@ -905,6 +907,154 @@ async function runSpell(combat, id, i, step, tok, target) {
   }
   return "ask";
 }
+/* ---------- areas (Rhea, 2026-11-07) ----------
+   The module places PF2e's own area for a monster's area spell: the Region PF2e's Place button makes (placeRegionFromItem in 8.7.0: a circle for a burst,
+   a 90° cone, a line one square wide, an emanation round the caster's token, "coverage" highlighting, PF2e's messageId, origin and areaShape flags, which
+   Visioner reads to give each creature its cover on the Reflex save from the area's origin). Who it catches is decided by Foundry's own test of each
+   square's centre (what the highlighted squares show), and line of effect is stopped only by solid walls, never trunks. */
+const SOLID_SIGHT = (CONST.EDGE_SENSE_TYPES ?? CONST.WALL_SENSE_TYPES).NORMAL, SOLID_MOVE = CONST.WALL_MOVEMENT_TYPES.NORMAL;
+/** Solid walls, in squares: ones that block both movement and sight. Never Survey Sheet's trunks (they give cover to the save instead), never an open door. */
+function solidWalls(scene) {
+  const g = scene.grid.size, X = scene.dimensions.sceneX, Y = scene.dimensions.sceneY;
+  return scene.walls.contents.filter(w => w.move === SOLID_MOVE && w.sight === SOLID_SIGHT && w.flags?.["lythara-survey-sheet"]?.enc !== "trunk" && !(w.door && w.ds === CONST.WALL_DOOR_STATES.OPEN))
+    .map(w => [[(w.c[0] - X) / g, (w.c[1] - Y) / g], [(w.c[2] - X) / g, (w.c[3] - Y) / g]]);
+}
+/** A shape in squares (area.mjs's shapeOf) as a Region shape in pixels. A token shape's width and height stay in squares. */
+function shapePx(shape, scene, tok) {
+  const g = scene.grid.size, X = scene.dimensions.sceneX, Y = scene.dimensions.sceneY, out = { ...shape };
+  if ("x" in shape) { out.x = X + shape.x * g; out.y = Y + shape.y * g; }
+  for (const k of ["radius", "length"]) if (k in shape) out[k] = shape[k] * g;
+  if (shape.type === "line") out.width = shape.width * g;
+  if (shape.type === "emanation") { delete out.x; delete out.y; out.base = { ...shape.base, x: X + shape.base.x * g, y: Y + shape.base.y * g, shape: tok.shape }; }
+  return out;
+}
+/** What an aim covers and catches on the scene as it stands, writing nothing: a Region made in memory only, Foundry's own test on each square's centre.
+    from: { square, size } where the caster stands (after a move earlier in the plan). */
+function coverage(scene, tok, aim, from) {
+  const shape = shapePx(shapeOf(aim, from), scene, tok), doc = new foundry.documents.RegionDocument({ name: "area", shapes: [shape], levels: [] }, { parent: scene });
+  const g = scene.grid.size, X = scene.dimensions.sceneX, Y = scene.dimensions.sceneY, covered = new Set();
+  for (const [x, y] of squaresNear(aim, from)) if (doc.testPoint({ x: X + (x + 0.5) * g, y: Y + (y + 0.5) * g, elevation: 0 })) covered.add(`${x},${y}`);
+  const creatures = scene.tokens.contents.filter(t => t.actor?.isOfType?.("creature") && !t.actor.isDead).map(t => ({ id: t.id, square: t.id === tok.id ? from.square : squareOf(t, scene), size: sizeOf(t) }));
+  return { shape, covered, ids: caughtBy(aim, covered, creatures, solidWalls(scene), tok.id) };
+}
+/** The plan check's view of an area: who it catches, as labels the monster may know. Allies the GM hid, and creatures it doesn't perceive, are caught but
+    never named to the thinker; their token ids go on the step for the GM's card only. now: what `sense` gave. */
+function areaCheck(combat, tok, req, now) {
+  const allyLabel = new Map(Object.entries(alliesByLabel(combat, tok)).map(([l]) => [tokenIdOf(combat, req, l), l]));
+  const enemyLabel = new Map(Object.entries(req.labels ?? {}).filter(([, id]) => canTarget(now.get(id)?.state)).map(([l, id]) => [id, l]));
+  return (sp, aimStep, from, target) => {
+    const r = aimArea(sp.area, aimStep, from, target); if (!r.ok) return r;
+    const { ids } = coverage(combat.scene, tok, r.aim, from);
+    return { ok: true, aim: r.aim, ids, allies: alliesCaught(ids, id => allyLabel.get(id) ?? null), self: allyLabel.get(tok.id) ?? null, known: ids.map(id => enemyLabel.get(id)).filter(Boolean) };
+  };
+}
+/** Target every creature in a list on the runner's own account, so Toolbelt gives each a row on the card. */
+function aimAll(tokens) {
+  stopAiming();
+  for (const t of tokens) t.object?.setTarget(true, { user: game.user, releaseOthers: false, groupSelection: true });
+}
+const areaFlag = (combat, id, i) => r => { const a = r.flags?.[ID]?.area; return a?.combat === combat.id && a.request === id && a.step === i; };
+/** PF2e's own Region for the cast, found again if it already exists (safe after a reload). */
+async function placeArea(combat, id, i, step, tok, spell, message) {
+  const scene = combat.scene, had = scene.regions.find(areaFlag(combat, id, i)); if (had) return had;
+  const from = { square: squareOf(tok, scene), size: sizeOf(tok) }, shape = shapePx(shapeOf(step.area.aim, from), scene, tok);
+  const origin = { name: spell.name, slug: spell.slug, traits: foundry.utils.deepClone(spell.system.traits?.value ?? []), ...(spell.getOriginData?.() ?? {}) };
+  const [made] = await scene.createEmbeddedDocuments("Region", [{ name: spell.name, shapes: [shape], levels: canvas.level ? [canvas.level.id] : [], color: game.user.color.toString(),
+    highlightMode: "coverage", displayMeasurements: false, visibility: CONST.REGION_VISIBILITY.ALWAYS, ownership: { [game.user.id]: CONST.DOCUMENT_OWNERSHIP_LEVELS.OWNER },
+    flags: { pf2e: { messageId: message?.id ?? null, origin, areaShape: spell.system.area?.type ?? step.area.type }, [ID]: { area: { combat: combat.id, request: id, step: i, lasting: !!step.lasting } } } }]);
+  return made;
+}
+/** Instant areas go once they're done (Rhea, 2026-11-07); lasting ones stay for the GM. keep: the request and step from which areas still matter. */
+async function dropInstantAreas(combat, keep = null) {
+  const ids = combat.scene?.regions.filter(r => { const a = r.flags?.[ID]?.area; return a?.combat === combat.id && !a.lasting && !(keep && a.request === keep.id && a.step >= (keep.pos ?? 0)); }).map(r => r.id) ?? [];
+  if (ids.length) await combat.scene.deleteEmbeddedDocuments("Region", ids);
+}
+/** Roll several creatures' saves on a card through Toolbelt's own buttons: the d20 once for those no player owns, then each player's row. Waits for all. */
+async function rollSavesOnCard(message, targets) {
+  const shift = !!game.user.settings?.showCheckDialogs, click = b => b.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, shiftKey: shift }));
+  const settled = async list => { for (let t = 0; t < 12000; t += 250) { await new Promise(r => setTimeout(r, 250)); const m = game.messages.get(message.id); if (list.every(x => savedDegree(m, x.id) != null)) return true; } return false; };
+  const npcs = targets.filter(t => !t.actor?.hasPlayerOwner), rows = targets.filter(t => t.actor?.hasPlayerOwner);
+  if (npcs.length) { const b = await saveButton(message, npcs[0], true); if (!b) throw new Error(`I couldn't find Toolbelt's save button on the spell's card.`); click(b); await settled(npcs); }
+  for (const t of rows) { const b = await saveButton(message, t, false); if (!b) throw new Error(`I couldn't find ${t.name}'s row on the spell's card.`); click(b); await settled([t]); }
+}
+/** Everyone's saves on an area's card: rolled by the module for creatures no player owns, offline players, and any the GM asked it to roll; a player online
+    rolls their own and the turn waits ("wait"), with no timer. "saved" once all are in. */
+async function awaitAreaSaves(combat, id, i, step, tok) {
+  const get = () => request(combat, id).log?.[i] ?? {}, scene = combat.scene, card = game.messages.get(get().cast?.message);
+  if (!card) { await addNote(combat, id, `${step.itemName}'s card is gone, so I can't read the saves.`); return "ask"; }
+  if (!card.flags?.[TOOLBELT]?.targetHelper) { await save(combat, id, { log: { [i]: { noRows: true } }, note: joinNote(combat, id, `${step.itemName}'s card has no target rows (is Toolbelt's Target Helper on?): roll the saves and apply it yourself.`) }); return "gm"; }
+  const rows = get().rows ?? [], missing = () => rows.filter(t => savedDegree(game.messages.get(card.id), t) == null);
+  const asked = request(combat, id).rollFor ?? {}, rolled = get().rollStarted ?? 0;
+  const mine = missing().map(t => scene.tokens.get(t)).filter(t => t && (asked[t.id] || (!rolled && (!t.actor?.hasPlayerOwner || !ownerOnline(t.actor)))));
+  if (mine.length) {
+    if (!stepGate("save", id)) return "stopped";
+    if (!(await ensureScene(combat) && tok.object)) throw new Error(cantOpen());
+    await saveTurns(combat, { [`requests.${id}.log.${i}.rollStarted`]: rolled + 1, [`requests.${id}.log.${i}.waiting`]: missing(), ...Object.fromEntries(mine.filter(t => asked[t.id]).map(t => [`requests.${id}.rollFor.${t.id}`, null])) });
+    await watched(() => rollSavesOnCard(card, mine));
+  }
+  const left = missing().filter(t => scene.tokens.get(t));   /* a creature removed from the map while waiting has nothing left to save */
+  if (left.length) { await save(combat, id, { log: { [i]: { waiting: left } } }); return "wait"; }
+  const r = request(combat, id), m = game.messages.get(card.id), saves = Object.fromEntries(rows.filter(t => scene.tokens.get(t)).map(t => [t, savedDegree(m, t)]));
+  /* what the monster learns: the saves of creatures it knows of, by label */
+  const known = new Map([...Object.entries(r.labels ?? {}).map(([l, t]) => [t, l]), ...Object.entries(alliesByLabel(combat, tok)).map(([l]) => [tokenIdOf(combat, r, l), l])]);
+  const results = Object.entries(saves).filter(([t]) => known.has(t)).map(([t, d]) => `${known.get(t)} ${CHECK_OUTCOMES[d]}`).join(", ");
+  const gm = step.critText ? `Anything ${step.itemName}'s text gives beyond its damage for each degree is yours to apply from its card.` : null;
+  await saveTurns(combat, { [`requests.${id}.log.${i}.saves`]: saves, [`requests.${id}.log.${i}.rows`]: Object.keys(saves), [`requests.${id}.log.${i}.waiting`]: null, [`requests.${id}.log.${i}.results`]: results,
+    ...Object.fromEntries(rows.map(t => [`requests.${id}.rollFor.${t}`, null])), ...(gm ? { [`requests.${id}.note`]: joinNote(combat, id, gm) } : {}) });
+  return "saved";
+}
+/** An area spell (Rhea, 2026-11-07): cast with every caught creature targeted, PF2e's area placed, then for a damaging basic save everyone's save and the
+    damage by degree; anything else is the GM's from the card. Stages from nextArea; nothing repeats. */
+async function runArea(combat, id, i, step, tok) {
+  const record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {}, scene = combat.scene;
+  const found = spellFor(tok.actor, step); if (!found) throw new Error(`${tok.name} has no ${step.itemName} now.`);
+  const { entry, spell } = found;
+  for (let guard = 0; guard < 40; guard++) {
+    const now = nextArea(get(), { mode: step.mode, apply: applySetting(), lasting: !!step.lasting });
+    if (now === "next" || now === "gm" || now === "ask") return now;
+    if (now === "save") { const s = await awaitAreaSaves(combat, id, i, step, tok); if (s === "saved") continue; return s; }
+    if (!stepGate(now, id)) return "stopped";
+    if (now !== "apply" && now !== "remove" && !(await ensureScene(combat) && tok.object)) throw new Error(cantOpen());   /* applying and removing need no canvas */
+    pending = { tokenId: tok.id, waiters: new Map(), all: true };
+    try {
+      if (now === "cast") {
+        /* who it catches from where it stands now; GM-hidden creatures get no row on a public card, so the GM resolves them */
+        const { ids } = coverage(scene, tok, step.area.aim, { square: squareOf(tok, scene), size: sizeOf(tok) });
+        const rows = ids.filter(t => !scene.tokens.get(t)?.hidden), hidden = ids.filter(t => scene.tokens.get(t)?.hidden);
+        aimAll(rows.map(t => scene.tokens.get(t)));
+        await record({ castStarted: true, caught: ids, rows });
+        const message = await watched(async () => { const card = waitFor("spell-cast"); await entry.cast(spell, { rank: step.rank, consume: true }); return card; });
+        const names = list => listWords(list.map(t => scene.tokens.get(t)?.name ?? "someone"));
+        const words = [step.mode === "card" ? `Apply ${step.itemName} from its card${rows.length ? ` to ${names(rows)}` : ""}: its area is on the map.` : null,
+          hidden.length ? `It also caught ${names(hidden)}, hidden from the players, so they have no row: roll ${hidden.length === 1 ? "that save" : "those saves"} and apply ${step.itemName} to them yourself.` : null].filter(Boolean).join(" ");
+        await save(combat, id, { log: { [i]: { cast: { message: message.id } } }, ...(words ? { note: joinNote(combat, id, words) } : {}) });
+      } else if (now === "place") {
+        const made = await watched(() => placeArea(combat, id, i, step, tok, spell, game.messages.get(get().cast.message)));
+        await record({ placed: { region: made.id } });
+      } else if (now === "damage") {
+        const hurt = areaHurt(get()); aimAll(Object.keys(hurt).map(t => scene.tokens.get(t)));
+        await record({ damageStarted: true });
+        const message = await watched(async () => { const card = waitFor("damage-roll"); const v = (step.rank !== spell.rank ? spell.loadVariant?.({ castRank: step.rank }) : null) ?? spell; await v.rollDamage(clickWith("showDamageDialogs")); return card; });
+        await record({ damage: { message: message.id } });
+        if (applySetting()) await markApplied(message);
+      } else if (now === "apply") {
+        const rec = get(), hurt = areaHurt(rec), t = Object.keys(hurt).find(x => !rec.applied?.[x]), target = scene.tokens.get(t);
+        const message = game.messages.get(rec.damage.message), roll = message?.rolls?.[0]; if (!roll) return "ask";
+        if (!target) { await record({ applied: { [t]: true } }); continue; }   /* removed from the map: nothing to apply to */
+        await record({ applying: { [t]: true } });
+        await watched(() => applyFromCard(message, roll, target, hurt[t]));
+        /* its own area hurting itself (a deliberate burst it stands in) isn't news to the look before its next action: the record and the baseline in one save */
+        const own = t === tok.id && request(combat, id).seen ? { [`requests.${id}.seen.me.hp`]: (tok.actor.hitPoints?.value ?? 0) + (tok.actor.hitPoints?.temp ?? 0) } : {};
+        await saveTurns(combat, { [`requests.${id}.log.${i}.applied.${t}`]: true, ...own });
+        if (target.actor?.isOfType?.("character") && target.actor.hitPoints?.value === 0) await addNote(combat, id, `${target.name} is at 0 HP. If you undo this, PF2e restores the HP but you still need to remove Wounded and Prone and put their initiative back.`);
+      } else if (now === "remove") {
+        const r = scene.regions.find(areaFlag(combat, id, i)); if (r) await r.delete();
+        await record({ removed: true });
+      }
+    } finally { pending = null; }
+  }
+  return "ask";
+}
 /** Roll it for them (the card's button for a save still waiting): from any GM's browser; the runner rolls it on the card through Toolbelt. */
 export async function rollFor(combat, requestId, tokenId) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
@@ -956,6 +1106,7 @@ async function runTurn(combat, requestId) {
   /* pressing Do it means go, whatever was held. A note about why it stopped goes; one from an earlier step (a PC at 0 HP) stays with the turn. */
   await save(combat, requestId, { state: "running", go: false, hold: false, ...(r.state === "held" || r.state === "stopped" ? { note: null } : {}) });
   const tok = combat.scene.tokens.get(r.tokenId);
+  await dropInstantAreas(combat, { id: requestId, pos: r.pos ?? 0 }).catch(e => console.warn(`${ID} | areas`, e));   /* an instant area the GM resolved from its card */
   await settleCover(combat, requestId, r.pos ?? 0, tok);   /* a reload between a step and ending its Take Cover */
   for (let i = r.pos ?? 0; i < r.steps.length; i++) {
     const now = { ...request(combat, requestId), id: requestId };   /* a stored request doesn't carry its own id; replan needs it */
@@ -972,6 +1123,8 @@ async function runTurn(combat, requestId) {
       }
       /* an ability as it checks out now: a Grab whose Strike missed may still keep hold of a creature it has grabbed */
       if (step.do === "ability" && look.next?.do === "ability" && (look.next.mode !== step.mode || look.next.target !== step.target)) { step = look.next; r.steps[i] = step; await save(combat, requestId, { steps: r.steps }); }
+      /* an area as it checks out now: where it stands and who it catches */
+      if (step.do === "spell" && step.area?.aim && look.next?.do === "spell" && JSON.stringify(look.next.area) !== JSON.stringify(step.area)) { step = look.next; r.steps[i] = step; await save(combat, requestId, { steps: r.steps }); }
     }
     let work = null;
     if (step.do === "strike") {
@@ -985,7 +1138,7 @@ async function runTurn(combat, requestId) {
       work = () => runAbility(combat, requestId, i, step, tok, target);
     } else if (step.do === "spell") {
       const tid = step.target ? tokenIdOf(combat, r, step.target) : null, target = tid ? combat.scene.tokens.get(tid) : null; if (step.target && !target) return save(combat, requestId, { state: "stopped", note: `${step.targetName} is gone.` });
-      work = () => runSpell(combat, requestId, i, step, tok, target);
+      work = step.area?.aim ? () => runArea(combat, requestId, i, step, tok) : () => runSpell(combat, requestId, i, step, tok, target);
     }
     if (work) {
       let result; try { result = await work(); } catch (e) { console.error(e); result = "ask"; await save(combat, requestId, { note: e.message }); }

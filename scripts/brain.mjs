@@ -35,6 +35,9 @@ export function cleanPlan(raw) {
     /* a spell's rank (0 is never a rank, but a cantrip's own rank is given as is) and, for a spell cast with a choice of actions, how many */
     if (s.rank != null) { if (!Number.isInteger(s.rank) || s.rank < 1 || s.rank > 10) return bad(`${at}: "rank" is a spell rank, 1 to 10.`); out.rank = s.rank; }
     if (s.actions != null) { if (!Number.isInteger(s.actions) || s.actions < 0 || s.actions > 3) return bad(`${at}: "actions" is 0 to 3.`); out.actions = s.actions; }
+    /* an area spell's aim: a burst's grid corner ("at"), a cone's or line's square ("toward"); "deliberate" when it means to catch its allies */
+    for (const k of ["at", "toward"]) if (s[k] != null) { if (!Array.isArray(s[k]) || s[k].length !== 2 || !s[k].every(v => Number.isInteger(v) && v >= 0 && v < 1000)) return bad(`${at}: "${k}" is [x, y].`); out[k] = [...s[k]]; }
+    if (s.deliberate != null) { if (typeof s.deliberate !== "boolean") return bad(`${at}: "deliberate" is true or false.`); if (s.deliberate) out.deliberate = true; }
     steps.push(out);
   }
   return { ok: true, plan: { schema: PLAN_SCHEMA, reason: text(p.reason, 300), steps, ifBlocked: text(p.ifBlocked, 100) || null, suggestOpus: p.suggestOpus === true } };
