@@ -1,7 +1,15 @@
 /* A monster's turn as plain data: what a plan means, whether it's legal, and where a step stands. Pure: no Foundry globals.
-   The glue gathers live values first. Strikes, Strides, Steps, Crawls, Stand, Drop Prone and Take Cover so far; the other step kinds come as step 2 goes on. */
+   The glue gathers live values first. Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover and abilities so far; the other step kinds come as step 2 goes on. */
 import { distanceBetween, headingOf } from "./move.mjs";
-export const COSTS = { strike: 1, stride: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, none: 0 };
+/** What each step kind costs. An ability's cost is its own (0 for a free action); 1 here is only the fallback. */
+export const COSTS = { strike: 1, stride: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, none: 0 };
+/** Abilities that follow a Strike (Rhea, 2026-11-07: run for real). Each needs the monster's last action to be a successful Strike that lists it, and is an
+    Athletics check that neither applies nor counts toward the multiple attack penalty. Rules: Grab, Knockdown, Push, Pull, and the Improved ones as free
+    actions (https://2e.aonprd.com/MonsterAbilities.aspx: IDs 45, 46, 47, 71, 66). Grapple https://2e.aonprd.com/Actions.aspx?ID=2376, Trip ID 2382,
+    Reposition ID 2379, Shove (Player Core). */
+export const FOLLOW_UPS = { grab: "grapple", "improved-grab": "grapple", knockdown: "trip", "improved-knockdown": "trip", push: "shove", "improved-push": "shove", pull: "reposition", "improved-pull": "reposition" };
+export const CHECK_WORD = { grapple: "Grapple", trip: "Trip", shove: "Shove", reposition: "Reposition" };
+const SIZES = ["tiny", "sm", "med", "lg", "huge", "grg"];
 const MOVES = ["stride", "step", "crawl"], ONE_SQUARE = ["step", "crawl"];
 /** Steps that change only whether the monster is prone, and what they leave it. Rules: Prone (https://2e.aonprd.com/Conditions.aspx?ID=88). */
 export const POSTURES = { stand: false, "drop-prone": true };
@@ -19,18 +27,37 @@ const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
     targets. A Stride, Step or Crawl moves where later steps are measured from; a Stand ends Prone for the rest of the plan and Drop Prone starts it.
     Take Cover (Rhea's rule B, 2026-11-07): tookCover (it is Taking Cover now), coverFrom ({ label: "standard" | "greater" }: the cover Visioner gives it now
     against each creature it sees, observed or concealed), nearCover(square, size) (a wall or a thick trunk in a square next to it). Names here are labels
-    when the reason goes to the thinker. */
+    when the reason goes to the thinker.
+    Abilities: abilities ([{ id, name, kind: "action" | "free" | "reaction" | "passive", cost, traits, usesLeft, followUp (a check from FOLLOW_UPS, or null),
+    effect (the word a Strike's effects list for it) }]), strikes' `effects`, me.cat and each target's `cat` (size categories), `held` (it is grabbed or
+    restrained), and last (its last action this turn before the plan, from `lastAction`; null at the start of a turn). */
 export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
-  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false; const steps = [], routes = [];
+  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, last = ctx.last ?? null; const steps = [], routes = [];
   const distanceTo = (t, reach) => here && t.square ? distanceBetween({ x: here[0], y: here[1], size: ctx.me.size ?? 1, elev: ctx.me.elev, depth: ctx.me.depth }, { x: t.square[0], y: t.square[1], size: t.size ?? 1, elev: t.elev, depth: t.depth }, { reach }) : t.distance;
   for (const [n, step] of plan.steps.entries()) {
     const at = `Step ${n + 1}`;
     if (!(step.do in COSTS)) return { ok: false, reason: `${at}: I can't do "${step.do}" yet.` };
-    if (COSTS[step.do] > left) return { ok: false, reason: `${at}: no actions left.` };
-    left -= COSTS[step.do];
+    const ab = step.do === "ability" ? (ctx.abilities ?? []).find(a => a.id === step.item) : null;
+    if (step.do === "ability") {
+      if (!ab) return { ok: false, reason: `${at}: it has no ability called "${step.item}"${ctx.strikes?.some(s => s.id === step.item) ? ` (${step.item} is a Strike: use a "strike" step)` : ""}.` };
+      if (ab.kind === "passive") return { ok: false, reason: `${at}: ${ab.name} is passive: it is always on, not something to do.` };
+      if (ab.kind === "reaction") return { ok: false, reason: `${at}: ${ab.name} is a reaction, used when its trigger happens, not planned on its own turn.` };
+    }
+    const cost = ab ? abilityCost(ab) : COSTS[step.do];
+    if (cost > left) return { ok: false, reason: `${at}: no actions left${ab && cost > 1 ? ` (${ab.name} takes ${cost})` : ""}.` };
+    left -= cost;
     if (step.do === "none") { steps.push({ do: "none" }); continue; }
     if (ctx.cantAct) return { ok: false, reason: `${at}: ${ctx.cantAct}` };
+    if (ab) {
+      const r = checkAbility(step, ab, { ctx, last, at, attacks, distanceTo });
+      if (!r.ok) return r;
+      steps.push({ ...r.step, actions: cost });
+      if (r.step.mapCounts) attacks++;
+      if (r.step.attack) took = tookProne = false;
+      last = { do: "ability", item: ab.id, target: r.step.target ?? null };   /* a free action is an action too: a second follow-up can't come after it */
+      continue;
+    }
     if (step.do in POSTURES) {
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
       if (step.do === "stand" && !prone) return { ok: false, reason: `${at}: it isn't prone, so it has nothing to Stand up from.` };
@@ -38,7 +65,7 @@ export function checkPlan(plan, ctx) {
       if (step.do === "drop-prone" && (ctx.me?.elev ?? 0) > 0) return { ok: false, reason: `${at}: it is ${Math.round(ctx.me.elev)} ft up, and a creature knocked or dropping prone in the air falls instead.` };
       /* a Take Cover taken while prone gives its greater cover against ranged attacks only while prone, so Standing ends it (Visioner removes its effect) */
       if (step.do === "stand" && tookProne) took = tookProne = false;
-      steps.push({ do: step.do }); prone = POSTURES[step.do]; continue;
+      steps.push({ do: step.do }); prone = POSTURES[step.do]; last = { do: step.do }; continue;
     }
     if (step.do === "take-cover") {
       /* Rules: Take Cover (Player Core, https://2e.aonprd.com/Actions.aspx?ID=2307): standard cover, near a feature that allows it, or prone. It lasts until the
@@ -47,7 +74,7 @@ export function checkPlan(plan, ctx) {
       const from = moved ? null : Object.entries(ctx.coverFrom ?? {}).find(([, l]) => l === "standard" || l === "greater")?.[0] ?? null;
       const why = prone ? "prone" : here && ctx.nearCover?.(here, ctx.me?.size ?? 1) ? "near" : from ? "cover" : null;
       if (!why) return { ok: false, reason: `${at}: Take Cover needs it to be prone, next to a wall or a trunk thick enough to hide behind, or behind standard cover from a creature it sees${moved ? ` (after a move in the same plan only a wall or trunk next to its new square counts, because cover from a square it isn't on yet can't be read)` : ""}.` };
-      steps.push({ do: "take-cover", why, ...(why === "cover" ? { from } : {}) }); took = true; tookProne = why === "prone"; continue;
+      steps.push({ do: "take-cover", why, ...(why === "cover" ? { from } : {}) }); took = true; tookProne = why === "prone"; last = { do: "take-cover" }; continue;
     }
     if (MOVES.includes(step.do)) {
       const word = WORD[step.do], small = ONE_SQUARE.includes(step.do);
@@ -64,7 +91,7 @@ export function checkPlan(plan, ctx) {
       if (small && way.cost > STEP_FT) return { ok: false, reason: `${at}: ${step.do === "crawl" ? "crawling" : "stepping"} to [${step.to[0]}, ${step.to[1]}] counts as ${way.cost} ft, and a ${word} moves only ${STEP_FT} ft${way.route?.length === 2 && way.route[0][0] !== way.route[1][0] && way.route[0][1] !== way.route[1][1] ? " (every second diagonal in a turn counts 10 ft)" : ""}.` };
       if (way.cost > ctx.speed) return { ok: false, reason: `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, more than its Speed of ${ctx.speed} ft.` };
       steps.push({ do: step.do, from: [...here], to: [...step.to], route: way.route, cost: way.cost }); routes.push(way.route);
-      here = [...step.to]; moved = true; took = tookProne = false; continue;
+      here = [...step.to]; moved = true; took = tookProne = false; last = { do: step.do }; continue;
     }
     if (ctx.cantAttack) return { ok: false, reason: `${at}: ${ctx.cantAttack}` };
     const s = ctx.strikes.find(x => x.id === step.item); if (!s) return { ok: false, reason: `${at}: it has no attack called "${step.item}".` };
@@ -73,9 +100,58 @@ export function checkPlan(plan, ctx) {
     if (s.ranged) { const d = distanceTo(t, null); if (s.maxRange && d > s.maxRange) return { ok: false, reason: `${at}: ${t.name} is ${d} ft away${where}, out of range of ${s.name} (${s.maxRange} ft).` }; }
     else { const d = distanceTo(t, s.reach); if (d > s.reach) return { ok: false, reason: `${at}: ${t.name} is ${d} ft away${where}, out of reach of ${s.name} (${s.reach} ft).` }; }
     steps.push({ do: "strike", item: s.id, itemName: s.name, target: step.target, targetName: t.name ?? step.target, variant: Math.min(attacks, 2), flat: t.flat ?? 0 });
-    attacks++; took = tookProne = false;
+    attacks++; took = tookProne = false; last = { do: "strike", item: s.id, target: step.target, effects: s.effects ?? [], reach: s.reach, ranged: !!s.ranged, hit: null };
   }
   return { ok: true, steps };
+}
+/** Actions an ability takes: its own count, 0 for a free action. */
+export const abilityCost = ab => ab.kind === "free" ? 0 : Number.isInteger(ab.cost) && ab.cost > 0 ? ab.cost : 1;
+const sizeRank = c => SIZES.indexOf(c);
+/** One ability step, checked. A follow-up (Grab, Knockdown, Push, Pull) runs for real; Grab can also keep hold of a creature it has grabbed or restrained
+    ("hold", no check); any other ability is "card": its card goes to chat and the GM applies it. Requirements written in an ability's text can't be read,
+    so the GM sees those on the card. */
+function checkAbility(step, ab, { ctx, last, at, attacks, distanceTo }) {
+  const no = reason => ({ ok: false, reason: `${at}: ${reason}` });
+  if (ab.usesLeft === 0) return no(`${ab.name} has no uses left.`);
+  const traits = ab.traits ?? [];
+  if (!ab.followUp) {
+    if (ctx.cantAttack && traits.includes("attack")) return no(ctx.cantAttack);
+    if (ctx.cantAttack && traits.includes("manipulate")) return no(`it is restrained, so it can't use ${ab.name} (a manipulate action).`);
+    if (ctx.cantMove && traits.includes("move")) return no(ctx.cantMove);
+    let t = null; if (step.target) { t = ctx.targets[step.target]; if (!t) return no(`it doesn't know of "${step.target}".`); }
+    const isAttack = traits.includes("attack");
+    return { ok: true, step: { do: "ability", item: ab.id, itemName: ab.name, mode: "card", ...(t ? { target: step.target, targetName: t.name ?? step.target, flat: t.flat ?? 0 } : {}), ...(isAttack ? { attack: true, mapCounts: true, variant: Math.min(attacks, 2) } : {}) } };
+  }
+  if (ctx.cantAttack) return no(ctx.cantAttack);
+  const word = CHECK_WORD[ab.followUp], after = last?.do === "strike" && (last.effects ?? []).includes(ab.effect);
+  const target = step.target ?? (after ? last.target : null);
+  const straight = `${ab.name} has to come straight after a Strike that lists ${ab.name} and hits (its last action must be that Strike)${ab.followUp === "grapple" ? ", or keep hold of a creature it already has grabbed or restrained (give that creature as the target)" : ""}.`;
+  if (!target) return no(straight);
+  const t = ctx.targets[target]; if (!t) return no(`it doesn't know of "${target}".`);
+  const follow = after && last.target === target && last.hit !== false;
+  if (!follow) {
+    /* Grab's other use: keep hold of a creature it has grabbed or restrained, with no check (it lasts to the end of its next turn) */
+    if (ab.followUp === "grapple" && t.held) {
+      const reach = Math.max(0, ...(ctx.strikes ?? []).filter(s => !s.ranged && (s.effects ?? []).includes(ab.effect)).map(s => s.reach ?? 5));
+      const d = distanceTo(t, reach); if (d > reach) return no(`${t.name ?? target} is ${d} ft away, out of reach to keep hold of.`);
+      return { ok: true, step: { do: "ability", item: ab.id, itemName: ab.name, mode: "hold", target, targetName: t.name ?? target } };
+    }
+    if (after && last.target === target && last.hit === false) return no(`its Strike at ${t.name ?? target} didn't hit, so it can't use ${ab.name}.`);
+    if (after && last.target !== target) return no(`${ab.name} goes at the creature its Strike just hit (${last.target}), not ${target}.`);
+    return no(straight);
+  }
+  if (last.ranged) return no(`${ab.name} needs the creature within reach, and its last Strike was ranged.`);
+  const d = distanceTo(t, last.reach ?? 5); if (d > (last.reach ?? 5)) return no(`${t.name ?? target} is ${d} ft away, out of reach for ${ab.name}.`);
+  if (sizeRank(t.cat) >= 0 && sizeRank(ctx.me?.cat) >= 0 && sizeRank(t.cat) > sizeRank(ctx.me.cat) + 1) return no(`${t.name ?? target} is more than one size larger than it, too big to ${word}.`);
+  return { ok: true, step: { do: "ability", item: ab.id, itemName: ab.name, mode: "check", check: ab.followUp, target, targetName: t.name ?? target, flat: t.flat ?? 0, attack: true, needsHit: last.hit == null } };
+}
+/** Its last action this turn before a plan, for an ability that needs it (Grab, Knockdown...): from the step just done with its record, or from the last
+    entry of `done` (a re-planned turn). strikes: what checkPlan gets, for the Strike's effects and reach. */
+export function lastAction({ step = null, rec = {}, done = null, strikes = [] } = {}) {
+  const strike = (item, target, hit) => { const s = strikes.find(x => x.id === item); return { do: "strike", item, target, effects: s?.effects ?? [], reach: s?.reach ?? 5, ranged: !!s?.ranged, hit }; };
+  if (step) return step.do !== "strike" ? { do: step.do } : strike(step.item, step.target, rec?.flat && !rec.flat.ok ? false : rec?.attack ? rec.attack.degree >= 2 : null);
+  if (done) return done.do !== "strike" ? { do: done.do } : strike(done.item, done.target, ["hit", "critical hit"].includes(done.result) ? true : ["miss", "critical miss", "flat check failed"].includes(done.result) ? false : null);
+  return null;
 }
 /** Whether a step moves the monster across the map (a Stride, Step or Crawl). */
 export const isMove = s => MOVES.includes(s?.do);
@@ -86,14 +162,16 @@ export function strikeIds(strikes) {
 }
 /** What resolved steps used of the turn: actions, and attacks for the multiple attack penalty. */
 export function spentBy(steps = []) {
-  let actions = 0, attacks = 0; for (const s of steps) { actions += COSTS[s.do] ?? 0; if (s.do === "strike") attacks++; } return { actions, attacks };
+  let actions = 0, attacks = 0; for (const s of steps) { actions += s.do === "ability" ? (s.actions ?? 1) : COSTS[s.do] ?? 0; if (s.do === "strike" || s.mapCounts) attacks++; } return { actions, attacks };
 }
 export const OUTCOMES = ["critical miss", "miss", "hit", "critical hit"];
+export const CHECK_OUTCOMES = ["critical failure", "failure", "success", "critical success"];
 /** A finished step as the monster saw it, for the next plan: labels and ids only, and the result shown in chat. */
 export function doneStep(step, rec = {}) {
   if (isMove(step)) { const got = rec.moved?.to; return { do: step.do, to: step.to, result: !got ? "unknown" : same(got, step.to) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]` }; }
   if (step.do in POSTURES) return { do: step.do, result: rec.changed || rec.stood ? (step.do === "stand" ? "stood" : "dropped") : "unknown" };
   if (step.do === "take-cover") return { do: "take-cover", result: rec.covered ? "took cover" : "unknown" };
+  if (step.do === "ability") return { do: "ability", item: step.item, ...(step.target ? { target: step.target } : {}), result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.check ? CHECK_OUTCOMES[rec.check.degree] ?? "unknown" : rec.posted ? (step.mode === "hold" ? "kept hold" : "card posted for the GM to apply") : "unknown" };
   if (step.do !== "strike") return { do: step.do };
   return { do: "strike", item: step.item, target: step.target, result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.attack ? OUTCOMES[rec.attack.degree] ?? "unknown" : "unknown" };
 }
@@ -150,6 +228,12 @@ export function describeStep(s) {
   if (isMove(s)) { const way = s.from ? headingOf(s.from, s.to) : ""; return `${WORD[s.do]}s ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}.`; }
   if (s.do === "stand") return "Stands up.";
   if (s.do === "drop-prone") return "Drops prone.";
+  if (s.do === "ability") {
+    const flat = s.flat ? `, after a DC ${s.flat} flat check` : "";
+    if (s.mode === "check") return `${s.itemName} at ${s.targetName}: a ${CHECK_WORD[s.check]} check, no attack penalty${flat}${s.actions ? "" : " (free action)"}.`;
+    if (s.mode === "hold") return `${s.itemName}: keeps hold of ${s.targetName}.`;
+    return `${s.itemName}${s.targetName ? ` at ${s.targetName}` : ""}${s.variant ? `, attack ${s.variant + 1}` : ""}: its card goes to chat for you to apply${s.flat ? ` (a DC ${s.flat} flat check if it targets)` : ""}.`;
+  }
   if (s.do === "take-cover") return s.why === "prone" ? "Takes Cover while prone." : s.why === "near" ? "Takes Cover by the wall or trunk next to it." : `Takes Cover behind its cover from ${s.from}.`;
   return `${s.itemName} at ${s.targetName}${s.variant ? `, attack ${s.variant + 1}` : ""}${s.flat ? `, after a DC ${s.flat} flat check` : ""}.`;
 }
@@ -188,6 +272,43 @@ export function nextCover(rec = {}, active = false) {
   if (!rec.started) return active ? "already" : "act";
   return "ask";
 }
+/** What to do next with an ability step, from its record. Never repeated: when the record can't tell whether a stage finished, "ask". mode: "check" (a
+    follow-up: flat check if any, the check, its effects, then a Trip's critical damage), "hold" or "card" (its card posted). "gm" means done, with something
+    left for the GM to apply. Applying a condition again changes nothing, so the effects stage may run again after a reload. */
+export function nextAbility(rec = {}, { mode = "check", flat = 0, apply = false } = {}) {
+  if (mode !== "check") { if (!rec.started) return "post"; return rec.posted ? (mode === "card" ? "gm" : "next") : "ask"; }
+  if (flat) { if (!rec.flatStarted) return "flat"; if (!rec.flat) return "ask"; if (!rec.flat.ok) return "next"; }
+  if (!rec.started) return "check";
+  if (!rec.check) return "ask";
+  if (!rec.effects) return "effects";
+  if (rec.effects.damage) {
+    if (!rec.damageStarted) return "damage"; if (!rec.damage) return "ask";
+    if (apply && !rec.applying) return "apply"; if (rec.applying && !rec.applied) return "ask";
+  }
+  return rec.effects.gm ? "gm" : "next";
+}
+/** What a follow-up's check does, by degree (0 critical failure to 3 critical success), as the rules say: conditions for the target and for the monster,
+    damage, and what's left for the GM, in words (`who` names the target, `me` the monster). held: the target was grabbed or restrained before the check. */
+export function followUpOutcome(check, degree, { held = false, who = "The target", me = "it" } = {}) {
+  const out = { target: [], self: [], damage: null, gm: null };
+  if (check === "grapple") {
+    if (degree === 3) out.target.push("restrained");
+    else if (degree === 2) out.target.push("grabbed");
+    else if (degree === 1 && held) out.gm = `${who} was already grabbed or restrained: if ${me} was the one holding them, that ends now.`;
+    else if (degree === 0) out.gm = `${held ? `If ${me} was holding ${who}, they break free. ` : ""}${who} can grab ${me} (as if they succeeded at a Grapple) or make ${me} fall prone: apply what they choose.`;
+  } else if (check === "trip") {
+    if (degree >= 2) out.target.push("prone");
+    if (degree === 3) out.damage = "1d6[bludgeoning]";
+    if (degree === 0) out.self.push("prone");
+  } else if (check === "shove") {
+    if (degree >= 2) out.gm = `Move ${who} ${degree === 3 ? 10 : 5} ft straight away from ${me} (the module doesn't move a pushed creature).`;
+    if (degree === 0) out.self.push("prone");
+  } else if (check === "reposition") {
+    if (degree >= 2) out.gm = `Move ${who} up to ${degree === 3 ? 10 : 5} ft closer to ${me}, staying within its reach (the module doesn't move a pulled creature).`;
+    if (degree === 0) out.gm = `${who} can move ${me} up to 5 ft (as if they Repositioned it): apply what they choose.`;
+  }
+  return out;
+}
 /** The cover Take Cover gives against one creature, from the cover it has against that creature now, as Visioner's own Take Cover works it out (8.14.17):
     standard or greater becomes greater, anything less becomes standard; prone with none at all gives greater cover against ranged attacks only. */
 export const coverAfterTaking = (now = "none", prone = false) => now === "standard" || now === "greater" ? "greater" : prone && (!now || now === "none") ? "prone-ranged" : "standard";
@@ -199,7 +320,7 @@ export function endsCover(steps = [], log = {}, upto = steps.length, from = 0) {
   let k0 = 0; for (let k = 0; k < upto; k++) if (steps[k]?.do === "take-cover") k0 = k + 1;
   for (let k = Math.max(k0, from); k < upto; k++) {
     const s = steps[k], rec = log?.[k] ?? {};
-    if (s?.do === "strike" && (rec.started || rec.flatStarted)) return true;
+    if ((s?.do === "strike" || (s?.do === "ability" && s.attack)) && (rec.started || rec.flatStarted)) return true;
     if (isMove(s) && rec.moved?.to && !same(rec.moved.to, s.from)) return true;
   }
   return false;

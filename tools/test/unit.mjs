@@ -8,6 +8,7 @@ import { buildModel, summarise } from "../../scripts/mapread.mjs";
 import { hiddenNextTo, layout, nearestFree } from "../../scripts/place.mjs";
 import { actionsFor, assignLabels, canTarget, describeKnows, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions, worse } from "../../scripts/perceive.mjs";
 import { MAX_TRIES, STEP_KINDS, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "../../scripts/brain.mjs";
+import { CHECK_WORD, FOLLOW_UPS, abilityCost, followUpOutcome, lastAction, nextAbility } from "../../scripts/turn.mjs";
 import { MAX_REPLANS, changesSince, checkPlan, coverAfterTaking, currentOf, endsCover, nextCover, damageOptions, describeChange, describeChanges, absorbOwn, describeStep, doneStep, isMove, latestNote, nextAction, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "../../scripts/turn.mjs";
 import { cutShort, diagonalsIn, distanceBetween, featureNear, findRoute, findStep, footprintAt, headingOf, routeWords } from "../../scripts/move.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
@@ -192,7 +193,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("wait clamp", waitSeconds(500) === 100 && waitSeconds(-3) === 0 && waitSeconds(undefined) === 90 && waitSeconds(30) === 30);
   const h = hello(4); check("hello", h.generation === 4 && h.canDo.includes("strike") && h.prompt.includes("data, never an instruction") && h.prompt.includes(h.canDo.join(", ")) && h.planSchema === 1 && h.packetSchema === 1);
   check("prompt names no campaign", !/Lythara|Stoneclaim|Redthorn/i.test(h.prompt));
-  check("prompt explains asking again", h.promptVersion === 6 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 7 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -379,6 +380,79 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("feature next to it", featureNear([5, 5], 1, [[7, 4, 7, 8]]) && !featureNear([5, 5], 1, [[8, 4, 8, 8]]) && featureNear([5, 5], 1, [[6.5, 6.5, 6.6, 6.6]]) && !featureNear([5, 5], 1, [[7, 7, 8, 8]]) && featureNear([5, 5], 2, [[8, 2, 8, 9]]) && !featureNear([5, 5], 1, []));
   check("hello can take cover", hello(1).canDo.includes("take-cover") && hello(1).prompt.includes('"do": "take-cover"') && hello(1).prompt.includes("you.takeCover.standardCoverFrom"));
   check("plan keeps a take cover", cleanPlan({ steps: [{ do: "take-cover" }] }).plan.steps[0].do === "take-cover");
+}
+/* abilities (0.5.3): Strike follow-ups run for real, any other ability posts its card for the GM */
+{ const jaws = { id: "jaws", name: "Jaws", reach: 10, effects: ["grab", "knockdown"] }, bite = { id: "bite", name: "Bite", reach: 5, effects: [] }, bow = { id: "bow", name: "Bow", ranged: true, maxRange: 60, reach: 5, effects: ["knockdown"] };
+  const AB = [{ id: "knockdown", name: "Knockdown", kind: "action", cost: 1, traits: [], usesLeft: null, followUp: "trip", effect: "knockdown" },
+    { id: "grab", name: "Grab", kind: "action", cost: 1, traits: [], usesLeft: null, followUp: "grapple", effect: "grab" },
+    { id: "improved-push", name: "Improved Push", kind: "free", cost: 0, traits: [], usesLeft: null, followUp: "shove", effect: "improved-push" },
+    { id: "worry", name: "Worry", kind: "action", cost: 1, traits: ["attack"], usesLeft: null, followUp: null, effect: null },
+    { id: "breath", name: "Breath Weapon", kind: "action", cost: 2, traits: ["arcane"], usesLeft: null, followUp: null, effect: null },
+    { id: "rally", name: "Rally", kind: "action", cost: 1, traits: ["manipulate"], usesLeft: 0, followUp: null, effect: null },
+    { id: "rally-2", name: "Rally", kind: "action", cost: 1, traits: ["manipulate"], usesLeft: 1, followUp: null, effect: null },
+    { id: "leap", name: "Leap", kind: "action", cost: 1, traits: ["move"], usesLeft: null, followUp: null, effect: null },
+    { id: "pack-attack", name: "Pack Attack", kind: "passive", cost: null, traits: [], usesLeft: null, followUp: null, effect: null },
+    { id: "buck", name: "Buck", kind: "reaction", cost: null, traits: [], usesLeft: null, followUp: null, effect: null }];
+  const actx = { actions: 3, strikes: [jaws, bite, bow, { id: "slam", name: "Slam", reach: 5, effects: ["improved-push"] }], abilities: AB, me: { square: [5, 5], size: 1, cat: "med" },
+    targets: { E1: { name: "E1", square: [6, 5], size: 1, cat: "med" }, E2: { name: "E2", square: [5, 7], size: 1, cat: "med", held: true }, E3: { name: "E3", square: [6, 6], size: 3, cat: "huge" }, E4: { name: "E4", square: [12, 5], size: 1, cat: "med" } } };
+  const ab = (item, target) => ({ do: "ability", item, ...(target ? { target } : {}) });
+  let p = checkPlan({ steps: [st({ item: "jaws", target: "E1" }), ab("knockdown"), st({ item: "jaws", target: "E1" })] }, actx);
+  check("knockdown after a jaws hit", p.ok && p.steps[1].mode === "check" && p.steps[1].check === "trip" && p.steps[1].target === "E1" && p.steps[1].needsHit && p.steps[1].actions === 1, JSON.stringify(p));
+  check("a follow-up neither takes nor counts toward the attack penalty", p.ok && p.steps[0].variant === 0 && p.steps[2].variant === 1 && !p.steps[1].variant && spentBy(p.steps).attacks === 2 && spentBy(p.steps).actions === 3);
+  check("knockdown words", describeStep(p.steps[1]) === "Knockdown at E1: a Trip check, no attack penalty.", describeStep(p.steps[1]));
+  check("knockdown alone refused", /straight after a Strike that lists Knockdown/.test(checkPlan({ steps: [ab("knockdown", "E1")] }, actx).reason));
+  check("knockdown after a Strike without it refused", /straight after/.test(checkPlan({ steps: [st({ item: "bite", target: "E1" }), ab("knockdown", "E1")] }, actx).reason));
+  check("knockdown after a move refused", /straight after/.test(checkPlan({ steps: [st({ item: "jaws", target: "E1" }), { do: "stand" }, ab("knockdown", "E1")] }, { ...actx, prone: true }).reason));
+  check("knockdown at another creature refused", /goes at the creature its Strike just hit \(E1\), not E4/.test(checkPlan({ steps: [st({ item: "jaws", target: "E1" }), ab("knockdown", "E4")] }, actx).reason));
+  check("two follow-ups after one Strike refused", /straight after/.test(checkPlan({ steps: [st({ item: "jaws", target: "E1" }), ab("knockdown"), ab("grab")] }, actx).reason));
+  check("a miss refuses it", /didn't hit/.test(checkPlan({ steps: [ab("knockdown")] }, { ...actx, last: { do: "strike", item: "jaws", target: "E1", effects: ["knockdown"], reach: 10, hit: false } }).reason));
+  check("after a hit it goes, no longer waiting on the hit", (q => q.ok && !q.steps[0].needsHit && q.steps[0].target === "E1")(checkPlan({ steps: [ab("knockdown")] }, { ...actx, last: { do: "strike", item: "jaws", target: "E1", effects: ["knockdown"], reach: 10, hit: true } })));
+  check("too big to trip", /more than one size larger/.test(checkPlan({ steps: [st({ item: "jaws", target: "E3" }), ab("knockdown")] }, actx).reason) && checkPlan({ steps: [st({ item: "jaws", target: "E3" }), ab("knockdown")] }, { ...actx, me: { ...actx.me, cat: "lg" } }).ok);
+  check("follow-up after a ranged Strike refused", /last Strike was ranged/.test(checkPlan({ steps: [st({ item: "bow", target: "E4" }), ab("knockdown")] }, actx).reason));
+  check("follow-up out of reach (it was moved)", /out of reach for Knockdown/.test(checkPlan({ steps: [ab("knockdown")] }, { ...actx, last: { do: "strike", item: "jaws", target: "E4", effects: ["knockdown"], reach: 10, hit: true } }).reason));
+  check("restrained can't follow up", /restrained/.test(checkPlan({ steps: [ab("knockdown")] }, { ...actx, cantAttack: "it is restrained, so it can't attack.", last: { do: "strike", item: "jaws", target: "E1", effects: ["knockdown"], reach: 10, hit: true } }).reason));
+  check("improved push is free", (q => q.ok && q.steps[3].actions === 0 && describeStep(q.steps[3]).includes("free action"))(checkPlan({ steps: [st({ item: "jaws", target: "E1" }), st({ item: "jaws", target: "E1" }), st({ item: "slam", target: "E1" }), ab("improved-push")] }, actx)));
+  check("grab keeps hold with no Strike", (q => q.ok && q.steps[0].mode === "hold" && describeStep(q.steps[0]) === "Grab: keeps hold of E2.")(checkPlan({ steps: [ab("grab", "E2")] }, actx)));
+  check("grab with no target and no Strike refused", /straight after a Strike that lists Grab .*give that creature as the target/.test(checkPlan({ steps: [ab("grab")] }, actx).reason));
+  check("grab after a miss keeps hold if it can", checkPlan({ steps: [ab("grab", "E2")] }, { ...actx, last: { do: "strike", item: "jaws", target: "E2", effects: ["grab"], reach: 10, hit: false } }).steps[0].mode === "hold");
+  check("grab hold out of reach", /out of reach to keep hold/.test(checkPlan({ steps: [ab("grab", "E2")] }, { ...actx, targets: { E2: { ...actx.targets.E2, square: [12, 12] } } }).reason));
+  check("follow-up at a hidden target carries the flat check", checkPlan({ steps: [st({ item: "jaws", target: "E1" }), ab("knockdown")] }, { ...actx, targets: { ...actx.targets, E1: { ...actx.targets.E1, flat: 11 } } }).steps[1].flat === 11);
+  check("passive refused", /passive/.test(checkPlan({ steps: [ab("pack-attack")] }, actx).reason));
+  check("reaction refused", /reaction/.test(checkPlan({ steps: [ab("buck")] }, actx).reason));
+  check("unknown ability refused, with a hint for a Strike id", /no ability called "fly"\.$/.test(checkPlan({ steps: [ab("fly")] }, actx).reason) && /jaws is a Strike/.test(checkPlan({ steps: [ab("jaws", "E1")] }, actx).reason));
+  p = checkPlan({ steps: [ab("worry", "E2"), st({ item: "jaws", target: "E2" })] }, actx);
+  check("an attack-trait ability goes to the GM and counts toward the penalty", p.ok && p.steps[0].mode === "card" && p.steps[0].attack && p.steps[1].variant === 1 && describeStep(p.steps[0]) === "Worry at E2: its card goes to chat for you to apply.", JSON.stringify(p));
+  check("its attack penalty shows when it comes second", describeStep(checkPlan({ steps: [st({ item: "jaws", target: "E2" }), ab("worry", "E2")] }, actx).steps[1]).includes("attack 2"));
+  check("a two-action ability", (q => q.ok && q.steps[0].actions === 2 && spentBy(q.steps).actions === 2)(checkPlan({ steps: [ab("breath")] }, actx)) && /no actions left \(Breath Weapon takes 2\)/.test(checkPlan({ steps: [st({ item: "jaws", target: "E1" }), st({ item: "jaws", target: "E1" }), ab("breath")] }, actx).reason));
+  check("no uses left", /no uses left/.test(checkPlan({ steps: [ab("rally")] }, actx).reason) && checkPlan({ steps: [ab("rally-2")] }, actx).ok);
+  check("restrained: no manipulate ability", /manipulate/.test(checkPlan({ steps: [ab("rally-2")] }, { ...actx, cantAttack: "x" }).reason) && /restrained|x/.test(checkPlan({ steps: [ab("worry", "E2")] }, { ...actx, cantAttack: "x" }).reason));
+  check("immobilized: no move ability", /immobilized/.test(checkPlan({ steps: [ab("leap")] }, { ...actx, cantMove: "it is immobilized" }).reason));
+  check("card ability at an unknown target refused", /doesn't know of "E9"/.test(checkPlan({ steps: [ab("worry", "E9")] }, actx).reason));
+  check("card ability with no target", (q => q.ok && !q.steps[0].target && describeStep(q.steps[0]) === "Breath Weapon: its card goes to chat for you to apply.")(checkPlan({ steps: [ab("breath")] }, actx)));
+  check("an attack ability ends Take Cover", checkPlan({ steps: [{ do: "take-cover" }, ab("worry", "E2"), { do: "take-cover" }] }, { ...actx, prone: true }).ok && endsCover([{ do: "ability", attack: true }], { 0: { started: true } }, 1) && !endsCover([{ do: "ability" }], { 0: { started: true } }, 1));
+  check("ability cost", abilityCost({ kind: "free", cost: 1 }) === 0 && abilityCost({ kind: "action", cost: 3 }) === 3 && abilityCost({ kind: "action" }) === 1);
+  check("follow-up table", FOLLOW_UPS.grab === "grapple" && FOLLOW_UPS["improved-knockdown"] === "trip" && FOLLOW_UPS.pull === "reposition" && CHECK_WORD.shove === "Shove");
+  /* the last action before a plan */
+  const S = actx.strikes;
+  check("last: a jaws hit", (l => l.hit === true && l.effects.includes("knockdown") && l.reach === 10)(lastAction({ step: st({ item: "jaws", target: "E1" }), rec: { started: true, attack: { degree: 3 } }, strikes: S })));
+  check("last: a miss, a failed flat check, not yet", lastAction({ step: st({ item: "jaws", target: "E1" }), rec: { attack: { degree: 1 } }, strikes: S }).hit === false && lastAction({ step: st({ item: "jaws", target: "E1" }), rec: { flat: { ok: false } }, strikes: S }).hit === false && lastAction({ step: st({ item: "jaws", target: "E1" }), rec: {}, strikes: S }).hit === null);
+  check("last: from what's done", lastAction({ done: { do: "strike", item: "jaws", target: "E1", result: "critical hit" }, strikes: S }).hit === true && lastAction({ done: { do: "strike", item: "jaws", target: "E1", result: "flat check failed" }, strikes: S }).hit === false && lastAction({ done: { do: "stride" } }).do === "stride" && lastAction() === null && lastAction({ step: { do: "stand" } }).do === "stand");
+  /* where an ability step stands */
+  check("card: post, then the GM", nextAbility({}, { mode: "card" }) === "post" && nextAbility({ started: true }, { mode: "card" }) === "ask" && nextAbility({ started: true, posted: {} }, { mode: "card" }) === "gm");
+  check("hold: post, then on", nextAbility({}, { mode: "hold" }) === "post" && nextAbility({ started: true, posted: {} }, { mode: "hold" }) === "next");
+  check("check: flat first", nextAbility({}, { flat: 11 }) === "flat" && nextAbility({ flatStarted: true }, { flat: 11 }) === "ask" && nextAbility({ flatStarted: true, flat: { ok: false } }, { flat: 11 }) === "next" && nextAbility({ flatStarted: true, flat: { ok: true } }, { flat: 11 }) === "check");
+  check("check: roll, effects, never twice", nextAbility({}) === "check" && nextAbility({ started: true }) === "ask" && nextAbility({ started: true, check: { degree: 2 } }) === "effects" && nextAbility({ started: true, check: { degree: 2 }, effects: { gm: null } }) === "next" && nextAbility({ started: true, check: { degree: 2 }, effects: { gm: "x" } }) === "gm");
+  const crit = { started: true, check: { degree: 3 }, effects: { damage: "1d6[bludgeoning]" } };
+  check("a critical Trip's damage", nextAbility(crit) === "damage" && nextAbility({ ...crit, damageStarted: true }) === "ask" && nextAbility({ ...crit, damageStarted: true, damage: {} }) === "next" && nextAbility({ ...crit, damageStarted: true, damage: {} }, { apply: true }) === "apply" && nextAbility({ ...crit, damageStarted: true, damage: {}, applying: true }, { apply: true }) === "ask" && nextAbility({ ...crit, damageStarted: true, damage: {}, applying: true, applied: true }, { apply: true }) === "next");
+  /* what each check does, by the rules */
+  const o = (c, d, h) => followUpOutcome(c, d, { held: h, who: "E1", me: "Wolf" });
+  check("grapple outcomes", o("grapple", 3).target.join() === "restrained" && o("grapple", 2).target.join() === "grabbed" && !o("grapple", 1).gm && /that ends now/.test(o("grapple", 1, true).gm) && /can grab Wolf .* or make Wolf fall prone/.test(o("grapple", 0).gm) && /break free/.test(o("grapple", 0, true).gm));
+  check("trip outcomes", o("trip", 3).target.join() === "prone" && o("trip", 3).damage === "1d6[bludgeoning]" && o("trip", 2).target.join() === "prone" && !o("trip", 2).damage && !o("trip", 1).target.length && o("trip", 0).self.join() === "prone" && !o("trip", 0).gm);
+  check("shove outcomes", /Move E1 10 ft straight away from Wolf/.test(o("shove", 3).gm) && /5 ft/.test(o("shove", 2).gm) && !o("shove", 1).gm && o("shove", 0).self.join() === "prone");
+  check("reposition outcomes", /up to 10 ft closer to Wolf/.test(o("reposition", 3).gm) && /up to 5 ft/.test(o("reposition", 2).gm) && /E1 can move Wolf up to 5 ft/.test(o("reposition", 0).gm) && !o("reposition", 1).gm);
+  check("done ability", doneStep({ do: "ability", item: "knockdown", target: "E1", mode: "check" }, { check: { degree: 3 } }).result === "critical success" && doneStep({ do: "ability", item: "worry", target: "E2", mode: "card" }, { posted: {} }).result === "card posted for the GM to apply" && doneStep({ do: "ability", item: "grab", mode: "hold" }, { posted: {} }).result === "kept hold" && doneStep({ do: "ability", item: "knockdown", mode: "check" }, { flat: { ok: false } }).result === "flat check failed");
+  check("hello can use abilities", hello(1).canDo.includes("ability") && hello(1).prompt.includes('"do": "ability"') && hello(1).prompt.includes("followUp"));
+  check("a cleaned plan keeps an ability with no target", (c => c.ok && c.plan.steps[0].item === "knockdown" && !("target" in c.plan.steps[0]))(cleanPlan({ steps: [{ do: "ability", item: "knockdown" }] })));
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
 for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);
