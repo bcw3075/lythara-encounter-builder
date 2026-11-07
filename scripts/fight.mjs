@@ -400,7 +400,7 @@ async function runTurn(combat, requestId) {
   await save(combat, requestId, { state: "running", go: false, hold: false, note: null });   /* pressing Do it means go, whatever was held */
   const tok = combat.scene.tokens.get(r.tokenId);
   for (let i = r.pos ?? 0; i < r.steps.length; i++) {
-    const now = request(combat, requestId), step = r.steps[i];
+    const now = { ...request(combat, requestId), id: requestId }, step = r.steps[i];   /* a stored request doesn't carry its own id; replan needs it */
     if (now.state === "manual") return;
     if (now.hold) return save(combat, requestId, { state: "held", hold: false, note: "Held before the next step." });
     /* look again before an action that hasn't begun. One begun before a reload carries on, never re-planned halfway. */
