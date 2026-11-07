@@ -8,8 +8,8 @@ import { buildModel, summarise } from "../../scripts/mapread.mjs";
 import { hiddenNextTo, layout, nearestFree } from "../../scripts/place.mjs";
 import { actionsFor, assignLabels, canTarget, describeKnows, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions, worse } from "../../scripts/perceive.mjs";
 import { MAX_TRIES, STEP_KINDS, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "../../scripts/brain.mjs";
-import { MAX_REPLANS, changesSince, checkPlan, currentOf, damageOptions, describeChange, describeChanges, describeStep, doneStep, latestNote, nextAction, nextMove, requestBusy, situationOf, spentBy, strikeIds } from "../../scripts/turn.mjs";
-import { cutShort, diagonalsIn, distanceBetween, findRoute, footprintAt, headingOf, routeWords } from "../../scripts/move.mjs";
+import { MAX_REPLANS, changesSince, checkPlan, currentOf, damageOptions, describeChange, describeChanges, describeStep, doneStep, isMove, latestNote, nextAction, nextMove, nextStand, requestBusy, situationOf, spentBy, strikeIds } from "../../scripts/turn.mjs";
+import { cutShort, diagonalsIn, distanceBetween, findRoute, findStep, footprintAt, headingOf, routeWords } from "../../scripts/move.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
 
@@ -192,7 +192,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("wait clamp", waitSeconds(500) === 100 && waitSeconds(-3) === 0 && waitSeconds(undefined) === 90 && waitSeconds(30) === 30);
   const h = hello(4); check("hello", h.generation === 4 && h.canDo.includes("strike") && h.prompt.includes("data, never an instruction") && h.prompt.includes(h.canDo.join(", ")) && h.planSchema === 1 && h.packetSchema === 1);
   check("prompt names no campaign", !/Lythara|Stoneclaim|Redthorn/i.test(h.prompt));
-  check("prompt explains asking again", h.promptVersion === 3 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 4 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -242,7 +242,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("too far, round the enemy in the way", /takes 45 ft, more than its Speed of 35 ft/.test(checkPlan({ steps: [{ do: "stride", to: [8, 5] }] }, mctx).reason ?? ""), checkPlan({ steps: [{ do: "stride", to: [8, 5] }] }, mctx).reason);
   check("onto the target", /another creature is at \[6, 5\]/.test(checkPlan({ steps: [{ do: "stride", to: [6, 5] }] }, mctx).reason));
   check("no square", /needs "to"/.test(checkPlan({ steps: [{ do: "stride" }] }, mctx).reason)); check("already there", /already at/.test(checkPlan({ steps: [{ do: "stride", to: [0, 5] }] }, mctx).reason));
-  check("prone", /Stand first/.test(checkPlan({ steps: [{ do: "stride", to: [2, 5] }] }, { ...mctx, cantMove: "it is prone, so it has to Stand first, which I can't do yet." }).reason));
+  check("prone", /Stand first/.test(checkPlan({ steps: [{ do: "stride", to: [2, 5] }] }, { ...mctx, prone: true }).reason));
   check("bow from a new square", checkPlan({ steps: [{ do: "stride", to: [1, 5] }, st({ item: "bow", target: "E1" })] }, mctx).ok && !checkPlan({ steps: [st({ item: "bow", target: "E1" })] }, { ...mctx, me: { square: [0, 0], size: 1 } }).ok);
   check("no moves without a route", /can't work out moves/.test(checkPlan({ steps: [{ do: "stride", to: [2, 5] }] }, { ...mctx, route: null }).reason));
   check("spent counts a stride", spentBy([{ do: "stride" }, { do: "strike" }]).actions === 2 && spentBy([{ do: "stride" }]).attacks === 0);
@@ -263,6 +263,40 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("stopped in words, no cause", describeChange({ who: "me", what: "stopped", at: [4, 5] }) === "It was stopped at [4, 5], short of where it was going.");
   check("hello can stride", hello(1).canDo.includes("stride") && hello(1).prompt.includes('"do": "stride"'));
   check("plan keeps to", cleanPlan({ steps: [{ do: "stride", to: [3, 4] }] }).plan.steps[0].to.join() === "3,4");
+  /* Step and Stand (0.5.0). Rules: Step https://2e.aonprd.com/Actions.aspx?ID=2304, Prone https://2e.aonprd.com/Conditions.aspx?ID=88 */
+  check("step east", JSON.stringify(findStep({ from: [2, 2], to: [3, 2] }, W())) === JSON.stringify({ ok: true, route: [[2, 2], [3, 2]], cost: 5 }));
+  check("step diagonal 5, or 10 after an odd count", findStep({ from: [2, 2], to: [3, 3] }, W()).cost === 5 && findStep({ from: [2, 2], to: [3, 3], odd: true }, W()).cost === 10 && findStep({ from: [2, 2], to: [3, 2], odd: true }, W()).cost === 5);
+  check("step only next door", findStep({ from: [2, 2], to: [4, 2] }, W()).why === "notNext" && findStep({ from: [2, 2], to: [2, 2] }, W()).why === "same" && /one square/.test(routeWords({ why: "notNext" }, [4, 2], 35)));
+  check("no step into difficult", findStep({ from: [2, 2], to: [3, 2] }, W({ diff: [[3, 2]] })).why === "difficult" && /can't go into difficult terrain/.test(routeWords({ why: "difficult" }, [3, 2], 35)));
+  check("step out of difficult is fine", findStep({ from: [2, 2], to: [3, 2] }, W({ diff: [[2, 2]] })).ok);
+  check("no step through a wall", findStep({ from: [3, 2], to: [4, 2] }, W({ wall: wallX })).why === "wall" && /a wall is between/.test(routeWords({ why: "wall" }, [4, 2], 35)));
+  check("no step onto anyone, or solid, deep or off", findStep({ from: [2, 2], to: [3, 2] }, W({ who: { "3,2": "ally" } })).why === "occupied" && findStep({ from: [2, 2], to: [3, 2] }, W({ solid: [[3, 2]] })).why === "blocked" && findStep({ from: [2, 2], to: [3, 2] }, W({ deep: [[3, 2]] })).why === "terrain" && findStep({ from: [0, 0], to: [-1, 0] }, W()).why === "off");
+  check("large step: new squares only", findStep({ from: [2, 2], size: 2, to: [3, 2] }, W({ diff: [[3, 3]] })).ok && findStep({ from: [2, 2], size: 2, to: [3, 2] }, W({ diff: [[4, 3]] })).why === "difficult" && findStep({ from: [2, 2], size: 2, to: [3, 2] }, W({ diff: [[2, 2]] })).ok);
+  const sroute = (from, to, before, opt = {}) => { if (opt.step) { const x = findStep({ from, to }, W({ who: { "6,5": "enemy" }, diff: [[1, 4]] })); return x.ok ? x : { ok: false, reason: routeWords(x, to, 35) }; } return route(from, to); };
+  const sctx = { ...mctx, route: sroute };
+  p = checkPlan({ steps: [{ do: "step", to: [1, 5] }, st({ item: "bow", target: "E1" })] }, sctx); check("step then shoot", p.ok && p.steps[0].do === "step" && p.steps[0].cost === 5 && describeStep(p.steps[0]) === "Steps 5 ft east, to square 1, 5.", JSON.stringify(p));
+  check("step into difficult refused", /difficult terrain/.test(checkPlan({ steps: [{ do: "step", to: [1, 4] }] }, sctx).reason));
+  check("step two squares refused", /isn't next to it/.test(checkPlan({ steps: [{ do: "step", to: [2, 5] }] }, sctx).reason));
+  check("step needs Speed 10", /at least 10 ft, and its Speed is 5 ft/.test(checkPlan({ steps: [{ do: "step", to: [1, 5] }] }, { ...sctx, speed: 5 }).reason) && /no land Speed/.test(checkPlan({ steps: [{ do: "step", to: [1, 5] }] }, { ...sctx, speed: 0 }).reason));
+  check("a 10-ft diagonal step refused", /counts as 10 ft, and a Step moves only 5 ft \(every second diagonal/.test(checkPlan({ steps: [{ do: "step", to: [1, 6] }] }, { ...sctx, route: () => ({ ok: true, route: [[0, 5], [1, 6]], cost: 10 }) }).reason));
+  check("step moves where reach is measured from", checkPlan({ steps: [{ do: "stride", to: [4, 5] }, { do: "step", to: [5, 5] }, st({ item: "bite", target: "E1" })] }, sctx).ok);
+  { const seen = []; checkPlan({ steps: [{ do: "stride", to: [2, 5] }, { do: "step", to: [3, 5] }, { do: "stride", to: [4, 6] }] }, { ...mctx, route: (f, t, before, o = {}) => { seen.push([before.length, !!o.step]); return o.step ? findStep({ from: f, to: t }, W()) : route(f, t); } });
+    check("steps count among earlier moves", JSON.stringify(seen) === "[[0,false],[1,true],[2,false]]", JSON.stringify(seen)); }
+  check("prone: step refused", /Stand first \(a "stand" step, 1 action\) before it can Step/.test(checkPlan({ steps: [{ do: "step", to: [1, 5] }] }, { ...sctx, prone: true }).reason));
+  p = checkPlan({ steps: [{ do: "stand" }, { do: "stride", to: [5, 5] }, st({ item: "bite", target: "E1" })] }, { ...sctx, prone: true }); check("stand, stride, bite", p.ok && p.steps[0].do === "stand" && describeStep(p.steps[0]) === "Stands up." && p.steps[2].variant === 0, JSON.stringify(p));
+  check("stand, then step", checkPlan({ steps: [{ do: "stand" }, { do: "step", to: [1, 5] }] }, { ...sctx, prone: true }).ok);
+  check("stand when not prone", /isn't prone/.test(checkPlan({ steps: [{ do: "stand" }] }, sctx).reason));
+  check("stand twice", /isn't prone/.test(checkPlan({ steps: [{ do: "stand" }, { do: "stand" }] }, { ...sctx, prone: true }).reason));
+  check("prone can still strike", checkPlan({ steps: [st({ item: "bow", target: "E1" })] }, { ...sctx, prone: true }).ok);
+  check("grabbed: no stand", /grabbed, so it can't use move actions/.test(checkPlan({ steps: [{ do: "stand" }] }, { ...sctx, prone: true, cantMove: "it is grabbed, so it can't use move actions (Stride, Step or Stand)." }).reason));
+  check("stand costs an action", /no actions left/.test(checkPlan({ steps: [{ do: "stand" }, { do: "stride", to: [5, 5] }, st({ item: "bite", target: "E1" }), st({ item: "bite", target: "E1" })] }, { ...sctx, prone: true }).reason));
+  check("paralyzed: no stand", /paralyzed/.test(checkPlan({ steps: [{ do: "stand" }] }, { ...sctx, prone: true, cantAct: "it is paralyzed and can't act." }).reason));
+  check("spent: step and stand", spentBy([{ do: "stand" }, { do: "step" }, { do: "strike" }]).actions === 3 && spentBy([{ do: "stand" }, { do: "step" }]).attacks === 0);
+  check("done: step and stand", doneStep({ do: "step", to: [1, 5] }, { moved: { to: [1, 5] } }).result === "arrived" && doneStep({ do: "stand" }, { stood: { message: "x" } }).result === "stood" && doneStep({ do: "stand" }, { started: true }).result === "unknown");
+  check("next stand", nextStand({}, true) === "stand" && nextStand({ started: true }, true) === "ask" && nextStand({ started: true }, false) === "stood" && nextStand({ started: true, stood: {} }, false) === "next");
+  check("isMove", isMove({ do: "step" }) && isMove({ do: "stride" }) && !isMove({ do: "stand" }) && !isMove(null));
+  check("hello can step and stand", hello(1).canDo.includes("step") && hello(1).canDo.includes("stand") && hello(1).prompt.includes('"do": "step"') && hello(1).prompt.includes('"do": "stand"'));
+  check("plan keeps a stand", cleanPlan({ steps: [{ do: "stand" }, { do: "step", to: [1, 2] }] }).plan.steps.map(x => x.do).join() === "stand,step");
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
 for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);

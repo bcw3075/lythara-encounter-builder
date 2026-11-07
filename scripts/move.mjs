@@ -1,4 +1,4 @@
-/* Moving a monster: the distance between two creatures, and the route and cost of a Stride. Pure: no Foundry globals. A creature's square is its
+/* Moving a monster: the distance between two creatures, and the route and cost of a Stride or a Step. Pure: no Foundry globals. A creature's square is its
    top-left square, [x, y] with y down, and its size is how many squares a side (1, 2 for Large, ...). Foundry's own measurement has the last word on
    what a route costs (fight.mjs measures every route this finds); this file finds the route, because Foundry has no pathfinding of its own. */
 export const FT = 5;
@@ -92,6 +92,20 @@ export function findRoute({ from, to, size = 1, budget = 200, odd = false }, w) 
   return cut ? { ok: false, why: "far", cost: null } : { ok: false, why: "noway" };   /* beyond where it looked isn't the same as no way */
 }
 
+/** A Step: one square, 5 ft, never into difficult terrain (Rules: https://2e.aonprd.com/Actions.aspx?ID=2304). Same world as findRoute; the cost here is
+    what the 5-10 rule makes it (10 for a diagonal after an odd number this turn), and Foundry's measurement is taken afterwards anyway. Returns
+    { ok: true, route: [from, to], cost } or { ok: false, why }, why being "same", "notNext" (more than one square away), "off", "blocked", "terrain",
+    "occupied", "difficult" or "wall". */
+export function findStep({ from, to, size = 1, odd = false }, w) {
+  const dx = to[0] - from[0], dy = to[1] - from[1];
+  if (!dx && !dy) return { ok: false, why: "same" };
+  if (Math.max(Math.abs(dx), Math.abs(dy)) !== 1) return { ok: false, why: "notNext" };
+  const end = standProblem(to, size, w); if (end) return { ok: false, why: end };
+  if (extraFor(from, to, size, w) > 0) return { ok: false, why: "difficult" };
+  if (w.wall(from, to)) return { ok: false, why: "wall" };
+  return { ok: true, route: [[...from], [...to]], cost: dx && dy && odd ? 2 * FT : FT };
+}
+
 /** Where a move along `route` really stops: before the first place whose footprint holds a creature in `unknown(i, j)`, one the mover didn't know was
     there. Rules: moving into an undetected creature's space ends the move. Returns the route up to there (at least its first square). */
 export function cutShort(route = [], size = 1, unknown = () => false) {
@@ -108,6 +122,9 @@ export function routeWords(r, to, speed) {
     case "blocked": return `it can't stand at ${sq}: something solid is there.`;
     case "terrain": return `${sq} is deep water: it would have to Swim, which a Stride isn't.`;
     case "occupied": return `another creature is at ${sq}.`;
+    case "notNext": return `[${to[0]}, ${to[1]}] isn't next to it: a Step moves one square (5 ft).`;
+    case "difficult": return `[${to[0]}, ${to[1]}] is difficult terrain, and a Step can't go into difficult terrain.`;
+    case "wall": return `a wall is between it and [${to[0]}, ${to[1]}].`;
     case "far": return r.cost == null ? `${sq} is far beyond its Speed of ${speed} ft.` : `getting to ${sq} takes ${r.cost} ft, more than its Speed of ${speed} ft.`;
     default: return `there's no way to ${sq} from where it is.`;
   }

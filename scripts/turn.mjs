@@ -1,19 +1,22 @@
 /* A monster's turn as plain data: what a plan means, whether it's legal, and where a step stands. Pure: no Foundry globals.
-   The glue gathers live values first. Strikes and Strides so far; the other step kinds come as step 2 goes on. */
+   The glue gathers live values first. Strikes, Strides, Steps and Stand so far; the other step kinds come as step 2 goes on. */
 import { distanceBetween, headingOf } from "./move.mjs";
-export const COSTS = { strike: 1, stride: 1, none: 0 };
+export const COSTS = { strike: 1, stride: 1, step: 1, stand: 1, none: 0 };
+const MOVES = ["stride", "step"];
+/** A Step moves 5 ft; a plan Step that Foundry would charge more for (a diagonal after an odd number this turn) is refused. Rules: https://2e.aonprd.com/Actions.aspx?ID=2304 */
+export const STEP_FT = 5;
 const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
 
 /** Check a plan against what the glue gathered. Returns { ok: true, steps } with each step resolved, or { ok: false, reason }.
     ctx: { actions (left this turn), attacksBefore (attacks already made this turn, for the multiple attack penalty), strikes: [{ id, name, reach, ranged, maxRange }],
-    targets: { label: { name, square, size, elev, depth, flat } or { name, distance, flat } }, me: { square, size, elev, depth }, speed, cantAct (why it can't act at all, or null),
-    cantMove (why it can't Stride, or null),
-    route(from, to, before) → { ok, route, cost } or { ok: false, reason }, before being the routes of this plan's earlier Strides (the diagonal count
-    runs across the turn) }. Only what the monster perceives is in targets. A Stride moves where later steps are
-    measured from. Names here are labels when the reason goes to the thinker. */
+    targets: { label: { name, square, size, elev, depth, flat } or { name, distance, flat } }, me: { square, size, elev, depth }, speed (land), cantAct (why it can't act at all, or null),
+    cantMove (why it can't use any move action, Stand included: grabbed, immobilized, restrained; or null), prone (whether it starts the plan prone),
+    route(from, to, before, { step }) → { ok, route, cost } or { ok: false, reason }, before being the routes of this plan's earlier moves (the diagonal count
+    runs across the turn), step asking for a single 5-ft Step rather than a Stride }. Only what the monster perceives is in targets. A Stride or Step moves
+    where later steps are measured from; a Stand ends Prone for the rest of the plan. Names here are labels when the reason goes to the thinker. */
 export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
-  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null; const steps = [], routes = [];
+  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, prone = !!ctx.prone; const steps = [], routes = [];
   const distanceTo = (t, reach) => here && t.square ? distanceBetween({ x: here[0], y: here[1], size: ctx.me.size ?? 1, elev: ctx.me.elev, depth: ctx.me.depth }, { x: t.square[0], y: t.square[1], size: t.size ?? 1, elev: t.elev, depth: t.depth }, { reach }) : t.distance;
   for (const [n, step] of plan.steps.entries()) {
     const at = `Step ${n + 1}`;
@@ -22,20 +25,30 @@ export function checkPlan(plan, ctx) {
     left -= COSTS[step.do];
     if (step.do === "none") { steps.push({ do: "none" }); continue; }
     if (ctx.cantAct) return { ok: false, reason: `${at}: ${ctx.cantAct}` };
-    if (step.do === "stride") {
+    if (step.do === "stand") {
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
-      if (!Array.isArray(step.to)) return { ok: false, reason: `${at}: a Stride needs "to", the square to end on.` };
+      if (!prone) return { ok: false, reason: `${at}: it isn't prone, so it has nothing to Stand up from.` };
+      steps.push({ do: "stand" }); prone = false; continue;
+    }
+    if (MOVES.includes(step.do)) {
+      const word = step.do === "step" ? "Step" : "Stride";
+      if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
+      if (prone) return { ok: false, reason: `${at}: it is prone, so it has to Stand first (a "stand" step, 1 action) before it can ${word}.` };
+      if (!(ctx.speed > 0)) return { ok: false, reason: `${at}: it has no land Speed.` };
+      if (step.do === "step" && ctx.speed < 2 * STEP_FT) return { ok: false, reason: `${at}: a Step needs a Speed of at least ${2 * STEP_FT} ft, and its Speed is ${ctx.speed} ft.` };
+      if (!Array.isArray(step.to)) return { ok: false, reason: `${at}: a ${word} needs "to", the square to end on.` };
       if (!here || !ctx.route) return { ok: false, reason: `${at}: I can't work out moves here.` };
       if (same(here, step.to)) return { ok: false, reason: `${at}: it is already at [${step.to[0]}, ${step.to[1]}].` };
-      const way = ctx.route(here, step.to, routes);
+      const way = ctx.route(here, step.to, routes, { step: step.do === "step" });
       if (!way.ok) return { ok: false, reason: `${at}: ${way.reason}` };
+      if (step.do === "step" && way.cost > STEP_FT) return { ok: false, reason: `${at}: stepping to [${step.to[0]}, ${step.to[1]}] counts as ${way.cost} ft, and a Step moves only ${STEP_FT} ft${way.route?.length === 2 && way.route[0][0] !== way.route[1][0] && way.route[0][1] !== way.route[1][1] ? " (every second diagonal in a turn counts 10 ft)" : ""}.` };
       if (way.cost > ctx.speed) return { ok: false, reason: `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, more than its Speed of ${ctx.speed} ft.` };
-      steps.push({ do: "stride", from: [...here], to: [...step.to], route: way.route, cost: way.cost }); routes.push(way.route);
+      steps.push({ do: step.do, from: [...here], to: [...step.to], route: way.route, cost: way.cost }); routes.push(way.route);
       here = [...step.to]; continue;
     }
     const s = ctx.strikes.find(x => x.id === step.item); if (!s) return { ok: false, reason: `${at}: it has no attack called "${step.item}".` };
     const t = ctx.targets[step.target]; if (!t) return { ok: false, reason: `${at}: it doesn't know of "${step.target}".` };
-    const where = steps.some(x => x.do === "stride") ? ` from [${here[0]}, ${here[1]}]` : "";
+    const where = steps.some(x => MOVES.includes(x.do)) ? ` from [${here[0]}, ${here[1]}]` : "";
     if (s.ranged) { const d = distanceTo(t, null); if (s.maxRange && d > s.maxRange) return { ok: false, reason: `${at}: ${t.name} is ${d} ft away${where}, out of range of ${s.name} (${s.maxRange} ft).` }; }
     else { const d = distanceTo(t, s.reach); if (d > s.reach) return { ok: false, reason: `${at}: ${t.name} is ${d} ft away${where}, out of reach of ${s.name} (${s.reach} ft).` }; }
     steps.push({ do: "strike", item: s.id, itemName: s.name, target: step.target, targetName: t.name ?? step.target, variant: Math.min(attacks, 2), flat: t.flat ?? 0 });
@@ -43,6 +56,8 @@ export function checkPlan(plan, ctx) {
   }
   return { ok: true, steps };
 }
+/** Whether a step moves the monster across the map (a Stride or a Step). */
+export const isMove = s => MOVES.includes(s?.do);
 /** One id per Strike. A thrown dagger shares its slug with the melee one, and a plan has to be able to say which. strikes: [{ slug, ranged }]. */
 export function strikeIds(strikes) {
   const seen = new Map();
@@ -55,7 +70,8 @@ export function spentBy(steps = []) {
 export const OUTCOMES = ["critical miss", "miss", "hit", "critical hit"];
 /** A finished step as the monster saw it, for the next plan: labels and ids only, and the result shown in chat. */
 export function doneStep(step, rec = {}) {
-  if (step.do === "stride") { const got = rec.moved?.to; return { do: "stride", to: step.to, result: !got ? "unknown" : same(got, step.to) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]` }; }
+  if (isMove(step)) { const got = rec.moved?.to; return { do: step.do, to: step.to, result: !got ? "unknown" : same(got, step.to) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]` }; }
+  if (step.do === "stand") return { do: "stand", result: rec.stood ? "stood" : "unknown" };
   if (step.do !== "strike") return { do: step.do };
   return { do: "strike", item: step.item, target: step.target, result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.attack ? OUTCOMES[rec.attack.degree] ?? "unknown" : "unknown" };
 }
@@ -109,7 +125,8 @@ export const describeChanges = (list = [], nameOf, self) => list.map(c => descri
 /** A resolved step in plain words, for the card. */
 export function describeStep(s) {
   if (s.do === "none") return "Does nothing.";
-  if (s.do === "stride") { const way = s.from ? headingOf(s.from, s.to) : ""; return `Strides ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}.`; }
+  if (isMove(s)) { const way = s.from ? headingOf(s.from, s.to) : ""; return `${s.do === "step" ? "Steps" : "Strides"} ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}.`; }
+  if (s.do === "stand") return "Stands up.";
   return `${s.itemName} at ${s.targetName}${s.variant ? `, attack ${s.variant + 1}` : ""}${s.flat ? `, after a DC ${s.flat} flat check` : ""}.`;
 }
 /** What to do next with a Strike step, from what its record says already happened. Nothing is ever repeated: when the record can't tell
@@ -125,12 +142,19 @@ export function nextAction(rec = {}, { apply = false, flat = 0 } = {}) {
   if (!rec.applying) return "apply";
   return rec.applied ? "next" : "ask";
 }
-/** What to do next with a Stride step. A move begun before a reload is never sent again: if the monster is where it was going, the step is done;
+/** What to do next with a Stride or Step. A move begun before a reload is never sent again: if the monster is where it was going, the step is done;
     anywhere else, the GM looks. at: the square it stands on now. */
 export function nextMove(rec = {}, at = null, to = null) {
   if (rec.moved) return "next";
   if (!rec.started) return "move";
   return same(at, to) ? "arrived" : "ask";
+}
+/** What to do next with a Stand. Its card is posted and Prone removed in one go, so a Stand begun before a reload is never sent again: if the monster
+    is no longer prone it counts as done; still prone, the GM looks. */
+export function nextStand(rec = {}, prone = true) {
+  if (rec.stood) return "next";
+  if (!rec.started) return "stand";
+  return prone ? "ask" : "stood";
 }
 /** This turn's unfinished request. By round and combatant, not turn number: an initiative change can move the number during the turn. */
 export function currentOf(requests = {}, round, combatantId) {
