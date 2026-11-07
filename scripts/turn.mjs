@@ -109,10 +109,13 @@ export function currentOf(requests = {}, round, combatantId) {
 }
 /** Whether a request has work in flight or about to start. Waiting on a person or a plan doesn't count. */
 export const requestBusy = r => !!r && (r.state === "running" || r.state === "submitted" || !!r.go);
-/** The note to show between turns: only the latest finished turn's, so an old warning never outlives the turn it was about. */
+/** The note to show between turns: only the latest finished turn's, so an old warning never outlives the turn it was about. A turn that was re-planned
+    is several requests linked by `parent`, and a warning from its first part (a PC at 0 HP) still counts. */
 export function latestNote(requests = {}) {
   const fin = Object.values(requests).filter(r => ["done", "manual"].includes(r.state)).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
-  const last = fin.at(-1); return last?.state === "done" && last.note ? last : null;
+  const last = fin.at(-1); if (last?.state !== "done") return null;
+  const notes = []; for (let r = last, n = 0; r && n < 10; r = r.parent ? requests[r.parent] : null, n++) if (r.note) notes.unshift(r.note);
+  return notes.length ? { ...last, note: notes.join(" ") } : null;
 }
 /** The roll options PF2e's own damage button gives a target, from the damage card's context. */
 export function damageOptions(options = []) {

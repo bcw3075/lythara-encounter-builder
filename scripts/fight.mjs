@@ -200,6 +200,7 @@ function gather(combat, req, used = { actions: 0, attacks: 0 }) {
     from an older chat's generation is ignored. The plan is stored as it came and cleaned by the runner, so tries are counted in one place. */
 export async function submitPlan(combat, requestId, plan, meta = {}) {
   const r = request(combat, requestId); if (!r) throw new Error("No such request."); if (r.state !== "requested" && r.state !== "ready") throw new Error(`That turn is ${r.state}.`);
+  if ((r.pos ?? 0) > 0) throw new Error("That turn is under way: its first steps are done, so a new plan can't replace them.");   /* between Next steps */
   const who = cleanMeta(meta); if (stale(brainNow(), who.generation)) return { state: r.state, ignored: true, reason: SUPERSEDED };
   if (JSON.stringify(plan ?? null).length > PLAN_BYTES) return { state: r.state, reason: "That plan is far too long to be a plan." };
   await save(combat, requestId, { plan: whole(plan), state: "submitted", verdict: null, by: whole(who) });
@@ -229,7 +230,7 @@ async function judgeNow(combat, requestId) {
 /* The reason goes back to the thinker once, as a retry event. A second refusal goes to the GM. */
 async function reject(combat, requestId, reason) {
   const tries = (request(combat, requestId).tries ?? 0) + 1, last = tries >= MAX_TRIES, at = `requests.${requestId}`;
-  await saveTurns(combat, { [`${at}.state`]: "requested", [`${at}.tries`]: tries, [`${at}.verdict`]: last ? `Couldn't do: ${reason}` : reason, ...(last ? {} : eventChange("retry", requestId, tries)) });
+  await saveTurns(combat, { [`${at}.state`]: "requested", [`${at}.tries`]: tries, [`${at}.steps`]: null, [`${at}.verdict`]: last ? `Couldn't do: ${reason}` : reason, ...(last ? {} : eventChange("retry", requestId, tries)) });   /* an earlier plan's steps go: they'd read as this one's */
   return { state: "requested", reason, triesLeft: Math.max(0, MAX_TRIES - tries) };
 }
 
