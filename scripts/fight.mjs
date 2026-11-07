@@ -445,13 +445,13 @@ async function replan(combat, r, i, changes, tok) {
 /** Is this page working on a turn, or about to? For tools that share the runner's page. The in-memory sets cover the start of a turn, before any request
     exists, so only the runner's own page has the full answer; on any other page it's the flag alone. */
 /** Keep the current turn through an initiative change made on this page. Workbench moves a PC at 0 HP to just ahead of whoever's turn it is, from the
-    page that applied the damage: the runner's. PF2e then keeps the turn only on the active GM's page (from any other, that page's copy has already
-    shifted, so PF2e's turn update finds nothing to send), so the turn passed to the PC mid-turn, with turn events. Two steps on the runner's page:
+    page that applied the damage: the runner's. PF2e then tries to keep the turn, but that page's copy has already shifted, so its turn update often
+    finds nothing to send, and the turn passed to the PC mid-turn, with turn events. Seen with the runner as active GM too (3 in 3), so this runs either way. Two steps on the runner's page:
     `keepTurn` gives the change core's `combatTurn` and `turnEvents: false`, as core's own initiative roll does, so every page keeps the same creature
     current with no turn event; core applies that in each page's copy only, so `saveTurn` then saves the turn for real, forced through (`diff: false`). */
 export function keepTurn(combatant, change, options) {
   const combat = combatant.parent;
-  if (!isRunner() || game.user.isActiveGM || !combat?.started || combat.turn == null || typeof options.combatTurn === "number" || !("initiative" in change)) return;
+  if (!isRunner() || !combat?.started || combat.turn == null || typeof options.combatTurn === "number" || !("initiative" in change)) return;
   const current = combat.combatant; if (!current) return;
   const updates = Array.isArray(options.updates) && options.updates.length ? options.updates : [{ ...change, _id: combatant.id }];
   const after = combat.combatants.contents.map(c => { const u = updates.find(x => x._id === c.id); return u ? c.clone(u, { keepId: true, parent: combat }) : c; });
