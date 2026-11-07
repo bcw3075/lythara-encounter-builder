@@ -6,7 +6,7 @@ const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
 
 /** Check a plan against what the glue gathered. Returns { ok: true, steps } with each step resolved, or { ok: false, reason }.
     ctx: { actions (left this turn), attacksBefore (attacks already made this turn, for the multiple attack penalty), strikes: [{ id, name, reach, ranged, maxRange }],
-    targets: { label: { name, square, size, flat } or { name, distance, flat } }, me: { square, size }, speed, cantAct (why it can't act at all, or null),
+    targets: { label: { name, square, size, elev, depth, flat } or { name, distance, flat } }, me: { square, size, elev, depth }, speed, cantAct (why it can't act at all, or null),
     cantMove (why it can't Stride, or null),
     route(from, to, before) → { ok, route, cost } or { ok: false, reason }, before being the routes of this plan's earlier Strides (the diagonal count
     runs across the turn) }. Only what the monster perceives is in targets. A Stride moves where later steps are
@@ -14,7 +14,7 @@ const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
 export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
   let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null; const steps = [], routes = [];
-  const distanceTo = (t, reach) => here && t.square ? distanceBetween({ x: here[0], y: here[1], size: ctx.me.size ?? 1 }, { x: t.square[0], y: t.square[1], size: t.size ?? 1 }, { reach }) : t.distance;
+  const distanceTo = (t, reach) => here && t.square ? distanceBetween({ x: here[0], y: here[1], size: ctx.me.size ?? 1, elev: ctx.me.elev, depth: ctx.me.depth }, { x: t.square[0], y: t.square[1], size: t.size ?? 1, elev: t.elev, depth: t.depth }, { reach }) : t.distance;
   for (const [n, step] of plan.steps.entries()) {
     const at = `Step ${n + 1}`;
     if (!(step.do in COSTS)) return { ok: false, reason: `${at}: I can't do "${step.do}" yet.` };
@@ -92,6 +92,7 @@ export function describeChange(c, nameOf = l => l, self = "It") {
   const who = c.who === "me" ? self : nameOf(c.who) ?? c.who, its = c.who === "me" ? (self === "It" ? "Its" : `${self}'s`) : `${who}'s`;
   switch (c.what) {
     case "moved": return `${who} moved.`;
+    case "stopped": return `${who} was stopped at [${c.at?.[0]}, ${c.at?.[1]}], short of where it was going.`;
     case "hurt": return `${who} was hurt.`;
     case "healed": return `${who} regained HP.`;
     case "actions": return `${its} actions this turn are now ${c.now}.`;

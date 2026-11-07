@@ -9,7 +9,7 @@ import { hiddenNextTo, layout, nearestFree } from "../../scripts/place.mjs";
 import { actionsFor, assignLabels, canTarget, describeKnows, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions, worse } from "../../scripts/perceive.mjs";
 import { MAX_TRIES, STEP_KINDS, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "../../scripts/brain.mjs";
 import { MAX_REPLANS, changesSince, checkPlan, currentOf, damageOptions, describeChange, describeChanges, describeStep, doneStep, latestNote, nextAction, nextMove, requestBusy, situationOf, spentBy, strikeIds } from "../../scripts/turn.mjs";
-import { diagonalsIn, distanceBetween, findRoute, footprintAt, headingOf, routeWords } from "../../scripts/move.mjs";
+import { cutShort, diagonalsIn, distanceBetween, findRoute, footprintAt, headingOf, routeWords } from "../../scripts/move.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
 
@@ -254,6 +254,13 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   { const seen = []; checkPlan({ steps: [{ do: "stride", to: [2, 5] }, { do: "stride", to: [3, 6] }] }, { ...mctx, route: (f, t, before) => { seen.push(before.map(r => r.length)); return route(f, t); } });
     check("later strides see earlier routes", seen.length === 2 && seen[0].length === 0 && seen[1].length === 1 && seen[1][0] === 3, JSON.stringify(seen)); }
   check("can't act: no step but none", /paralyzed/.test(checkPlan({ steps: [st({ item: "bite", target: "E1" })] }, { ...mctx, cantAct: "it is paralyzed and can't act." }).reason) && checkPlan({ steps: [{ do: "none" }] }, { ...mctx, cantAct: "x" }).ok);
+  /* the independent review's findings (2026-11-07) */
+  check("height counts, as PF2e's third axis", distanceBetween({ x: 0, y: 0 }, { x: 0, y: 0, elev: 20 }) === 20 && distanceBetween({ x: 0, y: 0 }, { x: 1, y: 0, elev: 20 }) === 20 && distanceBetween({ x: 0, y: 0 }, { x: 1, y: 0, elev: 5 }) === 5 && distanceBetween({ x: 0, y: 0, elev: 10 }, { x: 1, y: 0, elev: 10 }) === 5);
+  check("a bite can't reach a flyer", /out of reach/.test(checkPlan({ steps: [st({ item: "bite", target: "E1" })] }, { ...mctx, me: { square: [5, 5], size: 1 }, targets: { E1: { name: "E1", square: [6, 5], size: 1, elev: 20 } } }).reason));
+  check("a dragged move's diagonals", diagonalsIn([[0, 0], [3, 2]]) === 2 && diagonalsIn([[0, 0], [3, 0]]) === 0);
+  check("far past the search is far, not no way", findRoute({ from: [0, 0], to: [11, 0], budget: 5 }, W()).why === "far" && /far beyond its Speed of 5 ft/.test(routeWords({ why: "far", cost: null }, [11, 0], 5)));
+  check("cut short before someone it didn't know of", cutShort([[0, 0], [1, 0], [2, 0], [3, 0]], 1, (i, j) => i === 2 && j === 0).map(p => p.join()).join(" ") === "0,0 1,0" && cutShort([[0, 0], [1, 0]], 1, () => false).length === 2 && cutShort([[0, 0], [1, 0]], 2, (i, j) => i === 2 && j === 1).length === 1);
+  check("stopped in words, no cause", describeChange({ who: "me", what: "stopped", at: [4, 5] }) === "It was stopped at [4, 5], short of where it was going.");
   check("hello can stride", hello(1).canDo.includes("stride") && hello(1).prompt.includes('"do": "stride"'));
   check("plan keeps to", cleanPlan({ steps: [{ do: "stride", to: [3, 4] }] }).plan.steps[0].to.join() === "3,4");
 }

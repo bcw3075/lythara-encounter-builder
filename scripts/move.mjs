@@ -4,16 +4,22 @@
 export const FT = 5;
 const SQUARE_DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
 
-/** PF2e's distance between two creatures on a square grid at the same height, as `measureDistanceCuboid` works it out (PF2e 8.7.0): the squares between
-    their edges, every second diagonal counting double. With reach 10 it takes 5 ft off when the line has more than one diagonal, which is the rule that
-    10-foot reach reaches two squares diagonally. a, b: { x, y, size } in squares. Checked against `distanceTo` live for Medium and Large (2026-11-07). */
+/** PF2e's distance between two creatures on a square grid, as `measureDistanceCuboid` works it out (PF2e 8.7.0): the squares between their edges,
+    every second diagonal counting double. At different heights the vertical gap counts as a third axis (elevation in feet, depth in squares, which is
+    the token's own depth, its size by default); at the same height it doesn't. With reach 10 it takes 5 ft off when the line has more than one
+    diagonal, which is the rule that 10-foot reach reaches two squares diagonally. a, b: { x, y, size, elev, depth } in squares (elev in feet).
+    Checked against `distanceTo` live for Medium and Large at one height (2026-11-07). */
 export function distanceBetween(a, b, { reach = null } = {}) {
   const sa = a.size ?? 1, sb = b.size ?? 1;
   const overX = b.x < a.x + sa && b.x + sb > a.x, overY = b.y < a.y + sa && b.y + sb > a.y;
-  if (overX && overY) return 0;
-  const dx = Math.max(b.x - (a.x + sa), a.x - (b.x + sb), 0) + 1, dy = Math.max(b.y - (a.y + sa), a.y - (b.y + sb), 0) + 1;
-  const lo = Math.min(dx, dy), hi = Math.max(dx, dy), off = lo > 1 && reach === 10 ? 1 : 0;
-  return (Math.floor(lo * 1.5 + (hi - lo)) - off) * FT;
+  const flat = overX && overY, dx = flat ? 0 : Math.max(b.x - (a.x + sa), a.x - (b.x + sb), 0) + 1, dy = flat ? 0 : Math.max(b.y - (a.y + sa), a.y - (b.y + sb), 0) + 1;
+  let dz = 0;
+  if ((a.elev ?? 0) !== (b.elev ?? 0)) {
+    const ta = (a.elev ?? 0) / FT, tb = (b.elev ?? 0) / FT, da = a.depth ?? sa, db = b.depth ?? sb;
+    dz = tb < ta + da && tb + db > ta ? 0 : Math.ceil(Math.max(tb - (ta + da), ta - (tb + db), 0)) + 1;
+  }
+  const [d0, d1, d2] = [dx, dy, dz].sort((p, q) => p - q), off = d1 > 1 && reach === 10 ? 1 : 0;
+  return Math.max(0, Math.floor(d0 * 1.75 + (d1 - d0) * 1.5 + (d2 - d1)) - off) * FT;
 }
 
 /** The squares a creature covers standing at [x, y]. */
@@ -48,8 +54,9 @@ function extraFor(from, to, size, w) {
   return worst * FT;
 }
 
-/** How many diagonal steps a list of squares takes, one square to the next. */
-export function diagonalsIn(squares = []) { let n = 0; for (let k = 1; k < squares.length; k++) if (squares[k][0] !== squares[k - 1][0] && squares[k][1] !== squares[k - 1][1]) n++; return n; }
+/** How many diagonal steps a path of waypoints takes. A segment can span several squares (a hand-dragged move), and Foundry counts min(|dx|, |dy|)
+    diagonals in it. */
+export function diagonalsIn(squares = []) { let n = 0; for (let k = 1; k < squares.length; k++) n += Math.min(Math.abs(squares[k][0] - squares[k - 1][0]), Math.abs(squares[k][1] - squares[k - 1][1])); return n; }
 
 /** The cheapest route for a Stride from `from` to `to`, counting as PF2e does: every other diagonal 10 ft, each difficult square entered 5 ft more,
     greater 10 more. The diagonal count runs across the whole turn (Rules ID 444: "your total diagonal movement across all your movement during your
@@ -65,7 +72,7 @@ export function findRoute({ from, to, size = 1, budget = 200, odd = false }, w) 
   const push = (c, s) => { heap.push([c, s]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
   const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const a = 2 * i + 1, b = a + 1; let m = i; if (a < heap.length && heap[a][0] < heap[m][0]) m = a; if (b < heap.length && heap[b][0] < heap[m][0]) m = b; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
   const start = `${key(...from)}|${odd ? 1 : 0}`; best.set(start, 0); push(0, start);
-  const limit = Math.max(budget, 0) * 4 + 60;   /* look past the budget, so "too far" can say how far */
+  const limit = Math.max(budget, 0) * 4 + 60; let cut = false;   /* look past the budget, so "too far" can say how far */
   while (heap.length) {
     const [c, s] = pop(); if (c > (best.get(s) ?? Infinity)) continue;
     const [sq, odd] = s.split("|"), [x, y] = sq.split(",").map(Number);
@@ -78,11 +85,18 @@ export function findRoute({ from, to, size = 1, budget = 200, odd = false }, w) 
       if (passProblem([nx, ny], size, w)) continue;
       if (w.wall([x, y], [nx, ny])) continue;
       const nc = c + (diag && odd === "1" ? 2 * FT : FT) + extraFor([x, y], [nx, ny], size, w);
-      if (nc > limit) continue;
+      if (nc > limit) { cut = true; continue; }
       const ns = `${key(nx, ny)}|${nodd}`; if (nc < (best.get(ns) ?? Infinity)) { best.set(ns, nc); prev.set(ns, s); push(nc, ns); }
     }
   }
-  return { ok: false, why: "noway" };
+  return cut ? { ok: false, why: "far", cost: null } : { ok: false, why: "noway" };   /* beyond where it looked isn't the same as no way */
+}
+
+/** Where a move along `route` really stops: before the first place whose footprint holds a creature in `unknown(i, j)`, one the mover didn't know was
+    there. Rules: moving into an undetected creature's space ends the move. Returns the route up to there (at least its first square). */
+export function cutShort(route = [], size = 1, unknown = () => false) {
+  for (let k = 1; k < route.length; k++) if (footprintAt(route[k], size).some(([i, j]) => unknown(i, j))) return route.slice(0, k);
+  return route;
 }
 
 /** A route's failure in words, for the thinker and the card. Squares stay squares, which is what the thinker plans with. */
@@ -94,7 +108,7 @@ export function routeWords(r, to, speed) {
     case "blocked": return `it can't stand at ${sq}: something solid is there.`;
     case "terrain": return `${sq} is deep water: it would have to Swim, which a Stride isn't.`;
     case "occupied": return `another creature is at ${sq}.`;
-    case "far": return `getting to ${sq} takes ${r.cost} ft, more than its Speed of ${speed} ft.`;
+    case "far": return r.cost == null ? `${sq} is far beyond its Speed of ${speed} ft.` : `getting to ${sq} takes ${r.cost} ft, more than its Speed of ${speed} ft.`;
     default: return `there's no way to ${sq} from where it is.`;
   }
 }

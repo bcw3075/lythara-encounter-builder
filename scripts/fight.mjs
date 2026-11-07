@@ -2,7 +2,7 @@
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. For now it runs Strikes; see claude/encounter-builder-plan.md for the rest of step 2. */
 import { MAX_REPLANS, changesSince, checkPlan, currentOf, damageOptions, describeChanges, doneStep, latestNote, nextAction, nextMove, requestBusy, situationOf, spentBy, strikeIds } from "./turn.mjs";
-import { diagonalsIn, findRoute, footprintAt, routeWords } from "./move.mjs";
+import { cutShort, diagonalsIn, findRoute, footprintAt, routeWords } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap } from "./builder.mjs";
 import { MAX_TRIES, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "./brain.mjs";
@@ -192,18 +192,30 @@ export async function onRunnerReady() {
 }
 /** Live values for the legality check. Reach, distance and moves need the canvas on the fight scene. used: what this request's finished steps took. Names
     are labels, because a refusal's reason goes back to the thinker; the card puts names in. */
-async function gather(combat, req, used = { actions: 0, attacks: 0 }) {
+async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = true } = {}) {
   const scene = combat.scene, tok = scene.tokens.get(req.tokenId), actor = tok.actor;
   const strikes = strikesWithIds(actor).map(({ id, strike: a }) => ({ id, name: a.label, reach: actor.getReach({ action: "attack", weapon: a.item }), ranged: !!a.item?.isRanged, maxRange: a.item?.range?.max ?? null }));
   /* only what it perceived when asked, and still does: a plan can't name anything else */
   const now = new Map(sense(combat, tok, turns(combat).memory?.[tok.id] ?? {}).map(o => [o.id, o])), targets = {};
-  for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && canTarget(o.state)) targets[label] = { name: label, square: o.square, size: sizeOf(o.token), flat: flatDC(o.state) }; }
-  const speed = landSpeed(actor), route = await mover(combat, tok, speed);
+  for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && canTarget(o.state)) targets[label] = { name: label, square: o.square, size: sizeOf(o.token), ...heightOf(o.token), flat: flatDC(o.state) }; }
+  /* moves are worked out only for a plan that has a Stride, so trouble there can't stop a plan of Strikes */
+  const speed = landSpeed(actor); let route = null;
+  if (moves) { try { route = await mover(combat, tok, speed, knownTo(combat, tok, [...now.values()])); } catch (e) { console.error(`${ID} | moves`, e); const why = `I couldn't work out moves here (${e.message}).`; route = () => ({ ok: false, reason: why }); } }
   return { actions: Math.max(0, actionsOf(actor, combat) - (req.spent ?? 0) - used.actions), attacksBefore: (req.attacks ?? 0) + used.attacks, strikes, targets,
-    me: { square: squareOf(tok, scene), size: sizeOf(tok) }, speed, cantAct: cantAct(actor), cantMove: cantMove(actor, speed), route };
+    me: { square: squareOf(tok, scene), size: sizeOf(tok), ...heightOf(tok) }, speed, cantAct: cantAct(actor), cantMove: cantMove(actor, speed), route };
 }
 
 /* ---------- moving ---------- */
+/** Height for distances: PF2e counts the vertical gap when two creatures stand at different elevations. */
+const heightOf = tok => ({ elev: Number(tok.elevation) || 0, depth: Number(tok.depth) || sizeOf(tok) });
+const hasStride = steps => (steps ?? []).some(s => s?.do === "stride");
+/** The creatures a monster knows are there: allies (not hidden by the GM), and those it perceives well enough to know their square. Only these shape
+    the routes it's told about, so a refusal never gives away a creature it can't perceive. others: what `sense` gave. */
+function knownTo(combat, tok, others) {
+  const known = new Set(others.filter(o => canTarget(o.state)).map(o => o.id));
+  for (const a of alliesOf(combat.scene, tok)) if (!a.hidden) known.add(a.id);
+  return known;
+}
 /* Foundry has no pathfinding, so move.mjs finds the route; Foundry's own measurement then says what it costs, because that is what a real move charges
    (the same on 5 test routes over difficult terrain, 2026-11-07). Walls are core's own movement test between where the creature would stand. */
 const landSpeed = actor => Number(actor.system.movement?.speeds?.land?.value) || 0;
@@ -223,14 +235,14 @@ function cantMove(actor, speed) {
 }
 const DEEP = /deep water/i;   /* Survey Sheet's name for its greater-difficult water. Other greater difficult terrain is just 10 ft more a square. */
 /** route(from, to) for checkPlan, for this monster on this scene as it stands now. */
-async function mover(combat, tok, speed) {
+async function mover(combat, tok, speed, known = null) {
   const scene = combat.scene, px = scene.grid.size, d = scene.dimensions, ox = d.sceneX, oy = d.sceneY, size = sizeOf(tok);
   const { model } = await readMap(scene, { except: new Set(scene.tokens.map(t => t.id)) });   /* creatures are counted below, ally or enemy */
   const deep = scene.regions.filter(r => DEEP.test(r.name ?? "") && r.behaviors.some(b => b.type === "modifyMovementCost" && !b.disabled)), deepAt = new Map();
   const terrain = (i, j) => { const k = model.idx(i, j), c = model.costs[k] ?? 0; if (c < 2) return c;
     if (!deepAt.has(k)) deepAt.set(k, deep.some(r => r.testPoint({ x: ox + (i + .5) * px, y: oy + (j + .5) * px, elevation: 0 }))); return deepAt.get(k) ? null : 2; };
   const who = new Map();
-  for (const t of scene.tokens) { if (t.id === tok.id || !t.actor?.isOfType?.("creature")) continue; const rel = t.actor.isAllyOf?.(tok.actor) ? "ally" : "enemy";
+  for (const t of scene.tokens) { if (t.id === tok.id || !t.actor?.isOfType?.("creature") || (known && !known.has(t.id))) continue; const rel = t.actor.isAllyOf?.(tok.actor) ? "ally" : "enemy";
     for (const [i, j] of footprintAt(squareOf(t, scene), sizeOf(t))) if (who.get(`${i},${j}`) !== "enemy") who.set(`${i},${j}`, rel); }
   const centre = ([x, y]) => ({ x: ox + (x + size / 2) * px, y: oy + (y + size / 2) * px });
   const world = { cols: model.cols, rows: model.rows, terrain, blocked: (i, j) => !!model.blocked[model.idx(i, j)], creature: (i, j) => who.get(`${i},${j}`) ?? null,
@@ -272,7 +284,7 @@ async function judgeNow(combat, requestId) {
   if (!await ensureScene(combat)) { await save(combat, requestId, { state: "requested", verdict: cantOpen() }); return { state: "requested", reason: cantOpen() }; }
   const r = request(combat, requestId), clean = cleanPlan(r.plan);
   if (!clean.ok) return reject(combat, requestId, clean.reason);
-  const c = checkPlan(clean.plan, await gather(combat, r));
+  const c = checkPlan(clean.plan, await gather(combat, r, undefined, { moves: hasStride(clean.plan.steps) }));
   if (!c.ok) return reject(combat, requestId, c.reason);
   await save(combat, requestId, { state: "ready", plan: whole(clean.plan), steps: c.steps, verdict: null });
   const tok = combat.scene.tokens.get(r.tokenId);
@@ -335,7 +347,7 @@ export async function checkOnly(combat, requestId, plan) {
   const r = request(combat, requestId); if (!r) throw new Error("No such request.");
   if (!onFightScene(combat)) throw new Error("This page doesn't have the fight's map open, so it can't tell.");
   const clean = cleanPlan(plan); if (!clean.ok) return { ok: false, reason: clean.reason };
-  return checkPlan(clean.plan, await gather(combat, r));
+  return checkPlan(clean.plan, await gather(combat, r, undefined, { moves: hasStride(clean.plan.steps) }));
 }
 /** The thinker can't make a plan: the card says so and the GM plays. */
 export async function reportFailure(combat, requestId, reason, meta = {}) {
@@ -431,7 +443,7 @@ async function runStrike(combat, id, i, step, tok, target) {
     action doesn't take its own Stride for a change; anything else (an HP change from a reaction, someone now out of sight) still counts. */
 async function runStride(combat, id, i, step, tok) {
   const scene = combat.scene, record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {};
-  const after = async () => { const at = squareOf(tok, scene); await save(combat, id, { seen: { me: { square: at } } });
+  const after = async () => { const at = squareOf(tok, scene); if (request(combat, id).seen) await save(combat, id, { seen: { me: { square: at } } });   /* no baseline, nothing to move */
     if (!same(at, step.to)) await save(combat, id, { note: `${tok.name} stopped at square ${at[0]}, ${at[1]} instead of ${step.to[0]}, ${step.to[1]}.` }); };
   const now = nextMove(get(), squareOf(tok, scene), step.to);
   if (now === "next") return "next";
@@ -439,7 +451,12 @@ async function runStride(combat, id, i, step, tok) {
   if (now === "ask") { await save(combat, id, { note: `${tok.name} started a Stride and isn't where it was going.` }); return "ask"; }
   if (!stepGate("stride", id)) return "stopped";
   if (!(await ensureScene(combat) && tok.object)) throw new Error(cantOpen());
-  const px = scene.grid.size, d = scene.dimensions, action = tok.movementAction, waypoints = step.route.slice(1).map(([x, y]) => ({ x: d.sceneX + x * px, y: d.sceneY + y * px, action }));
+  /* someone it didn't know was there, on the way: the move ends before their space, as the rules say. The thinker is asked again without being told why. */
+  const known = knownTo(combat, tok, sense(combat, tok, turns(combat).memory?.[tok.id] ?? {})), taken = new Set();
+  for (const t of scene.tokens) if (t.id !== tok.id && t.actor?.isOfType?.("creature") && !known.has(t.id)) for (const [a, b] of footprintAt(squareOf(t, scene), sizeOf(t))) taken.add(`${a},${b}`);
+  const route = cutShort(step.route, sizeOf(tok), (a, b) => taken.has(`${a},${b}`));
+  if (route.length < 2) { await record({ started: true, moved: { to: squareOf(tok, scene), cost: 0 } }); await after(); return "next"; }
+  const px = scene.grid.size, d = scene.dimensions, action = tok.movementAction, waypoints = route.slice(1).map(([x, y]) => ({ x: d.sceneX + x * px, y: d.sceneY + y * px, action }));
   await record({ started: true });
   const charged = await watched(async () => {
     let got = null; const hook = Hooks.on("moveToken", (doc, mv) => { if (doc.id === tok.id) got = { cost: mv.passed?.cost ?? null, x: mv.destination?.x, y: mv.destination?.y }; });
@@ -488,7 +505,8 @@ async function runTurn(combat, requestId) {
     if (now.hold) return save(combat, requestId, { state: "held", hold: false, note: "Held before the next step." });
     /* look again before an action that hasn't begun. One begun before a reload carries on, never re-planned halfway. */
     if (!Object.keys(now.log?.[i] ?? {}).length) {
-      const look = await lookAgain(combat, now, i, tok); if (look.changes.length) return replan(combat, now, i, look.changes, tok);
+      let look; try { look = await lookAgain(combat, now, i, tok); } catch (e) { console.error(`${ID} | look again`, e); return save(combat, requestId, { state: "stopped", note: `I couldn't check step ${i + 1} before doing it (${e.message}). Play the rest yourself.` }); }
+      if (look.changes.length) return replan(combat, now, i, look.changes, tok);
       /* a Stride goes by the route just checked: the ground can change under a plan (a wall, someone it can't perceive) without the monster noticing */
       if (step.do === "stride" && look.next?.do === "stride" && JSON.stringify(look.next.route) !== JSON.stringify(step.route)) {
         step = { ...step, route: look.next.route, cost: look.next.cost }; r.steps[i] = step; await save(combat, requestId, { steps: r.steps });
@@ -503,6 +521,9 @@ async function runTurn(combat, requestId) {
       let result; try { result = await work(); } catch (e) { console.error(e); result = "ask"; await save(combat, requestId, { note: e.message }); }
       if (result === "stopped") return save(combat, requestId, { state: "stopped" });
       if (result === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} may not have finished. ${step.do === "stride" ? "Put the monster where it should be" : "Check the chat and HP"}, then play the rest yourself.`.trim() });
+      /* a Stride that ended short of its square: the rest was planned from there, so ask again (the reason names the square, never what stopped it) */
+      const at = squareOf(tok, combat.scene);
+      if (step.do === "stride" && !same(at, step.to) && i + 1 < r.steps.length && request(combat, requestId).state !== "manual") return replan(combat, { ...request(combat, requestId), id: requestId }, i + 1, [{ who: "me", what: "stopped", at }], tok);
     }
     if (request(combat, requestId).state === "manual") return;
     if (i + 1 >= r.steps.length) return save(combat, requestId, { pos: i + 1, state: "done" });
@@ -517,7 +538,7 @@ async function lookAgain(combat, r, i, tok) {
   if (!r.seen || !tok.object) return { changes: [] };   /* a request from before 0.4.0 has no baseline */
   const changes = changesSince(r.seen, situationNow(combat, tok, r.labels));
   if (changes.length) return { changes };
-  const rest = checkPlan({ steps: (r.plan?.steps ?? []).slice(i) }, await gather(combat, r, spentBy(r.steps.slice(0, i))));
+  const left = (r.plan?.steps ?? []).slice(i), rest = checkPlan({ steps: left }, await gather(combat, r, spentBy(r.steps.slice(0, i)), { moves: hasStride(left) }));
   return rest.ok ? { changes: [], next: rest.steps[0] } : { changes: [{ who: "plan", what: "illegal", reason: rest.reason }] };
 }
 /** Drop the rest of the plan and ask again, for the same turn: a new request with a fresh packet, what's done so far, and why. The old one ends there. */
