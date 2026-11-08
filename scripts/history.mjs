@@ -40,6 +40,8 @@ export function stepResult(step, rec = {}, look = {}, n = namer(), done = false)
     if (step.do === "sneak") { tag(rec.card?.message); text = join([text, rec.applied === "applied" ? "Visioner applied the secret result" : rec.applied === "none" ? "Visioner changed nothing" : rec.gm ? "left to you on its card" : ""]); }
   } else if (step.do === "stand" || step.do === "drop-prone") text = rec.changed || rec.stood ? (step.do === "stand" ? "stood up" : "dropped prone") : rec.started ? "started, not confirmed" : "";
   else if (step.do === "take-cover") text = rec.covered ? "took cover" : rec.gm ? "left to you" : "";
+  else if (step.do === "interact") { tag(rec.posted?.message); text = join([flat, rec.posted ? "its card posted for you to apply" : rec.started ? "card started, not confirmed" : ""]); }
+  else if (step.do === "delay") text = rec.moved ? `turn ended; back in the order right after ${n.nameOf(step.after) ?? step.after}` : rec.ended ? "turn ended; its place in the order may not have moved (check the tracker)" : "";
   else if (step.do === "hide" || step.do === "seek") { tag(rec.card?.message); const c = card(rec.card?.message); text = join([c?.total != null ? `secret roll ${c.total}` : "", rec.applied === "applied" ? "Visioner applied the result" : rec.applied === "none" ? "Visioner changed nothing" : rec.gm ? "left to you on its card" : ""]); }
   else if (step.do === "ability") {
     tag(rec.posted?.message); if (rec.check) tag(rec.check.message);
@@ -96,8 +98,9 @@ export function historyOf(t = {}, fight = {}, names = {}, look = {}) {
   const rounds = new Map();
   for (const [id, r] of reqs) {
     const turns = rounds.get(r.round) ?? new Map(); rounds.set(r.round, turns);
-    const key = `${r.round}.${r.combatantId}`, c = order.find(x => x.id === r.combatantId);
-    const turn = turns.get(key) ?? { key, combatantId: r.combatantId, name: c?.name ?? names[r.tokenId] ?? "A monster", angel: true, parts: [], idx: at(r.combatantId) };
+    /* a turn taken after a Delay in the same round is its own turn (0.12.0), listed after the one it delayed on */
+    const key = `${r.round}.${r.combatantId}${r.afterDelay ? ".back" : ""}`, c = order.find(x => x.id === r.combatantId);
+    const turn = turns.get(key) ?? { key, combatantId: r.combatantId, name: `${c?.name ?? names[r.tokenId] ?? "A monster"}${r.afterDelay ? " (back after delaying)" : ""}`, angel: true, parts: [], idx: r.delayed && Number.isFinite(r.turn) ? r.turn : at(r.combatantId) + (r.afterDelay ? 0.5 : 0) };   /* the turn it delayed on sits where it was then, not where it is now */
     turn.parts.push(partOf(id, r, look, n)); turns.set(key, turn);
   }
   /* a monster brought back (Rhea, 2026-11-08): one line in the round it returned, under its name; the escape line stays with the turn it fled on */

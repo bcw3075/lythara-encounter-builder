@@ -144,3 +144,5 @@ tune
 
 # lythara-survey-sheet (its API this module calls)
 extendEncounter
+actor.initiative.tiebreakPriority
+flags.pf2e.overridePriority

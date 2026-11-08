@@ -18,6 +18,7 @@ The brain interface: events with a cursor and a generation, plans handed in from
 - **`suggestOpus`:** spellcasters, many abilities, or a level well above the party. Stored here, used at step 5.
 
 ## How it works
+- **Prompt version 14 (0.12.0):** the prompt explains Interact (`what`, the GM's card, manipulate: restrained refused, grabbed's DC 5 flat check) and Delay (`after`, the plan's only step with nothing done, a creature still to act this round, the turn ending now and coming back after theirs); `cleanPlan` keeps `what` and `after`. See `docs/features/interact-delay.md`.
 - **Prompt version 13 (0.11.0):** `flee` is a step kind (`STEP_KINDS`), and the prompt explains fleeing off the map, the GM's choice at the edge, the re-ask after Extend, running toward the edge first, and the fleeing condition. The stall kinds know `fled` (person) and `extending` (machine). See `docs/features/fleeing.md`.
 - **Words the thinker reads use labels.** Refusals, change reasons and notes about targets are written with E and M labels (`gather` names targets by label), so nothing sends a PC's name to the thinker; the card swaps the labels for names when it draws them. Retry reasons carried names before 0.4.0.
 Whoever thinks for a monster (a Claude chat through the bridge now, the Claude API later) uses the same four calls, so nothing changes when the API arrives. The module can't tell them apart.

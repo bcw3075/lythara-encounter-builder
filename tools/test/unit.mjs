@@ -12,7 +12,7 @@ import { CHECK_WORD, FOLLOW_UPS, SAVE_MULT, abilityCost, followUpOutcome, lastAc
 import { MAX_REPLANS, changesSince, checkPlan, coverAfterTaking, currentOf, endsCover, nextCover, damageOptions, describeChange, describeChanges, absorbOwn, describeStep, doneStep, isMove, latestNote, nextAction, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "../../scripts/turn.mjs";
 import { aimArea, burstReachable, caughtBy, crossesWall, placeable, shapeOf, squaresNear, squaresOf } from "../../scripts/area.mjs";
 import { aimText, areaHurt, forThinker, listWords, nextArea } from "../../scripts/turn.mjs";
-import { COSTS, SEEK, SIDES, edgeSides, isAttack, nextStealth, revealsAfter, revealsBefore, sneakSpeed } from "../../scripts/turn.mjs";
+import { COSTS, SEEK, SIDES, edgeSides, isAttack, nextInteract, nextStealth, revealsAfter, revealsBefore, sneakSpeed } from "../../scripts/turn.mjs";
 import { promptText } from "../../scripts/prompt.mjs";
 import { historyHTML, historyOf, journalHTML, stepResult } from "../../scripts/history.mjs";
 import { cutShort, diagonalsIn, distanceBetween, featureNear, findRoute, findStep, footprintAt, headingOf, routeWords } from "../../scripts/move.mjs";
@@ -46,7 +46,7 @@ const tctx = { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 5 }, { i
 const st = (o) => ({ do: "strike", ...o });
 let pl = checkPlan({ steps: [st({ item: "jaws", target: "E1" }), st({ item: "jaws", target: "E1" }), st({ item: "jaws", target: "E1" })] }, tctx); check("three attacks", pl.ok && pl.steps.map(s => s.variant).join() === "0,1,2");
 check("fourth has no actions", !checkPlan({ steps: [1, 2, 3, 4].map(() => st({ item: "jaws", target: "E1" })) }, tctx).ok); check("out of reach", /out of reach/.test(checkPlan({ steps: [st({ item: "jaws", target: "E2" })] }, tctx).reason)); check("out of range", /out of range/.test(checkPlan({ steps: [st({ item: "bow", target: "E2" })] }, tctx).reason)); check("bow in range", checkPlan({ steps: [st({ item: "bow", target: "E1" })] }, tctx).ok);
-check("unknown target", /doesn't know/.test(checkPlan({ steps: [st({ item: "jaws", target: "E9" })] }, tctx).reason)); check("unknown attack", /no attack/.test(checkPlan({ steps: [st({ item: "claw", target: "E1" })] }, tctx).reason)); check("unknown step", /can't do/.test(checkPlan({ steps: [{ do: "interact" }] }, tctx).reason)); check("no plan", !checkPlan(null, tctx).ok); check("words", describeStep(pl.steps[1]) === "Jaws at Hero, attack 2.");
+check("unknown target", /doesn't know/.test(checkPlan({ steps: [st({ item: "jaws", target: "E9" })] }, tctx).reason)); check("unknown attack", /no attack/.test(checkPlan({ steps: [st({ item: "claw", target: "E1" })] }, tctx).reason)); check("unknown step", /can't do/.test(checkPlan({ steps: [{ do: "jump" }] }, tctx).reason)); check("no plan", !checkPlan(null, tctx).ok); check("words", describeStep(pl.steps[1]) === "Jaws at Hero, attack 2.");
 const hit = { started: true, attack: { degree: 2 } };
 check("fresh attacks", nextAction({}) === "attack"); check("started, no result: ask, never roll again", nextAction({ started: true }) === "ask"); check("miss ends", nextAction({ started: true, attack: { degree: 1 } }, { apply: true }) === "next"); check("hit rolls", nextAction(hit) === "damage"); check("damage started, no card: ask", nextAction({ ...hit, damageStarted: true }) === "ask");
 check("a note shows", latestNote({ a: { state: "done", at: 1, note: "x" } })?.note === "x"); check("a later clean turn clears an old note", latestNote({ a: { state: "done", at: 1, note: "x" }, b: { state: "done", at: 2 } }) === null); check("a turn played by hand clears it too", latestNote({ a: { state: "done", at: 1, note: "x" }, b: { state: "manual", at: 2 } }) === null); check("order comes from the time, not the key", latestNote({ b: { state: "done", at: 2, note: "new" }, a: { state: "done", at: 1, note: "old" } })?.note === "new"); check("a turn still open doesn't count", latestNote({ a: { state: "done", at: 1, note: "x" }, b: { state: "stopped", at: 2 } })?.note === "x"); check("no turns, no note", latestNote() === null); check("a re-planned turn keeps the first part's warning", latestNote({ a: { state: "done", at: 1, note: "0 HP" }, b: { state: "done", at: 2, parent: "a" } })?.note === "0 HP" && latestNote({ a: { state: "done", at: 1, note: "x" }, b: { state: "done", at: 2, parent: "a", note: "y" } })?.note === "x y"); check("but not an earlier turn's", latestNote({ z: { state: "done", at: 0, note: "old" }, a: { state: "done", at: 1 }, b: { state: "done", at: 2, parent: "a" } }) === null);
@@ -178,7 +178,8 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("long reason capped", cleanPlan({ reason: "x".repeat(900), steps: [{ do: "none" }] }).plan.reason.length === 300); check("text", text("a\nb", 10) === "a b" && text(5, 10) === "");
   check("every kind accepted by shape", STEP_KINDS.every(k => cleanPlan({ steps: [{ do: k }] }).ok));
   check("cleaned plan still checks", checkPlan(cleanPlan({ steps: [{ do: "strike", item: "jaws", target: "E1" }] }).plan, { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 5 }], targets: { E1: { name: "Hero", distance: 5 } } }).ok);
-  check("unbuilt kind refused by name", /can't do "interact"/.test(checkPlan(cleanPlan({ steps: [{ do: "interact" }] }).plan, { actions: 3, strikes: [], targets: {} }).reason));
+  check("interact kept clean", (() => { const c = cleanPlan({ steps: [{ do: "interact", what: " open the  door ", after: "E1" }] }); return c.ok && c.plan.steps[0].what === "open the door" && c.plan.steps[0].after === "E1"; })());
+  check("bad after label refused", !cleanPlan({ steps: [{ do: "delay", after: "Hero" }] }).ok);
   const meta = cleanMeta({ by: "chat", model: "x".repeat(99), generation: 3, usage: { in: 10, out: -1, cost: "a" } }); check("meta", meta.by === "chat" && meta.model.length === 60 && meta.generation === 3 && meta.usage.in === 10 && meta.usage.out === null && meta.usage.cost === null);
   check("meta defaults", JSON.stringify(cleanMeta()) === JSON.stringify({ by: "gm", model: null, generation: null, usage: null }) && cleanMeta({ by: "boss", generation: 1.5 }).by === "gm" && cleanMeta({ generation: 1.5 }).generation === null);
   check("seq follows the clock", nextSeq(0, 1000.7) === 1000); check("seq never repeats", nextSeq(2000, 1000) === 2001 && nextSeq(1000, 1000) === 1001);
@@ -200,7 +201,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   /* the campaign words live in the git-ignored .private-words at the repo root (master copy in a private project doc), never here */
   const wordsFile = path.resolve(HERE, "../../.private-words"), words = fs.existsSync(wordsFile) ? fs.readFileSync(wordsFile, "utf8").split("\n").map(l => l.split("#")[0].trim()).filter(Boolean) : null;
   check("prompt names no campaign", words ? !words.some(w => new RegExp(`(?<![A-Za-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9])`, "i").test(h.prompt)) : (console.log("  (no .private-words: campaign-word check skipped)"), true));
-  check("prompt explains asking again", h.promptVersion === 13 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 14 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -269,6 +270,35 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("flee in words", /^Flees 20 ft north, to square 0, 1 at the west edge of the map: you decide/.test(describeStep(p.steps[0])), describeStep(p.steps[0]));
   check("flee not on the ring refused", /outermost ring/.test(checkPlan({ steps: [{ do: "flee", to: [3, 5] }] }, fctx).reason ?? ""));
   check("flee too far refused like a Stride", /more than its Speed/.test(checkPlan({ steps: [{ do: "flee", to: [11, 11] }] }, fctx).reason ?? ""));
+
+  /* Interact and Delay (0.12.0) */
+  const ictx = { ...mctx, fresh: true, order: { E1: "later", M2: "earlier", M1: "self" }, grabbed: false, cantAttack: null };
+  p = checkPlan({ steps: [{ do: "interact", what: "draws its horn" }] }, ictx); check("interact accepted", p.ok && p.steps[0].do === "interact" && p.steps[0].what === "draws its horn" && !p.steps[0].flat, JSON.stringify(p));
+  check("interact in words", describeStep(p.steps[0]) === "Interacts: draws its horn. Its card goes to chat for you to apply.", describeStep(p.steps[0]));
+  check("interact needs what", /needs "what"/.test(checkPlan({ steps: [{ do: "interact" }] }, ictx).reason ?? ""));
+  check("interact restrained refused", /restrained, so it can't Interact/.test(checkPlan({ steps: [{ do: "interact", what: "x" }] }, { ...ictx, cantAttack: "it is restrained, so it can't attack." }).reason ?? ""));
+  p = checkPlan({ steps: [{ do: "interact", what: "grabs the rope" }] }, { ...ictx, grabbed: true }); check("interact grabbed gets a DC 5 flat check", p.ok && p.steps[0].flat === 5 && /DC 5 flat check first/.test(describeStep(p.steps[0])), JSON.stringify(p));
+  check("interact costs an action", checkPlan({ steps: [{ do: "interact", what: "a" }, { do: "interact", what: "b" }, { do: "interact", what: "c" }, { do: "interact", what: "d" }] }, ictx).reason === "Step 4: no actions left.");
+  check("interact keeps Take Cover", (() => { const r = checkPlan({ steps: [{ do: "interact", what: "a" }, { do: "take-cover" }] }, { ...ictx, tookCover: true }); return /already Taking Cover/.test(r.reason ?? ""); })());
+  check("interact reveals, delay keeps hidden", revealsBefore({ do: "interact" }) && !revealsBefore({ do: "delay" }) && !revealsAfter({ do: "interact" }));
+  check("interact done step", doneStep({ do: "interact", what: "x" }, { posted: { message: "m" } }).result === "card posted for the GM to apply" && doneStep({ do: "interact", what: "x" }, { flat: { ok: false } }).result === "flat check failed");
+  p = checkPlan({ steps: [{ do: "delay", after: "E1" }] }, ictx); check("delay accepted", p.ok && p.steps[0].do === "delay" && p.steps[0].after === "E1", JSON.stringify(p));
+  check("delay in words", /^Delays until after E1's turn: its turn ends now/.test(describeStep(p.steps[0])), describeStep(p.steps[0]));
+  check("delay costs nothing", spentBy(p.steps).actions === 0);
+  check("delay must be alone", /only step/.test(checkPlan({ steps: [{ do: "delay", after: "E1" }, st({ item: "bite", target: "E1" })] }, ictx).reason ?? "") && /only step/.test(checkPlan({ steps: [{ do: "stride", to: [5, 5] }, { do: "delay", after: "E1" }] }, ictx).reason ?? ""));
+  check("delay needs an untouched turn", /already acted this turn/.test(checkPlan({ steps: [{ do: "delay", after: "E1" }] }, { ...ictx, fresh: false }).reason ?? ""));
+  check("delay needs after", /needs "after"/.test(checkPlan({ steps: [{ do: "delay" }] }, ictx).reason ?? ""));
+  check("delay unknown creature", /doesn't know of "E7"/.test(checkPlan({ steps: [{ do: "delay", after: "E7" }] }, ictx).reason ?? ""));
+  check("delay after itself refused", /its own turn/.test(checkPlan({ steps: [{ do: "delay", after: "M1" }] }, ictx).reason ?? ""));
+  check("delay after one who acted refused", /already acted this round/.test(checkPlan({ steps: [{ do: "delay", after: "M2" }] }, ictx).reason ?? ""));
+  check("delay while paralyzed refused", /paralyzed/.test(checkPlan({ steps: [{ do: "delay", after: "E1" }] }, { ...ictx, cantAct: "it is paralyzed and can't act." }).reason ?? ""));
+  check("delay done step", doneStep({ do: "delay", after: "E1" }, { ended: true, moved: true }).result.startsWith("delayed") && /may not have moved/.test(doneStep({ do: "delay", after: "E1" }, { ended: true }).result));
+  check("interact stages", nextInteract({}) === "post" && nextInteract({ started: true }) === "ask" && nextInteract({ started: true, posted: { message: "m" } }) === "gm" && nextInteract({}, { flat: 5 }) === "flat" && nextInteract({ flatStarted: true }, { flat: 5 }) === "ask" && nextInteract({ flatStarted: true, flat: { ok: false } }, { flat: 5 }) === "next" && nextInteract({ flatStarted: true, flat: { ok: true } }, { flat: 5 }) === "post" && nextInteract({ flatStarted: true, flat: { ok: true }, posted: {} }, { flat: 5 }) === "gm");
+  check("a done delayed request isn't current", currentOf({ a: { state: "done", delayed: true, round: 1, combatantId: "c" } }, 1, "c") === null);
+  check("interact history line", /its card posted for you to apply/.test(stepResult({ do: "interact", what: "x" }, { started: true, posted: { message: "m1" } }).text) && stepResult({ do: "interact", what: "x" }, { posted: { message: "m1" } }).cards.includes("m1") && /failed, the action is spent/.test(stepResult({ do: "interact", what: "x", flat: 5 }, { flatStarted: true, flat: { total: 1, dc: 5, ok: false } }).text));
+  check("delay history line", /back in the order right after E1/.test(stepResult({ do: "delay", after: "E1" }, { ended: true, moved: true }).text) && /may not have moved/.test(stepResult({ do: "delay", after: "E1" }, { ended: true }).text));
+  check("bad what refused", !cleanPlan({ steps: [{ do: "interact", what: { a: 1 } }] }).ok);
+  check("prompt teaches interact and delay", /"do": "interact", "what"/.test(hello(1).prompt) && /"do": "delay", "after"/.test(hello(1).prompt) && /DC 5 flat check/.test(hello(1).prompt));
   check("flee must be last", /last step/.test(checkPlan({ steps: [{ do: "flee", to: [0, 1] }, st({ item: "jaws", target: "E1" })] }, fctx).reason ?? ""));
   check("stride then flee", checkPlan({ steps: [{ do: "stride", to: [0, 5] }, { do: "flee", to: [0, 1] }] }, { ...fctx, me: { square: [4, 5], size: 1 } }).ok);
   check("flee needs the map's bounds", /where this map ends/.test(checkPlan({ steps: [{ do: "flee", to: [0, 1] }] }, mctx).reason ?? ""));
@@ -828,6 +858,10 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   const order = [{ id: "cHero", name: "Valeros", npc: false }, { id: "cWolf", name: "Wolf", npc: true }, { id: "cGob", name: "Goblin", npc: true }];
   const rds = historyOf(t, { round: 2, turn: 1, current: "cWolf", order }, names, look);
   check("history: rounds and GM-played monsters", rds.length === 1 && rds[0].turns.map(x => x.name).join() === "Wolf,Goblin" && rds[0].turns[0].angel && !rds[0].turns[1].angel);
+  { const td = { labels, requests: { d: { round: 1, combatantId: "cWolf", tokenId: "tWolf", at: 1, since: 5, state: "done", delayed: true, turn: 0, pos: 1, steps: [{ do: "delay", after: "E1" }], log: { 0: { ended: true, moved: true } }, plan: { reason: "wait", steps: [{ do: "delay" }] } },
+      e: { round: 1, combatantId: "cWolf", tokenId: "tWolf", at: 2, since: 9, state: "done", afterDelay: true, turn: 1, pos: 1, steps: [strike], log: { 0: { started: true, attack: { message: "a2", degree: 2 } } }, plan: { reason: "now", steps: [{ do: "strike" }] } } } };
+    const h = historyOf(td, { round: 1, turn: 2, current: "cGob", order: [{ id: "cHero", name: "Valeros", npc: false }, { id: "cWolf", name: "Wolf", npc: true }, { id: "cGob", name: "Goblin", npc: true }] }, names, look);
+    check("history: a delayed turn and the turn it came back for are two turns, in order", h[0]?.turns.map(x => x.name).join("|") === "Wolf|Wolf (back after delaying)", JSON.stringify(h[0]?.turns.map(x => x.name))); }
   check("history: a monster the GM played this round shows once passed", historyOf(t, { round: 2, turn: 2, current: "cGob", order }, names, look)[1]?.turns.map(x => x.name).join() === "Wolf");
   check("history: current round only up to the turn", (rds[1]?.turns ?? []).length === 0);
   const wolf = rds[0].turns[0];

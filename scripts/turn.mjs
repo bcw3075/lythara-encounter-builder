@@ -1,9 +1,16 @@
 /* A monster's turn as plain data: what a plan means, whether it's legal, and where a step stands. Pure: no Foundry globals.
-   The glue gathers live values first. Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak and Seek so far; the other step kinds come as step 2 goes on. */
+   The glue gathers live values first. Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek, fleeing, Interact and Delay; other speeds come as step 2 goes on. */
 import { distanceBetween, headingOf } from "./move.mjs";
 import { placeable } from "./area.mjs";
 /** What each step kind costs. An ability's cost is its own (0 for a free action); 1 here is only the fallback. */
-export const COSTS = { strike: 1, stride: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, flee: 1, none: 0 };
+export const COSTS = { strike: 1, stride: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, flee: 1, interact: 1, delay: 0, none: 0 };
+/* Interact and Delay (0.12.0). Interact (https://2e.aonprd.com/Actions.aspx?ID=2296): 1 action, manipulate; the module can't know what a monster does
+   with its hands, so it posts a card saying what, and the GM applies it, as for any ability the module can't run. Restrained bars manipulate actions;
+   Grabbed asks a DC 5 flat check for them, lost on a failure. Delay (ID 2294): a free action when its turn begins, so it must be the plan's only step and
+   nothing may have been done this turn; the monster leaves the order and comes back after the named creature's turn, which must still be to come this
+   round (waiting for one that has acted would lose the turn's actions, and the rules then put it back where it was). Start- and end-of-turn effects
+   happen at once: the module ends the turn as usual and moves the monster's initiative to just after that creature's. */
+export const INTERACT_MAX = 120, GRABBED_FLAT = 5;
 /** A basic save's damage by the target's degree of success, 0 critical failure to 3 critical success: double, full, half, none. Rules: Basic Saving Throws
     (https://2e.aonprd.com/Rules.aspx?ID=2297). */
 export const SAVE_MULT = [2, 1, 0.5, 0];
@@ -39,7 +46,7 @@ export const SEEK = { burst: 15, cone: 30, range: 30 };
 export const sneakSpeed = speed => Math.floor(Math.floor((Number(speed) || 0) / 2) / STEP_FT) * STEP_FT;
 /** Actions that keep a hidden or undetected creature so (Rules: Hide, Sneak: anything other than Hide, Sneak or Step makes it observed). An attack keeps
     its off-guard for that attack and reveals it after; anything else reveals it just before (Rhea chose this, 2026-11-07). "none" does nothing at all. */
-const KEEPS_HIDDEN = ["hide", "sneak", "step", "none"];
+const KEEPS_HIDDEN = ["hide", "sneak", "step", "none", "delay"];
 /** Whether a step is an attack: a Strike, or an ability or spell with the attack trait. */
 export const isAttack = s => s?.do === "strike" || ((s?.do === "ability" || s?.do === "spell") && !!s.attack);
 /** Whether the monster comes out of hiding just before this step (true) or just after it (an attack), or not at all. */
@@ -71,7 +78,10 @@ export const listWords = (xs = []) => xs.length < 2 ? xs.join("") : `${xs.slice(
     success does) }]), allies ({ label: { name, square, size, elev, depth } }: its allies and itself, which a spell may target), saveRows (Toolbelt's Target
     Helper is on, so a save can be rolled from its rows) and reach (its longest melee reach, for touch spells).
     Hide, Sneak, Seek (2026-11-07): lightAt(square) ("bright" | "dim" | "dark" at a square), concealed (it has the concealed condition); Hide uses
-    coverFrom too. A Sneak goes like a Stride at half Speed; a Seek must be the plan's last step (it is asked again after, with what it found). */
+    coverFrom too. A Sneak goes like a Stride at half Speed; a Seek must be the plan's last step (it is asked again after, with what it found).
+    Interact and Delay (0.12.0): grabbed (it has the grabbed condition: a manipulate action needs a DC 5 flat check), fresh (nothing done this turn yet,
+    so a Delay is still possible), order ({ label: "later" | "earlier" | "self" }: for every creature it could name, whether its turn is still to come
+    this round). */
 export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
   let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, herePos = ctx.me?.pos ?? here, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, fled = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {}, shots = {};
@@ -120,6 +130,23 @@ export function checkPlan(plan, ctx) {
     left -= COSTS[step.do];
     if (step.do === "none") { steps.push({ do: "none" }); last = { do: "none" }; continue; }
     if (ctx.cantAct) return { ok: false, reason: `${at}: ${ctx.cantAct}` };
+    if (step.do === "delay") {
+      if (n > 0 || plan.steps.length > 1) return { ok: false, reason: `${at}: a delay has to be the plan's only step: it is a free action taken as the turn begins, and the rest of the turn doesn't happen yet.` };
+      if (!ctx.fresh) return { ok: false, reason: `${at}: it has already acted this turn, so it can't Delay now (Delay is taken as the turn begins).` };
+      if (typeof step.after !== "string") return { ok: false, reason: `${at}: a delay needs "after": the label of the creature whose turn it waits for (a creature in "perceived" or "allies" that acts later this round).` };
+      const o = ctx.order ?? {};
+      if (!(step.after in o)) return { ok: false, reason: `${at}: it doesn't know of "${step.after}" as a creature in this fight.` };
+      if (o[step.after] === "self") return { ok: false, reason: `${at}: it can't delay until after its own turn.` };
+      if (o[step.after] !== "later") return { ok: false, reason: `${at}: ${step.after} has already acted this round. Delaying until after a turn that has passed would lose this turn's actions (the rules put it back at its own place), so name a creature whose turn is still to come this round, or act now.` };
+      steps.push({ do: "delay", after: step.after }); last = { do: "delay" }; continue;
+    }
+    if (step.do === "interact") {
+      /* Rules: Interact (Player Core, https://2e.aonprd.com/Actions.aspx?ID=2296): 1 action, manipulate. Restrained bars it; Grabbed asks a DC 5 flat check. */
+      if (ctx.cantAttack) return { ok: false, reason: `${at}: it is restrained, so it can't Interact (a manipulate action).` };
+      const what = typeof step.what === "string" ? step.what.trim() : "";
+      if (!what) return { ok: false, reason: `${at}: an interact needs "what": a few words saying what it does with its hands (draw a weapon, open a door, pick something up), for the GM to apply.` };
+      steps.push({ do: "interact", what: what.slice(0, INTERACT_MAX), ...(ctx.grabbed ? { flat: GRABBED_FLAT } : {}) }); last = { do: "interact" }; continue;
+    }
     if (step.do in POSTURES) {
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
       if (step.do === "stand" && !prone) return { ok: false, reason: `${at}: it isn't prone, so it has nothing to Stand up from.` };
@@ -415,6 +442,8 @@ export function doneStep(step, rec = {}) {
   if (isMove(step)) { const got = rec.moved?.to; return { do: step.do, to: step.to, result: !got ? "unknown" : same(got, step.to) ? (step.do === "flee" ? "reached the map's edge" : "arrived") : `stopped at [${got[0]}, ${got[1]}]` }; }
   if (step.do in POSTURES) return { do: step.do, result: rec.changed || rec.stood ? (step.do === "stand" ? "stood" : "dropped") : "unknown" };
   if (step.do === "take-cover") return { do: "take-cover", result: rec.covered ? "took cover" : "unknown" };
+  if (step.do === "interact") return { do: "interact", what: step.what, result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.posted ? "card posted for the GM to apply" : "unknown" };
+  if (step.do === "delay") return { do: "delay", after: step.after, result: rec.moved ? "delayed: its turn comes back after that creature's" : rec.ended ? "turn ended; its place in the order may not have moved" : "unknown" };
   if (step.do === "ability") return { do: "ability", item: step.item, ...(step.target ? { target: step.target } : {}), result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.check ? CHECK_OUTCOMES[rec.check.degree] ?? "unknown" : rec.posted ? (step.mode === "hold" ? "kept hold" : "card posted for the GM to apply") : "unknown" };
   if (step.do === "spell") return { do: "spell", item: step.item, rank: step.rank, ...(step.target ? { target: step.target } : {}), result: spellResult(step, rec) };
   if (step.do !== "strike") return { do: step.do };
@@ -506,7 +535,16 @@ export function describeStep(s) {
     return `${head}${s.targetName ? `${s.area ? " aimed at" : " at"} ${s.targetName}` : ""}${flat}: its card goes to chat for you to apply${s.area ? ` (place its ${s.area.size}-foot ${s.area.type})` : ""}${s.attack ? `, as attack ${(s.variant ?? 0) + 1}` : ""}.`;
   }
   if (s.do === "take-cover") return s.why === "prone" ? "Takes Cover while prone." : s.why === "near" ? "Takes Cover by the wall or trunk next to it." : `Takes Cover behind its cover from ${s.from}.`;
+  if (s.do === "interact") return `Interacts: ${s.what}${s.flat ? ` (a DC ${s.flat} flat check first, as it is grabbed)` : ""}. Its card goes to chat for you to apply.`;
+  if (s.do === "delay") return `Delays until after ${s.after}'s turn: its turn ends now, and it comes back into the order right after ${s.after} (free action).`;
   return `${s.itemName} at ${s.targetName}${s.variant ? `, attack ${s.variant + 1}` : ""}${s.flat ? `, after a DC ${s.flat} flat check` : ""}.`;
+}
+/** What to do next with an Interact step (0.12.0): the grabbed flat check first when the step has one, then its card; "gm" once the card is posted,
+    "ask" when a stage began without a record of its result (a reload), "next" after a failed flat check (the action is spent on nothing). */
+export function nextInteract(rec = {}, { flat = 0 } = {}) {
+  if (flat) { if (!rec.flatStarted) return "flat"; if (!rec.flat) return "ask"; if (!rec.flat.ok) return "next"; }
+  if (rec.posted) return "gm";
+  return rec.started ? "ask" : "post";
 }
 /** What to do next with a Strike step, from what its record says already happened. Nothing is ever repeated: when the record can't tell
     whether something finished, the answer is "ask" and Rhea looks. */

@@ -38,6 +38,9 @@ export function cleanPlan(raw) {
     /* an area spell's aim: a burst's grid corner ("at"), a cone's or line's square ("toward"); "deliberate" when it means to catch its allies */
     for (const k of ["at", "toward"]) if (s[k] != null) { if (!Array.isArray(s[k]) || s[k].length !== 2 || !s[k].every(v => Number.isInteger(v) && v >= 0 && v < 1000)) return bad(`${at}: "${k}" is [x, y].`); out[k] = [...s[k]]; }
     if (s.deliberate != null) { if (typeof s.deliberate !== "boolean") return bad(`${at}: "deliberate" is true or false.`); if (s.deliberate) out.deliberate = true; }
+    /* an Interact's words for the GM's card, and the creature a Delay waits for (0.12.0) */
+    if (s.what != null) { if (typeof s.what !== "string") return bad(`${at}: "what" is a few words of text.`); const w = text(s.what, 120); if (w) out.what = w; }
+    if (s.after != null) { if (typeof s.after !== "string" || !LABEL.test(s.after)) return bad(`${at}: "after" isn't a label like E1.`); out.after = s.after; }
     /* its own short reason, for the GM's history window (Rhea, 2026-11-08); never read by the check */
     if (s.why != null) { const w = text(String(s.why), 160); if (w) out.why = w; }
     steps.push(out);

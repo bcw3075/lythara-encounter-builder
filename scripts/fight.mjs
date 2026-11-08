@@ -1,7 +1,7 @@
 /* A fight's turns. One named account does the work (the runner: the Claude Bridge unless the setting says otherwise), on its own page with the
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. For now it runs Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek and fleeing off the map; see claude/encounter-builder-plan.md for the rest of step 2. */
-import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES, SIDES, WORD, absorbOwn, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds } from "./turn.mjs";
+import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES, SIDES, WORD, absorbOwn, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract } from "./turn.mjs";
 import { cutShort, diagonalsIn, featureNear, findRoute, findStep, footprintAt, routeWords } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap, partySize, suggestedLevel } from "./builder.mjs";
@@ -280,13 +280,16 @@ async function onTurnChange(combat) {
   if (!isRunner() || !combat?.started) return;
   const combatant = combat.combatant, tok = tokenOf(combat, combatant); if (!tok?.getFlag(ID, "run") || !hostile(tok)) return;
   const key = `${combat.id}.${combat.round}.${combatant.id}`; if (starting.has(key)) return;
-  if (Object.values(turns(combat).requests).some(r => r.combatantId === combatant.id && r.round === combat.round)) return;
+  /* a Delay ends the request and the monster comes back later this round for a whole new turn (0.12.0): a delayed request never blocks it */
+  const mine = Object.values(turns(combat).requests).filter(r => r.combatantId === combatant.id && r.round === combat.round);
+  if (mine.some(r => !r.delayed)) return;
+  const afterDelay = mine.length > 0;
   starting.add(key);
   try {
     await new Promise(r => setTimeout(r, SETTLE_MS));   /* start-of-turn effects; how long is enough is still to be measured */
     if (combat.combatant?.id !== combatant.id) return;
     const opened = await ensureScene(combat);
-    const id = foundry.utils.randomID(8), base = { state: "requested", combatantId: combatant.id, tokenId: tok.id, round: combat.round, turn: combat.turn, at: Date.now(), since: clock(), log: {} };
+    const id = foundry.utils.randomID(8), base = { state: "requested", combatantId: combatant.id, tokenId: tok.id, round: combat.round, turn: combat.turn, at: Date.now(), since: clock(), log: {}, ...(afterDelay ? { afterDelay: true } : {}) };
     if (!opened || !tok.object) return await save(combat, id, { ...base, labels: {}, note: cantOpen() });   /* no map, no packet: words instead of silent wrong answers */
     let built; try { built = await buildPacket(combat, tok); } catch (e) { console.error(`${ID} | packet`, e); return await save(combat, id, { ...base, labels: {}, note: `I couldn't work out what ${tok.name} perceives (${e.message}). Play this turn yourself.` }); }
     await saveTurns(combat, { [`requests.${id}`]: { ...base, labels: built.labels, packet: built.packet, seen: situationNow(combat, tok, built.labels, built.others), note: null, tries: 0, pos: 0 }, ...eventChange("turn", id, 0), ...packetExtras(combat, tok, built) });
@@ -349,6 +352,8 @@ export async function onRunnerReady() {
     if (r?.state === "running" && !running.has(r.id)) await save(combat, r.id, { state: "stopped", go: false, note: `${game.user.name}'s page reloaded during this turn. Check the chat and HP, then Do it carries on from where it stopped.` });
     /* a reload while the map was extending: whether or not it grew, asking again from a fresh packet is right (the monster can flee to the same edge again) */
     if (r?.state === "extending" && r.extending && !running.has(r.id)) { const tok = combat.scene?.tokens.get(r.tokenId); if (tok && await ensureScene(combat)) await afterExtend(combat, r.id, r.extending, tok, { shifted: [0, 0] }).catch(e => console.error(`${ID} | extend`, e)); }
+    /* a Delay cut off by the reload after its turn ended and before its place moved (0.12.0): the request isn't current any more, so it is closed here */
+    for (const [id, x] of Object.entries(turns(combat).requests ?? {})) { const s = x.steps?.[x.pos ?? 0]; if (x.state === "running" && s?.do === "delay" && x.log?.[x.pos ?? 0]?.ended && !x.log[x.pos ?? 0].moved && !running.has(id)) await save(combat, id, { state: "done", delayed: true, note: joinNote(combat, id, `${game.user.name}'s page reloaded as it delayed: its turn ended, but its place in the order may not have moved. Check the tracker and drag it to just after ${s.after} if it isn't.`) }); }
     await onTurnChange(combat); act(combat);
     if (r?.state === "saves") doIt(combat, r.id).catch(e => console.error(`${ID} | turn`, e));   /* a save rolled while this page was away */
   }
@@ -370,6 +375,8 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
   return { actions: Math.max(0, actionsOf(actor, combat) - (req.spent ?? 0) - used.actions), attacksBefore: (req.attacks ?? 0) + used.attacks, strikes, targets,
     me: { square: squareOf(tok, scene), ...placeOf(tok, scene), size: sizeOf(tok), ...heightOf(tok), cat: actor.size ?? null }, speed, cantAct: cantAct(actor), cantMove: cantMove(actor), cantAttack: cantAttack(actor), prone: !!actor.hasCondition?.("prone"), route,
     tookCover: takingCover(tok), coverFrom, nearCover: nearCoverFor(scene),
+    /* Interact and Delay (0.12.0): grabbed asks a DC 5 flat check of a manipulate action; a Delay needs an untouched turn and a creature still to act this round */
+    grabbed: !!actor.hasCondition?.("grabbed"), fresh: !(req.spent ?? 0) && !used.actions && !(req.done?.length) && !before, order: turnOrder(combat, tok, req),
     /* flee: the map's edges as the scene stands now (an extended map has new bounds), never a stored size */
     edgeAt: (sq, n) => edgeSides(sq, n, ...mapSquares(scene)),
     /* Hide: the light at a square (where it stands, or will after a move) and its own concealment */
@@ -383,6 +390,16 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
 function alliesByLabel(combat, tok) {
   const labels = turns(combat).labels ?? {}, scene = combat.scene, out = {};
   for (const t of [tok, ...alliesOf(scene, tok).filter(a => !a.hidden)]) { const l = labels[t.id]; if (l) out[l] = { name: l, square: squareOf(t, scene), ...placeOf(t, scene), size: sizeOf(t), ...heightOf(t), flat: 0, ally: true }; }
+  return out;
+}
+/** For a Delay: for each creature the monster could name (what it perceived when asked, its allies and itself), whether its turn is still to come this
+    round ("later"), has passed ("earlier"), or is the monster's own ("self"). Order is the fight's current order; a creature not in the fight is left out. */
+function turnOrder(combat, tok, req) {
+  const out = {}, order = combat.turns ?? [], mine = order.findIndex(c => c.tokenId === tok.id);
+  if (mine < 0) return out;   /* not in the order: nothing can be said, so every label reads as unknown */
+  const allies = alliesOf(combat.scene, tok).filter(a => !a.hidden);   /* a GM-hidden ally stays out, as in the packet */
+  const named = { ...Object.fromEntries(Object.entries(turns(combat).labels ?? {}).filter(([id]) => id === tok.id || allies.some(a => a.id === id)).map(([id, l]) => [l, id])), ...(req.labels ?? {}) };
+  for (const [label, tokenId] of Object.entries(named)) { const i = order.findIndex(c => c.tokenId === tokenId); if (i < 0 || order[i].isDefeated || order[i].initiative == null) continue; out[label] = tokenId === tok.id ? "self" : i > mine ? "later" : "earlier"; }
   return out;
 }
 /** A label's token: the creatures it perceived when asked, then its allies and itself. */
@@ -510,7 +527,9 @@ function eventChange(kind, requestId, tries, extra = {}) {
 function endLeftOver(combat) {
   if (!combat.started || !combat.combatant) return;
   const [id, r] = Object.entries(turns(combat).requests ?? {}).filter(([, x]) => x.combatantId === combat.combatant.id && x.round === combat.round).sort((a, b) => (b[1].at ?? 0) - (a[1].at ?? 0))[0] ?? [];
-  if (r?.state === "done" && Number.isFinite(r.since) && clock() - r.since > END_MS + 3000) endAfter(combat, id);
+  /* never a delayed request (the monster is back for a new turn), and never one whose last step left a card for the GM to apply (Rhea: Auto ends a turn
+     after its last action, never after a card the GM must apply; found by the 0.12.0 review) */
+  if (r?.state === "done" && !r.delayed && !r.gmEnded && Number.isFinite(r.since) && clock() - r.since > END_MS + 3000) endAfter(combat, id);
 }
 /** The stall check, on the runner every 10 s (Rhea, 2026-11-08): a turn that has sat past its limit (brain.mjs's stallOf) is marked on its request,
     which turns the GM's card amber, and Angel gets a "stall" event to look into it. Card only, no chat (her rule: no whispered cards). Anything the
@@ -810,6 +829,58 @@ async function takeCover(combat, tok) {
 }
 /** Take Cover. Never sent twice: one begun before a reload goes to the GM. Afterwards it checks the cover took (Visioner's setCover reports a failure
     only by returning false); with nobody on the map to take cover from there is nothing to check. */
+/* ---------- Interact and Delay (0.12.0) ---------- */
+/** Interact: the module can't know what a monster does with its hands, so it posts a card saying what (the thinker's words, labels only) and the GM
+    applies it, as for an ability the module can't run. Grabbed: a DC 5 flat check first; a failure spends the action on nothing (Rules: Grabbed). */
+async function runInteract(combat, id, i, step, tok) {
+  const record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {};
+  for (let guard = 0; guard < 4; guard++) {
+    const rec = get();
+    const now = nextInteract(rec, { flat: step.flat ?? 0 });
+    if (now === "next" || now === "gm" || now === "ask") return now;
+    if (!stepGate(now, id)) return "stopped";
+    pending = { tokenId: tok.id, waiters: new Map() };
+    try {
+      if (now === "flat") {
+        await record({ flatStarted: true });
+        const roll = await watched(async () => { const r = await new Roll("1d20").evaluate(); await r.toMessage({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), flavor: `Flat check, DC ${step.flat} (grabbed, a manipulate action)` }); return r; });
+        await record({ flat: { dc: step.flat, total: roll.total, ok: roll.total >= step.flat } });
+        if (roll.total < step.flat) await addNote(combat, id, `Its Interact failed its DC ${step.flat} flat check (${roll.total}): it is grabbed. The action is spent.`);
+      } else if (now === "post") {
+        stopAiming(); await record({ started: true });
+        const what = foundry.utils.escapeHTML(step.what ?? "");
+        const message = await watched(() => ChatMessage.implementation.create({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), content: `<p><strong>Interact</strong> <span class="action-glyph">1</span>: ${what}</p>` }));
+        /* the record and the GM's instruction in one save, so a reload can't keep one without the other */
+        await save(combat, id, { log: { [i]: { posted: { message: message?.id ?? null } } }, note: joinNote(combat, id, `Apply what it does from its Interact card.`) });
+      }
+    } finally { pending = null; }
+  }
+  return "ask";
+}
+/** Delay: the turn ends now, as usual (start- and end-of-turn effects happen at once, as the rules say), then the monster's initiative moves to the named
+    creature's with a tie-break that puts it right after, so its next turn comes when that creature's ends. The runner keeps the current turn through
+    the initiative change (`keepTurn`). If its place can't be moved the turn has still ended, and the note says so. */
+async function runDelay(combat, id, i, step, tok) {
+  const record = change => save(combat, id, { log: { [i]: change } }), rec = request(combat, id).log?.[i] ?? {};
+  if (rec.moved) return "delayed";
+  if (rec.ended) return "ask";   /* the turn ended but the move wasn't recorded: a reload between the two; the GM checks the tracker */
+  const me = combat.combatants.find(c => c.tokenId === tok.id), afterId = tokenIdOf(combat, request(combat, id), step.after), other = afterId ? combat.combatants.find(c => c.tokenId === afterId) : null;
+  /* nothing has happened yet in these refusals, so the turn stops for the GM with the reason (not "ask", whose words say the turn should have ended) */
+  if (!me || !other || other.initiative == null || other.isDefeated) { await addNote(combat, id, `${step.after} isn't in the fight any more${other?.isDefeated ? " (defeated)" : ""}, so it can't delay until after its turn. Play the turn yourself.`); return "stopped"; }
+  const order = combat.turns, mineAt = order.findIndex(c => c.id === me.id), otherAt = order.findIndex(c => c.id === other.id);
+  if (!(otherAt > mineAt)) { await addNote(combat, id, `${step.after}'s turn this round has passed, so delaying until after it would only lose this turn. Play the turn yourself.`); return "stopped"; }
+  if (!stepGate("delay", id)) return "stopped";
+  if (combat.combatant?.id !== me.id) { await addNote(combat, id, "It isn't this monster's turn any more. Play the turn yourself."); return "stopped"; }
+  /* Rules: the effects of the start of its turn happened when the turn began; PF2e will run them again when it comes back this round */
+  await addNote(combat, id, "Its start-of-turn effects (persistent damage and the like) already happened this round: if they are applied again when it comes back, undo them.");
+  /* right after `other` among ties: a priority just above its own (lower goes first) */
+  const priority = (other.overridePriority?.(other.initiative) ?? other.actor?.initiative?.tiebreakPriority ?? 3) + 0.5;
+  await record({ ended: true, after: { id: other.id, initiative: other.initiative, priority } });
+  await combat.nextTurn();
+  await combat.setMultipleInitiatives([{ id: me.id, value: other.initiative, statistic: me.actor?.system?.initiative?.statistic ?? "perception", overridePriority: priority }]);
+  await record({ moved: true });
+  return "delayed";
+}
 async function runTakeCover(combat, id, i, tok) {
   const record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {};
   const now = nextCover(get(), takingCover(tok));
@@ -1065,7 +1136,7 @@ async function comeOut(combat, id, tok, why, cardId = null) {
   const vis = visionerApi(); for (const t of left) await vis.setVisibility(t.id, tok.id, "observed");
   await addNote(combat, id, `${tok.name} was hidden from ${listWords(who.map(t => t.name))}, and ${why} makes it observed by them (hide it again in Visioner's manager to allow a quiet action).`);
 }
-const actWords = step => step.do === "stride" ? "its Stride" : step.do === "crawl" ? "its Crawl" : step.do === "stand" ? "standing up" : step.do === "drop-prone" ? "dropping prone" : step.do === "take-cover" ? "Taking Cover" : step.do === "seek" ? "its Seek" : step.do === "spell" ? `casting ${step.itemName}` : step.do === "ability" ? `using ${step.itemName}` : step.do === "strike" ? `its ${step.itemName}` : "acting";
+const actWords = step => step.do === "stride" ? "its Stride" : step.do === "crawl" ? "its Crawl" : step.do === "stand" ? "standing up" : step.do === "drop-prone" ? "dropping prone" : step.do === "take-cover" ? "Taking Cover" : step.do === "interact" ? "its Interact" : step.do === "seek" ? "its Seek" : step.do === "spell" ? `casting ${step.itemName}` : step.do === "ability" ? `using ${step.itemName}` : step.do === "strike" ? `its ${step.itemName}` : "acting";
 function savedDegree(message, tokenId) {
   for (const v of Object.values(message?.flags?.[TOOLBELT]?.targetHelper?.saveVariants ?? {})) { const s = v?.saves?.[tokenId]; if (s?.success in DEGREE) return DEGREE[s.success]; }
   return null;
@@ -1442,6 +1513,8 @@ async function runTurn(combat, requestId) {
     else if (isMove(step)) work = () => runStride(combat, requestId, i, step, tok);
     else if (step.do in POSTURES) work = () => runPosture(combat, requestId, i, step.do, tok);
     else if (step.do === "take-cover") work = () => runTakeCover(combat, requestId, i, tok);
+    else if (step.do === "interact") work = () => runInteract(combat, requestId, i, step, tok);
+    else if (step.do === "delay") work = () => runDelay(combat, requestId, i, step, tok);
     else if (step.do === "ability") {
       const target = step.target ? combat.scene.tokens.get(r.labels[step.target]) : null; if (step.target && !target) return save(combat, requestId, { state: "stopped", note: `${step.targetName} is gone.` });
       work = () => runAbility(combat, requestId, i, step, tok, target);
@@ -1452,6 +1525,8 @@ async function runTurn(combat, requestId) {
     if (work) {
       let result; try { result = await work(); } catch (e) { console.error(e); result = "ask"; await save(combat, requestId, { note: e.message }); }
       if (result === "stopped") return save(combat, requestId, { state: "stopped" });
+      /* a Delay ended the turn itself (the rest of the turn doesn't happen): the request is done, and its new turn comes after the named creature's */
+      if (result === "delayed") return save(combat, requestId, { pos: i + 1, coverSettled: i + 1, state: "done", delayed: true });
       /* a shot it couldn't make (no ammunition left, or Ranged Combat refused): nothing was rolled, so ask again with the action unspent */
       if (result === "noShot" || result === "noShotSpent") {
         const b = turns(combat).noShot?.[tok.id], items = b?.round === combat.round ? [...new Set([...(b.items ?? []), step.item])] : [step.item];
@@ -1461,7 +1536,7 @@ async function runTurn(combat, requestId) {
       }
       /* a save the player rolls: the turn waits, with no timer, until their row on the spell's card has it (or the GM presses Roll it for them) */
       if (result === "wait") return save(combat, requestId, { state: request(combat, requestId).state === "manual" ? "manual" : "saves" });
-      if (result === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} may not have finished. ${isMove(step) ? "Put the monster where it should be" : step.do in POSTURES ? "Check whether it is prone" : step.do === "take-cover" ? "Check whether it is Taking Cover" : step.do === "ability" ? "Check the chat, HP and conditions" : step.do === "spell" ? "Check the chat, the spell's slot or use, HP and conditions" : step.do in STEALTH_WORD ? `Check its ${STEALTH_WORD[step.do]} card and apply Visioner's results if they aren't${step.do === "sneak" ? ", and where it stands" : ""}` : step.do === "strike" && tok.actor?.type === "npc" && rangedOn() && strikesWithIds(tok.actor).find(x => x.id === step.item)?.strike?.item?.isRanged ? "Check the chat, HP and its ammunition (the module takes a monster's ammunition after the roll)" : "Check the chat and HP"}, then play the rest yourself.`.trim() });
+      if (result === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} may not have finished. ${isMove(step) ? "Put the monster where it should be" : step.do in POSTURES ? "Check whether it is prone" : step.do === "take-cover" ? "Check whether it is Taking Cover" : step.do === "interact" ? "Check the chat for its Interact card" : step.do === "delay" ? "Check the tracker: its turn should have ended and its place moved to just after the creature it waits for" : step.do === "ability" ? "Check the chat, HP and conditions" : step.do === "spell" ? "Check the chat, the spell's slot or use, HP and conditions" : step.do in STEALTH_WORD ? `Check its ${STEALTH_WORD[step.do]} card and apply Visioner's results if they aren't${step.do === "sneak" ? ", and where it stands" : ""}` : step.do === "strike" && tok.actor?.type === "npc" && rangedOn() && strikesWithIds(tok.actor).find(x => x.id === step.item)?.strike?.item?.isRanged ? "Check the chat, HP and its ammunition (the module takes a monster's ammunition after the roll)" : "Check the chat and HP"}, then play the rest yourself.`.trim() });
       /* an attack from hiding: the target was off-guard to it, and now it is observed (Visioner's Attack Consequences on its card, or the module) */
       if (revealsAfter(step)) await comeOut(combat, requestId, tok, actWords(step), request(combat, requestId).log?.[i]?.attack?.message ?? null).catch(e => console.warn(`${ID} | out of hiding`, e));
       await settleCover(combat, requestId, i + 1, tok, i);   /* its own attack or move ends a Take Cover */
@@ -1475,7 +1550,7 @@ async function runTurn(combat, requestId) {
       /* an ability whose effects are the GM's to apply: the turn waits for Next step, Auto or not (the look before the next action then sees what changed) */
       if (result === "gm" && request(combat, requestId).state !== "manual") { const end = i + 1 >= r.steps.length;
         if (!end) await addNote(combat, requestId, "Then press Next step.");
-        return save(combat, requestId, { pos: i + 1, coverSettled: i + 1, state: end ? "done" : "ready" }); }
+        return save(combat, requestId, { pos: i + 1, coverSettled: i + 1, state: end ? "done" : "ready", ...(end ? { gmEnded: true } : {}) }); }
     }
     if (request(combat, requestId).state === "manual") return;
     if (i + 1 >= r.steps.length) { await save(combat, requestId, { pos: i + 1, coverSettled: i + 1, state: "done" }); return endAfter(combat, requestId); }
