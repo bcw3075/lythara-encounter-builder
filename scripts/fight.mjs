@@ -1353,8 +1353,8 @@ async function replan(combat, r, i, changes, tok, { counted = true } = {}) {
   /* with no actions left the turn ends, unless an Improved Grab or the like can still follow the Strike that just hit (a free action) */
   const freeNext = () => { const l = lastAction({ done: done.at(-1) ?? null, strikes: strikesWithIds(tok.actor).map(({ id, strike: a }) => ({ id, effects: [...(a.item?.system?.attackEffects?.value ?? [])] })) });
     return l?.do === "strike" && l.hit === true && abilityList(tok.actor).some(a => a.followUp && a.kind === "free" && l.effects.includes(a.effect)); };
-  if (actionsOf(tok.actor, combat) - spent <= 0 && !freeNext()) return saveTurns(combat, { [`${at}.state`]: "done", [`${at}.pos`]: i, [`${at}.why`]: changes, [`${at}.note`]: `${why} No actions left, so the turn ends here.` });
-  if (replans > MAX_REPLANS) return saveTurns(combat, { [`${at}.state`]: "done", [`${at}.pos`]: i, [`${at}.why`]: changes, [`${at}.note`]: `${why} That would be re-plan ${replans} this turn, so play the rest yourself.` });
+  if (actionsOf(tok.actor, combat) - spent <= 0 && !freeNext()) return saveTurns(combat, { [`${at}.state`]: "done", [`${at}.pos`]: i, [`${at}.why`]: changes, [`${at}.note`]: [r.note, `${why} No actions left, so the turn ends here.`].filter(Boolean).join(" ") });   /* keep a note from its steps (out of hiding, 0 HP) */
+  if (replans > MAX_REPLANS) return saveTurns(combat, { [`${at}.state`]: "done", [`${at}.pos`]: i, [`${at}.why`]: changes, [`${at}.note`]: [r.note, `${why} That would be re-plan ${replans} this turn, so play the rest yourself.`].filter(Boolean).join(" ") });
   let built; try { built = await buildPacket(combat, tok, { spent, attacks, done, note: `Asked again mid-turn: ${why}` }); }
   catch (e) { console.error(`${ID} | packet`, e); return save(combat, r.id, { state: "stopped", note: `Something changed (${why}) and I couldn't work out what ${tok.name} perceives now (${e.message}). Play the rest yourself.` }); }
   const id = foundry.utils.randomID(8);
