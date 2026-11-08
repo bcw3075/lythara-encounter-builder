@@ -798,7 +798,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
     a: { round: 1, combatantId: "cWolf", tokenId: "tWolf", at: 1, since: 5, state: "done", replanned: true, pos: 1, by: { by: "chat", model: "sonnet" }, plan: { reason: "Bite E1 twice", steps: [{ do: "strike", why: "softest target" }, { do: "strike", why: "again" }] },
       steps: [strike, { ...strike, variant: 1 }], log: { 0: { started: true, attack: { message: "a2", degree: 1 } } }, presses: { 10: { do: "Do it", user: "Gamemaster", pos: 0 } },
       refused: { 1: { reason: "E1 is out of reach.", plan: { reason: "x", steps: [{ do: "strike", target: "E1" }] } } } },
-    b: { round: 1, combatantId: "cWolf", tokenId: "tWolf", at: 2, state: "ready", pos: 0, why: [{ who: "E1", what: "down" }], plan: { reason: "Turn on M2's foe", steps: [{ do: "none" }] }, steps: [{ do: "none" }], log: {} } } };
+    b: { round: 1, combatantId: "cWolf", tokenId: "tWolf", at: 2, state: "ready", pos: 0, parent: "a", why: [{ who: "E1", what: "down" }], plan: { reason: "Turn on M2's foe", steps: [{ do: "none" }] }, steps: [{ do: "none" }], log: {} } } };
   const order = [{ id: "cHero", name: "Valeros", npc: false }, { id: "cWolf", name: "Wolf", npc: true }, { id: "cGob", name: "Goblin", npc: true }];
   const rds = historyOf(t, { round: 2, turn: 1, current: "cWolf", order }, names, look);
   check("history: rounds and GM-played monsters", rds.length === 1 && rds[0].turns.map(x => x.name).join() === "Wolf,Goblin" && rds[0].turns[0].angel && !rds[0].turns[1].angel);
@@ -813,6 +813,11 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("history HTML: folds, links, escapes", /<details[^>]*open/.test(html) && /data-message="a2"/.test(html) && /played by the GM/.test(html));
   check("history HTML escapes", !/<b>x<\/b>/.test(historyHTML(historyOf({ requests: { z: { round: 1, combatantId: "c", tokenId: "t", plan: { reason: "<b>x</b>", steps: [] }, steps: [] } } }, { round: 1, order: [] }, { t: "T" }), esc)));
   check("journal HTML: no links", !/data-message/.test(journalHTML(rds, esc, { title: "Fight" })) && /Round 1/.test(journalHTML(rds, esc, {})));
+  check("history: a step done with no record isn't 'not reached'", /did nothing/.test(stepResult({ do: "none" }, {}, look, undefined, true).text) && /done/.test(stepResult({ do: "stand" }, {}, look, undefined, true).text));
+  const waitAgain = historyOf({ requests: { w: { round: 1, combatantId: "c", tokenId: "t", state: "requested", tries: 1, plan: { reason: "bad plan", steps: [{ do: "none" }] }, refused: { 1: { reason: "no", plan: { reason: "bad plan", steps: [] } } } } } }, { round: 1, order: [] }, { t: "T" })[0].turns[0].parts[0];
+  check("history: a refused plan isn't shown as the plan while it waits", !waitAgain.reason && waitAgain.waiting && /Turned down/.test(waitAgain.lines[0].text));
+  const ended = historyOf({ requests: { e: { round: 1, combatantId: "c", tokenId: "t", state: "done", why: [{ who: "me", what: "actions", now: 0 }], steps: [], plan: { reason: "r", steps: [] } } } }, { round: 1, order: [] }, { t: "T" })[0].turns[0].parts[0];
+  check("history: a turn ended (not asked again) says so", !ended.asked && /The turn ended/.test(ended.lines.at(-1).text));
   check("history: empty fight", /Nothing yet/.test(historyHTML([], esc)));
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */

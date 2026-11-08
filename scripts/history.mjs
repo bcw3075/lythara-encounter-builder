@@ -24,7 +24,7 @@ const join = parts => parts.filter(Boolean).join("; ");
 
 /** What came of one step, in full detail: { text, cards } (cards: chat message ids to link). look.card(id) gives a card's { total, dc, label }, look.save(id,
     tokenId) a save on a spell's card { total, dc, degree }; either may be null when the card is gone, and the line still says what the record knows. */
-export function stepResult(step, rec = {}, look = {}, n = namer()) {
+export function stepResult(step, rec = {}, look = {}, n = namer(), done = false) {
   const card = id => (id && look.card?.(id)) || null, cards = [], tag = id => { if (id) cards.push(id); };
   const target = step.target ? n.nameOf(step.target) ?? step.targetName ?? step.target : null, tid = step.target ? n.tokenOf(step.target) : null;
   const flat = rec.flat ? `flat check ${rec.flat.total} vs DC ${rec.flat.dc}: ${rec.flat.ok ? "passed" : "failed, the action is spent"}` : rec.flatStarted ? "flat check rolled, result not recorded" : "";
@@ -58,32 +58,34 @@ export function stepResult(step, rec = {}, look = {}, n = namer()) {
     if (step.mode === "card" || rec.noRows) parts.push("the rest is yours from its card");
     text = join(parts);
   }
-  return { text: text || (Object.keys(rec).length ? "done" : "not reached"), cards: [...new Set(cards)] };
+  return { text: text || (step.do === "none" ? "did nothing" : Object.keys(rec).length || done ? "done" : "not reached"), cards: [...new Set(cards)] };
 }
 
 /** One request (a plan, or a re-plan of the same turn) as lines. */
 function partOf(id, r, look, n) {
-  const plan = r.plan && typeof r.plan === "object" ? r.plan : null, steps = r.steps ?? [], pos = r.pos ?? 0, lines = [];
+  /* a refused plan stays in r.plan until the next one lands: while the turn waits for that, it isn't the plan */
+  const asking = r.state === "requested" || r.state === "submitted" && !r.steps, plan = r.plan && typeof r.plan === "object" && !asking ? r.plan : null, steps = r.steps ?? [], pos = r.pos ?? 0, lines = [];
   const presses = Object.entries(r.presses ?? {}).map(([at, p]) => ({ at: Number(at), ...p })).sort((a, b) => a.at - b.at);
   const pressLine = p => ({ kind: "press", at: p.at, text: `${p.user ?? "A GM"} pressed ${p.do}${p.for ? ` for ${look.name?.(p.for) ?? "someone"}` : ""}.` });
   for (const [k, ref] of Object.entries(r.refused ?? {}).sort((a, b) => a[0] - b[0])) lines.push({ kind: "refused", text: `${Number(k) >= 2 ? "Turned down again" : "Turned down"}: ${n.named(ref.reason)}`, plan: ref.plan ? { reason: n.named(ref.plan.reason), steps: (ref.plan.steps ?? []).map(s => n.named(`${s.do}${s.item ? ` ${s.item}` : ""}${s.target ? ` at ${s.target}` : ""}${s.to ? ` to ${sq(s.to)}` : ""}`)) } : null });
   steps.forEach((s, i) => {
     for (const p of presses.filter(p => (p.pos ?? 0) === i)) lines.push(pressLine(p));
     const rec = r.log?.[i]; if (i >= pos && !(rec && Object.keys(rec).length)) return;
-    const res = stepResult(s, rec ?? {}, look, n);
+    const res = stepResult(s, rec ?? {}, look, n, i < pos);
     lines.push({ kind: "step", n: i + 1, text: n.named(describeStep(s)), why: plan?.steps?.[i]?.why ? n.named(plan.steps[i].why) : null, result: n.named(res.text), cards: res.cards });
   });
   for (const p of presses.filter(p => (p.pos ?? 0) >= steps.length)) lines.push(pressLine(p));
   if (r.stall) lines.push({ kind: "stall", text: `Stalled ${Math.round((r.stall.waited ?? 0) / 1000)} s (${r.stall.state}).` });
   if (r.note) lines.push({ kind: "note", text: n.named(r.note) });
+  if (r.why && !r.parent && !r.replanned) lines.push({ kind: "end", text: `The turn ended: ${n.named(describeChanges(r.why, n.nameOf))}` });
   const end = r.state === "manual" ? "You played the rest yourself." : r.gaveUp ? `Angel gave up: ${n.named(r.verdict ?? "")}` : r.replanned ? "Asked again (below)." : /^Couldn't do/.test(r.verdict ?? "") ? `${n.named(r.verdict)} You played the turn.` : null;
   if (end) lines.push({ kind: "end", text: end });
   return { id, at: r.at ?? 0, by: r.by ? `${ROUTE[r.by.by] ?? "a GM"}${r.by.model ? `, ${r.by.model}` : ""}` : null, reason: plan?.reason ? n.named(plan.reason) : null,
-    asked: r.why ? n.named(describeChanges(r.why, n.nameOf)) : null, plan: steps.map((s, i) => ({ text: n.named(describeStep(s)), why: plan?.steps?.[i]?.why ? n.named(plan.steps[i].why) : null })),
-    lines, state: r.state, waiting: r.state === "requested" && !r.plan };
+    asked: r.why && r.parent ? n.named(describeChanges(r.why, n.nameOf)) : null, plan: steps.map((s, i) => ({ text: n.named(describeStep(s)), why: plan?.steps?.[i]?.why ? n.named(plan.steps[i].why) : null })),
+    lines, state: r.state, waiting: asking && !r.gaveUp };
 }
 
-/** The whole fight, by round. t: the Combat's turns flag. fight: { round, turn (index), order: [{ id, name, npc, tokenId }] } in initiative order; names: tokenId → name.
+/** The whole fight, by round. t: the Combat's turns flag. fight: { round, turn (index), order: [{ id, name, npc }] } in initiative order (npc: a monster, not one on the party's side); names: tokenId → name.
     Monsters with no request in a round that has passed them were played by the GM (one line each), so the rounds read in order. */
 export function historyOf(t = {}, fight = {}, names = {}, look = {}) {
   const n = namer(t.labels ?? {}, names), reqs = Object.entries(t.requests ?? {}).filter(([, r]) => r && Number.isFinite(r.round));
