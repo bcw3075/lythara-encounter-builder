@@ -827,14 +827,32 @@ const HIDDEN = ["hidden", "undetected", "unnoticed"], STEALTH_WORD = { hide: "Hi
 const sleep = ms => new Promise(res => setTimeout(res, ms));
 const cardEl = id => ui.chat?.element?.querySelector?.(`[data-message-id="${id}"]`) ?? null;
 async function cardButton(id, action, ms = 3000) { for (let t = 0; t <= ms; t += 100) { const b = cardEl(id)?.querySelector?.(`[data-action="${action}"]`); if (b) return b; await sleep(100); } return null; }
-const press = b => b.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+/** Visioner draws its panel with the card and binds its click handler a moment later, with what the page's canvas shows then: a card drawn while this
+    page viewed another scene (after a reload, before the fight's map opened) has a panel that finds no token and changes nothing, and a press before the
+    handler is bound does nothing at all (both seen live, 2026-11-07). So the card is drawn again with the fight's map open, the handler waited for, and
+    the press counted only if Visioner took it (it marks the button "processing" at once); a press it didn't take changed nothing and is tried again. */
+const boundPanel = b => { const p = b?.closest?.(".pf2e-visioner-automation-panel"); return !!p && !!window.jQuery?._data?.(p, "events")?.click?.length; };
+async function freshButton(id, action) {
+  const m = game.messages.get(id); if (!m) return null;
+  await redrawn(id, () => ui.chat.updateMessage(m));
+  for (let t = 0; t <= 3000; t += 100) { const b = cardEl(id)?.querySelector?.(`[data-action="${action}"]`); if (b && boundPanel(b)) return b; await sleep(100); }
+  return cardEl(id)?.querySelector?.(`[data-action="${action}"]`) ?? null;
+}
+async function press(id, action) {
+  for (let k = 0; k < 10; k++) {
+    const b = k ? cardEl(id)?.querySelector?.(`[data-action="${action}"]`) : await freshButton(id, action); if (!b) return null;
+    b.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    if (b.classList.contains("processing")) return b;
+    await sleep(300);
+  }
+  throw new Error(`Visioner didn't take the press on its ${action} button.`);
+}
 /** Press Visioner's Apply Changes on a card and wait for its answer: "applied" (Visioner turned the pressed button into Revert), "none" (it found nothing
     to change), or null if the button isn't there. Visioner marks the button "processing" while it works (synchronously, so a press can't run twice) and
     takes that off when done, on the pressed button itself even if the card has been redrawn meanwhile; a redrawn card always shows Apply again, because
     Visioner's panels never draw Revert, so only the pressed button tells. */
 async function applyOnCard(id, kind) {
-  const b = await cardButton(id, `apply-now-${kind}`); if (!b) return null;
-  press(b);
+  const b = await press(id, `apply-now-${kind}`); if (!b) return null;
   for (let t = 0; t < STEP_MS; t += 100) {
     if (!b.classList.contains("processing")) return b.dataset.action === `revert-now-${kind}` ? "applied" : "none";
     await sleep(100);
@@ -888,9 +906,11 @@ async function runStealth(combat, id, i, step, tok) {
     } else if (now === "start" || now === "check-start") {
       if (!message) return toGm(`${tok.name}'s ${word} card is gone.`);
       if (now === "start") {
-        const b = await cardButton(msgId, "start-sneak"); if (!b && !message.flags?.[VISIONER]?.sneakStartStates) return toGm(`Visioner's Start Sneak isn't on ${tok.name}'s Sneak card.`);
-        await record({ startStarted: true });
-        if (b) press(b);
+        if (!message.flags?.[VISIONER]?.sneakStartStates) {
+          if (!(await freshButton(msgId, "start-sneak"))) return toGm(`Visioner's Start Sneak isn't on ${tok.name}'s Sneak card.`);
+          await record({ startStarted: true });
+          if (!(await press(msgId, "start-sneak"))) { await addNote(combat, id, `Visioner's Start Sneak went from ${tok.name}'s Sneak card before it was pressed.`); return "ask"; }
+        } else await record({ startStarted: true });
       }
       /* Start Sneak writes sneakStartStates, sneakStartPosition, then startStates (which its results window reads): wait for all three before correcting */
       const started = () => { const f = game.messages.get(msgId)?.flags?.[VISIONER] ?? {}; return !!(f.sneakStartStates && f.sneakStartPosition && f.startStates); };
@@ -906,7 +926,7 @@ async function runStealth(combat, id, i, step, tok) {
         await addNote(combat, id, `I can't tell whether Visioner applied ${tok.name}'s ${word}: look at its card (Open ${word} Results shows it).`); return "ask";
       }
       if (kind === "seek") await redrawn(msgId, () => message.update({ [`flags.${VISIONER}.seekTemplate`]: seekArea(step.aim, tok, combat.scene) }));   /* before the button, which must be the redrawn one: Visioner reads the flag when pressed */
-      if (!(await cardButton(msgId, `apply-now-${kind}`))) return toGm(`Visioner's Apply Changes isn't on ${tok.name}'s ${word} card.`);
+      if (!(await freshButton(msgId, `apply-now-${kind}`))) return toGm(`Visioner's Apply Changes isn't on ${tok.name}'s ${word} card.`);
       await record({ applyStarted: true });
       const got = await watched(() => applyOnCard(msgId, kind));
       if (!got) { await addNote(combat, id, `Visioner's Apply Changes went from ${tok.name}'s ${word} card before it was pressed.`); return "ask"; }
@@ -918,10 +938,11 @@ async function runStealth(combat, id, i, step, tok) {
 }
 /** What the monster knows it last did to hide, for its packet; forgotten once it comes out of hiding. A Seek isn't hiding. */
 async function rememberStealth(combat, tok, kind) { if (kind !== "seek") await saveTurns(combat, { [`stealth.${tok.id}`]: { did: kind, round: combat.round } }); }
-/** Who it is hidden from or undetected by in Visioner now: other creatures that aren't its allies and aren't hidden by the GM. */
+/** Who it is hidden from or undetected by in Visioner now: every other creature not hidden by the GM, allies too (Visioner's own Hide can hide it from
+    them when its "ignore allies" setting is off, seen live 2026-11-07). */
 function hiddenFromWho(tok) {
   const vis = visionerApi(); if (!vis) return [];
-  return tok.parent.tokens.contents.filter(t => { if (t.id === tok.id || t.hidden || !t.object || !t.actor?.isOfType?.("creature") || t.actor.isAllyOf?.(tok.actor)) return false;
+  return tok.parent.tokens.contents.filter(t => { if (t.id === tok.id || t.hidden || !t.object || !t.actor?.isOfType?.("creature")) return false;
     try { return HIDDEN.includes(vis.getVisibility(t.id, tok.id)); } catch { return false; } });
 }
 /** Out of hiding (Rhea, 2026-11-07, A): a hidden or undetected monster becomes observed by those creatures just before an action other than Hide, Sneak
