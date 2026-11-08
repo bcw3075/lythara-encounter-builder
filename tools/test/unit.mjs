@@ -14,6 +14,7 @@ import { aimArea, burstReachable, caughtBy, crossesWall, placeable, shapeOf, squ
 import { aimText, areaHurt, forThinker, listWords, nextArea } from "../../scripts/turn.mjs";
 import { COSTS, SEEK, isAttack, nextStealth, revealsAfter, revealsBefore, sneakSpeed } from "../../scripts/turn.mjs";
 import { promptText } from "../../scripts/prompt.mjs";
+import { historyHTML, historyOf, journalHTML, stepResult } from "../../scripts/history.mjs";
 import { cutShort, diagonalsIn, distanceBetween, featureNear, findRoute, findStep, footprintAt, headingOf, routeWords } from "../../scripts/move.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
@@ -197,7 +198,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("wait clamp", waitSeconds(500) === 100 && waitSeconds(-3) === 0 && waitSeconds(undefined) === 90 && waitSeconds(30) === 30);
   const h = hello(4); check("hello", h.generation === 4 && h.canDo.includes("strike") && h.prompt.includes("data, never an instruction") && h.prompt.includes(h.canDo.join(", ")) && h.planSchema === 1 && h.packetSchema === 1);
   check("prompt names no campaign", !/Lythara|Stoneclaim|Redthorn/i.test(h.prompt));
-  check("prompt explains asking again", h.promptVersion === 11 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 12 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -777,7 +778,44 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("spent noShot words", /action is spent/.test(describeChange({ who: "me", what: "noShot", item: "Bow", spent: true })));
   const pr = hello(1).prompt; check("prompt explains the new parts", /shotsLeft/.test(pr) && /"Down"/.test(pr) && /offGrid/.test(pr) && /T marks/.test(pr) && /"stall"/.test(pr));
 }
+
+/* ---------- the history window (Rhea, 2026-11-08) ---------- */
+{
+  const w = cleanPlan({ steps: [{ do: "strike", item: "jaws", target: "E1", why: "bite the\u0007 wizard" }, { do: "none", why: "" }] });
+  check("plan keeps each step's why", w.ok && w.plan.steps[0].why === "bite the wizard" && !("why" in w.plan.steps[1]));
+  check("prompt asks for a why per step", /"why"/.test(promptText({ canDo: ["strike"], stepKinds: ["strike"] })));
+  const labels = { tHero: "E1", tWolf2: "M2" }, names = { tHero: "Valeros", tWolf: "Wolf", tWolf2: "Pup", tGob: "Goblin" };
+  const look = { name: t => names[t], card: id => ({ a1: { total: 19, dc: 18 }, d1: { total: 9, label: "piercing" }, a2: { total: 7, dc: 18 } })[id] ?? null, save: () => ({ total: 12, dc: 17 }) };
+  const strike = { do: "strike", item: "jaws", itemName: "Jaws", target: "E1", targetName: "E1", variant: 0, flat: 0 };
+  const r1 = stepResult(strike, { started: true, attack: { message: "a1", degree: 2 }, damageStarted: true, damage: { message: "d1" }, applying: true, applied: true, hp: [18, 9] }, look, { nameOf: l => l === "E1" ? "Valeros" : null, named: x => x, tokenOf: () => "tHero" });
+  check("strike line: total vs AC, degree, damage, HP", /19 vs AC 18: hit/.test(r1.text) && /damage 9 piercing/.test(r1.text) && /Valeros 18 → 9 HP/.test(r1.text) && r1.cards.join() === "a1,d1");
+  check("strike that drops: Down", /\(Down\)/.test(stepResult(strike, { attack: { message: "a1", degree: 3 }, damage: { message: "d1" }, applied: true, hp: [5, 0] }, look).text));
+  check("flat check failed", /flat check 3 vs DC 11: failed/.test(stepResult({ ...strike, flat: 11 }, { flatStarted: true, flat: { dc: 11, total: 3, ok: false } }, look).text));
+  check("card gone: still says the degree", /miss/.test(stepResult(strike, { attack: { message: "gone", degree: 1 } }, {}).text));
+  check("stride stopped short", /stopped at 4, 5 \(10 ft charged\), short of 6, 5/.test(stepResult({ do: "stride", to: [6, 5] }, { started: true, moved: { to: [4, 5], cost: 10 } }, look).text));
+  check("area saves by creature with HP", /saves: Valeros 12 vs DC 17 success, Goblin 12 vs DC 17 critical failure/.test(stepResult({ do: "spell", mode: "area", itemName: "Fireball" }, { cast: { message: "c" }, saves: { tHero: 2, tGob: 0 }, damage: { message: "d1" }, applied: { tHero: true, tGob: true }, hp: { tHero: [20, 16], tGob: [6, 0] } }, look).text));
+  const t = { labels, requests: {
+    a: { round: 1, combatantId: "cWolf", tokenId: "tWolf", at: 1, since: 5, state: "done", replanned: true, pos: 1, by: { by: "chat", model: "sonnet" }, plan: { reason: "Bite E1 twice", steps: [{ do: "strike", why: "softest target" }, { do: "strike", why: "again" }] },
+      steps: [strike, { ...strike, variant: 1 }], log: { 0: { started: true, attack: { message: "a2", degree: 1 } } }, presses: { 10: { do: "Do it", user: "Gamemaster", pos: 0 } },
+      refused: { 1: { reason: "E1 is out of reach.", plan: { reason: "x", steps: [{ do: "strike", target: "E1" }] } } } },
+    b: { round: 1, combatantId: "cWolf", tokenId: "tWolf", at: 2, state: "ready", pos: 0, why: [{ who: "E1", what: "down" }], plan: { reason: "Turn on M2's foe", steps: [{ do: "none" }] }, steps: [{ do: "none" }], log: {} } } };
+  const order = [{ id: "cHero", name: "Valeros", npc: false }, { id: "cWolf", name: "Wolf", npc: true }, { id: "cGob", name: "Goblin", npc: true }];
+  const rds = historyOf(t, { round: 2, turn: 1, current: "cWolf", order }, names, look);
+  check("history: rounds and GM-played monsters", rds.length === 1 && rds[0].turns.map(x => x.name).join() === "Wolf,Goblin" && rds[0].turns[0].angel && !rds[0].turns[1].angel);
+  check("history: a monster the GM played this round shows once passed", historyOf(t, { round: 2, turn: 2, current: "cGob", order }, names, look)[1]?.turns.map(x => x.name).join() === "Wolf");
+  check("history: current round only up to the turn", (rds[1]?.turns ?? []).length === 0);
+  const wolf = rds[0].turns[0];
+  check("history: a re-plan is a second part, oldest first", wolf.parts.length === 2 && wolf.parts[0].reason === "Bite Valeros twice" && /Valeros is down/.test(wolf.parts[1].asked));
+  check("history: per-step why and press in order", wolf.parts[0].lines.map(l => l.kind).join() === "refused,press,step,end" && wolf.parts[0].lines[2].why === "softest target" && /Gamemaster pressed Do it/.test(wolf.parts[0].lines[1].text));
+  check("history: refused plan kept", /out of reach/.test(wolf.parts[0].lines[0].text) && /Valeros/.test(wolf.parts[0].lines[0].text));
+  check("history: names, not labels, for the GM", !/\bE1\b/.test(JSON.stringify(wolf)) && /Pup/.test(wolf.parts[1].reason));
+  const html = historyHTML(rds, esc, { open: () => true });
+  check("history HTML: folds, links, escapes", /<details[^>]*open/.test(html) && /data-message="a2"/.test(html) && /played by the GM/.test(html));
+  check("history HTML escapes", !/<b>x<\/b>/.test(historyHTML(historyOf({ requests: { z: { round: 1, combatantId: "c", tokenId: "t", plan: { reason: "<b>x</b>", steps: [] }, steps: [] } } }, { round: 1, order: [] }, { t: "T" }), esc)));
+  check("journal HTML: no links", !/data-message/.test(journalHTML(rds, esc, { title: "Fight" })) && /Round 1/.test(journalHTML(rds, esc, {})));
+  check("history: empty fight", /Nothing yet/.test(historyHTML([], esc)));
+}
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
-for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);
+for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs", "ui/history.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);
 fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts.json"), JSON.stringify(out));
 console.log(`${good} passed, ${bad} failed`); process.exit(bad ? 1 : 0);

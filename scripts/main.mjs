@@ -2,11 +2,15 @@
 import { ID, build, clear, findCreatures, markDrawn, markReady, nextToParty, place, prepare, readMap, submitBrief, summary } from "./builder.mjs";
 import { BuildApp, askClear, askReplace } from "./ui/build.mjs";
 import { TurnsApp } from "./ui/turns.mjs";
+import { HistoryApp, onPreDeleteCombat, rounds, saveHistory } from "./ui/history.mjs";
 import { busy, checkOnly, keepTurn, saveTurn, currentRequest, doIt, fightState, hold, onCombatUpdate, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
 
-const CONTROL = "encounters", apps = new Map(); let turnsApp = null;
+const CONTROL = "encounters", apps = new Map(); let turnsApp = null, historyApp = null, historyTimer = null;
+/* the history window fills in live; many flag writes come in a burst during a turn, so one redraw per quarter second */
+const redrawHistory = () => { if (!historyApp?.rendered || historyTimer) return; historyTimer = setTimeout(() => { historyTimer = null; if (historyApp?.rendered) historyApp.render(); }, 250); };
+const openHistory = () => { historyApp ??= new HistoryApp(); historyApp.render(true); };
 /* The Monster Turns window shows the fight on the scene this browser is looking at, so it redraws when that scene, its fight or a ticked box changes. */
-const redrawTurns = () => { if (turnsApp?.rendered) turnsApp.render(); };
+const redrawTurns = () => { if (turnsApp?.rendered) turnsApp.render(); redrawHistory(); };
 Hooks.once("init", () => {
   game.settings.register(ID, "partySize", { name: "Party size for balance", hint: "How many PCs threat is worked out for. The campaign's rules say how many; PF2e's Low budget differs from the published one away from 4.", scope: "world", config: true, type: Number, default: 4 });
   game.settings.register(ID, "applyMonsterDamage", { name: "Apply monster damage automatically", hint: "A monster's hit changes HP at once, with PF2e's undo card. Off: damage is rolled and you apply it from the card.", scope: "world", config: true, type: Boolean, default: true });
@@ -56,11 +60,15 @@ Hooks.on("updateChatMessage", (message, change) => { onMessageUpdate(message, ch
 Hooks.on("preUpdateCombatant", (combatant, change, options) => { keepTurn(combatant, change, options); });
 Hooks.on("updateCombatant", (combatant, change, options, userId) => { saveTurn(combatant, options, userId); });
 Hooks.on("renderChatMessageHTML", (message, html) => { onRenderMessage(message, html); });
-Hooks.on("updateCombat", (combat, change) => { if (turnsApp?.rendered && (foundry.utils.hasProperty(change, `flags.${ID}`) || "turn" in change || "round" in change)) turnsApp.render(); onCombatUpdate(combat, change); });
+Hooks.on("updateCombat", (combat, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}`) || "turn" in change || "round" in change) redrawHistory(); if (turnsApp?.rendered && (foundry.utils.hasProperty(change, `flags.${ID}`) || "turn" in change || "round" in change)) turnsApp.render(); onCombatUpdate(combat, change); });
 Hooks.on("updateToken", (tok, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}`)) redrawTurns(); onTokenFlag(tok, change); });
 Hooks.on("userConnected", () => { redrawTurns(); });
+/* the history: opened from Monster Turns; at End Encounter a GM is asked Save or Discard. This pre-hook returns false only to cancel that one delete
+   (it then deletes again once asked); otherwise it returns nothing, like every other handler here. */
+Hooks.on(`${ID}.openHistory`, () => { openHistory(); });
+Hooks.on("preDeleteCombat", (combat, options, userId) => { if (onPreDeleteCombat(combat, options, userId) === false) return false; });
 Hooks.once("ready", () => {
   onRunnerReady().catch(e => console.error(`${ID} | runner`, e));
   watchStalls();
-  game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty, fight: { current: currentRequest, busy, perceived, submitPlan, doIt, hold, playMyself, rollFor, waitForEvent, checkPlan: checkOnly, reportFailure, state: fightState } };
+  game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty, fight: { current: currentRequest, busy, perceived, submitPlan, doIt, hold, playMyself, rollFor, waitForEvent, checkPlan: checkOnly, reportFailure, state: fightState, history: combat => rounds(combat), saveHistory, openHistory } };
 });

@@ -30,6 +30,8 @@ export const currentRequest = combat => currentOf(turns(combat).requests, combat
 /** The last finished turn, if it left something for the GM to read. */
 export const lastNote = combat => latestNote(turns(combat).requests);
 const hostile = t => t.actor?.isOfType?.("npc");
+/** HP with temporary HP, for the history's "from 18 to 9" (kept on the step's record when damage is applied). */
+const hpNow = tok => (tok?.actor?.hitPoints?.value ?? 0) + (tok?.actor?.hitPoints?.temp ?? 0);
 const tokenOf = (combat, c) => c?.token ?? null;
 /* a chance to stop before each stage, which the reload tests use */
 function stepGate(stage, id) { return Hooks.call(`${ID}.step`, stage, id) !== false; }
@@ -478,7 +480,7 @@ async function judgeNow(combat, requestId) {
 /* The reason goes back to the thinker once, as a retry event. A second refusal goes to the GM. */
 async function reject(combat, requestId, reason) {
   const tries = (request(combat, requestId).tries ?? 0) + 1, last = tries >= MAX_TRIES, at = `requests.${requestId}`;
-  await saveTurns(combat, { [`${at}.state`]: "requested", [`${at}.since`]: clock(), [`${at}.tries`]: tries, [`${at}.steps`]: null, [`${at}.verdict`]: last ? `Couldn't do: ${reason}` : reason, ...(last ? {} : eventChange("retry", requestId, tries)) });   /* an earlier plan's steps go: they'd read as this one's */
+  await saveTurns(combat, { [`${at}.state`]: "requested", [`${at}.since`]: clock(), [`${at}.tries`]: tries, [`${at}.steps`]: null, [`${at}.verdict`]: last ? `Couldn't do: ${reason}` : reason, [`${at}.refused.${tries}`]: { reason, plan: cleanPlan(request(combat, requestId).plan).plan ?? null, at: Date.now() }, ...(last ? {} : eventChange("retry", requestId, tries)) });   /* an earlier plan's steps go: they'd read as this one's */
   return { state: "requested", reason, triesLeft: Math.max(0, MAX_TRIES - tries) };
 }
 
@@ -651,9 +653,9 @@ async function runStrike(combat, id, i, step, tok, target) {
         if (applySetting()) await markApplied(message);
       } else if (now === "apply") {
         const message = game.messages.get(get().damage.message), roll = message?.rolls?.[0]; if (!roll) return "ask";
-        await record({ applying: true });
+        await record({ applying: true }); const was = hpNow(target);
         await watched(() => applyFromCard(message, roll, target));
-        await record({ applied: true });
+        await record({ applied: true, hp: [was, hpNow(target)] });
         /* undo restores HP but not what Workbench and PF2e did at 0 HP (seen in test D1) */
         if (target.actor?.isOfType?.("character") && target.actor.hitPoints?.value === 0) await save(combat, id, { note: `${target.name} is at 0 HP. If you undo this, PF2e restores the HP but you still need to remove Wounded and Prone and put their initiative back.` });
       }
@@ -895,9 +897,9 @@ async function runAbility(combat, id, i, step, tok, target) {
         if (applySetting() && message) await markApplied(message);
       } else if (now === "apply") {
         const message = game.messages.get(get().damage.message), roll = message?.rolls?.[0]; if (!roll) return "ask";
-        await record({ applying: true });
+        await record({ applying: true }); const was = hpNow(target);
         await watched(() => target.actor.applyDamage({ damage: roll, token: target, item: null, shieldBlockRequest: false }));
-        await record({ applied: true });
+        await record({ applied: true, hp: [was, hpNow(target)] });
         if (target.actor?.isOfType?.("character") && target.actor.hitPoints?.value === 0) await addNote(combat, id, `${target.name} is at 0 HP. If you undo this, PF2e restores the HP but you still need to remove Wounded and Prone and put their initiative back.`);
       }
     } finally { pending = null; }
@@ -1151,9 +1153,9 @@ async function runSpell(combat, id, i, step, tok, target) {
         if (applySetting()) await markApplied(message);
       } else if (now === "apply") {
         const message = game.messages.get(get().damage.message), roll = message?.rolls?.[0]; if (!roll) return "ask";
-        await record({ applying: true });
+        await record({ applying: true }); const was = hpNow(target);
         await watched(() => applyFromCard(message, roll, target, spellMultiplier(step, get())));
-        await record({ applied: true });
+        await record({ applied: true, hp: [was, hpNow(target)] });
         if (target.actor?.isOfType?.("character") && target.actor.hitPoints?.value === 0) await addNote(combat, id, `${target.name} is at 0 HP. If you undo this, PF2e restores the HP but you still need to remove Wounded and Prone and put their initiative back.`);
       }
     } finally { pending = null; }
@@ -1309,11 +1311,11 @@ async function runArea(combat, id, i, step, tok) {
         const rec = get(), hurt = areaHurt(rec), t = Object.keys(hurt).find(x => !rec.applied?.[x]), target = scene.tokens.get(t);
         const message = game.messages.get(rec.damage.message), roll = message?.rolls?.[0]; if (!roll) return "ask";
         if (!target) { await record({ applied: { [t]: true } }); continue; }   /* removed from the map: nothing to apply to */
-        await record({ applying: { [t]: true } });
+        await record({ applying: { [t]: true } }); const was = hpNow(target);
         await watched(() => applyFromCard(message, roll, target, hurt[t]));
         /* its own area hurting itself (a deliberate burst it stands in) isn't news to the look before its next action: the record and the baseline in one save */
         const own = t === tok.id && request(combat, id).seen ? { [`requests.${id}.seen.me.hp`]: (tok.actor.hitPoints?.value ?? 0) + (tok.actor.hitPoints?.temp ?? 0) } : {};
-        await saveTurns(combat, { [`requests.${id}.log.${i}.applied.${t}`]: true, ...own });
+        await saveTurns(combat, { [`requests.${id}.log.${i}.applied.${t}`]: true, [`requests.${id}.log.${i}.hp.${t}`]: [was, hpNow(target)], ...own });
         if (target.actor?.isOfType?.("character") && target.actor.hitPoints?.value === 0) await addNote(combat, id, `${target.name} is at 0 HP. If you undo this, PF2e restores the HP but you still need to remove Wounded and Prone and put their initiative back.`);
       } else if (now === "remove") {
         const r = scene.regions.find(areaFlag(combat, id, i)); if (r) await r.delete();
@@ -1510,3 +1512,6 @@ export function saveTurn(combatant, options, userId) {
 export const busy = () => starting.size > 0 || judging.size > 0 || running.size > 0 || game.combats.filter(c => c.started).some(c => requestBusy(currentRequest(c)));
 export const hold = (combat, id) => save(combat, id, { hold: true });
 export const playMyself = (combat, id) => save(combat, id, { state: "manual" });
+/** A GM's press on the card (Do it, Next step, Hold, Play it myself, Roll it for them), for the history window. Keyed by time so two browsers never
+    write over each other. Only real presses: Auto's own runs don't come here. */
+export const notePress = (combat, id, what, extra = {}) => save(combat, id, { presses: { [Date.now()]: { do: what, user: game.user.name, pos: request(combat, id)?.pos ?? 0, ...extra } } }).catch(e => console.warn(`${ID} | history`, e));

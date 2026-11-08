@@ -3,7 +3,7 @@ import { WORD, describeChanges, describeStep, isMove, listWords } from "../turn.
 import { esc } from "../journal.mjs";
 import { describeKnows } from "../perceive.mjs";
 import { ID } from "../builder.mjs";
-import { applySetting, brainListening, brainSeenAt, clock, currentRequest, doIt, hold, lastNote, playMyself, rollFor, runnerProblem } from "../fight.mjs";
+import { applySetting, brainListening, notePress, brainSeenAt, clock, currentRequest, doIt, hold, lastNote, playMyself, rollFor, runnerProblem } from "../fight.mjs";
 import { LISTEN_MS, stallWords } from "../brain.mjs";
 
 const STYLE = `.leb-turns .window-content{overflow-y:auto;padding:8px 12px}.leb-turns .leb-t{display:grid;grid-template-columns:1fr 58px 44px;gap:4px;align-items:center}.leb-turns .leb-cur{font-weight:700}.leb-turns .leb-card{border:1px solid #0006;padding:6px 8px;margin-top:8px}.leb-turns .leb-warn{color:#e07050}.leb-turns .leb-card.leb-stall{border-color:#e0a030;background:#e0a03022}.leb-turns .leb-stallw{color:#e0a030;font-weight:700}.leb-turns .leb-btns{display:flex;gap:6px;margin-top:6px}.leb-turns .leb-btns button{flex:1}.leb-turns .leb-listen{margin:0 0 6px;opacity:.8}.leb-turns .leb-listen i{color:#888}.leb-turns .leb-listen.on i{color:#4caf50}.leb-turns li.leb-done{opacity:.6}.leb-turns li.leb-next{font-weight:700}`;
@@ -38,7 +38,8 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
       const stalled = r.stall && r.stall.since === r.since ? `<p class="leb-stallw"><i class="fa-solid fa-triangle-exclamation"></i> ${esc(stallWords(r.stall))} Angel has been asked to look into it.</p>` : "";
       card = `<div class="leb-card${stalled ? " leb-stall" : ""}" data-request="${r.id}">${stalled}<b>${esc(tok?.name)}</b>: ${esc(words)}${r.why ? `<p class="leb-warn">${esc(named(describeChanges(r.why, nameOf, tok?.name ?? "It")))}</p>` : ""}${done ? `<p>Done this turn: ${esc(done)}.</p>` : ""}${knows ? `<p>${esc(knows)}</p>` : ""}${r.plan?.reason ? `<p>${esc(r.plan.reason)}</p>` : ""}${steps}${waiting}${r.verdict ? `<p class="leb-warn">${esc(named(r.verdict))}</p>` : ""}${deaf}${r.note ? `<p class="leb-warn">${esc(named(r.note))}</p>` : ""}<div class="leb-btns">${["ready", "held", "stopped"].includes(r.state) && !r.go ? `<button type="button" data-do="doit" ${problem ? "disabled" : ""}>${go}</button>` : ""}${r.state === "running" ? `<button type="button" data-do="hold"><i class="fa-solid fa-hand"></i> Hold</button>` : ""}<button type="button" data-do="manual"><i class="fa-solid fa-user"></i> Play it myself</button></div></div>`; }
     const left = !r && lastNote(c); if (left) card = `<div class="leb-card"><p class="leb-warn">${esc(named(left.note))}</p></div>`;
-    return `<div>${listen}${rows || "<p>No monsters in this fight.</p>"}${problem ? `<p class="leb-warn">${esc(problem)}</p>` : ""}${card}${applySetting() ? "" : "<p><em>Damage is rolled, not applied: use the card's Damage button.</em></p>"}</div>`;
+    const history = `<p class="leb-btns"><button type="button" data-do="history"><i class="fa-solid fa-clock-rotate-left"></i> History</button></p>`;
+    return `<div>${listen}${rows || "<p>No monsters in this fight.</p>"}${problem ? `<p class="leb-warn">${esc(problem)}</p>` : ""}${card}${applySetting() ? "" : "<p><em>Damage is rolled, not applied: use the card's Damage button.</em></p>"}${history}</div>`;
   }
   _replaceHTML(html, content) { content.innerHTML = html; }
   _onRender() {
@@ -46,6 +47,9 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     /* the light goes grey on its own two minutes after the last ask, with nothing else changing */
     clearTimeout(this._grey); const left = brainSeenAt() + LISTEN_MS - clock(); if (left > 0) this._grey = setTimeout(() => { if (this.rendered) this.render(); }, left + 500);
     root.querySelectorAll("input[type=checkbox]").forEach(el => el.addEventListener("change", () => c.scene.tokens.get(el.closest("[data-token]").dataset.token)?.setFlag(ID, el.name, el.checked)));
-    root.querySelectorAll("[data-do]").forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); const id = el.closest("[data-request]").dataset.request, a = el.dataset.do; (a === "doit" ? doIt(c, id) : a === "hold" ? hold(c, id) : a === "rollfor" ? rollFor(c, id, el.dataset.for) : playMyself(c, id)).catch(e => ui.notifications.error(e.message)); }));
+    root.querySelectorAll("[data-request] [data-do]").forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); const id = el.closest("[data-request]").dataset.request, a = el.dataset.do; const r = c.getFlag(ID, "turns")?.requests?.[id];
+      notePress(c, id, a === "doit" ? ((r?.pos ?? 0) ? "Next step" : "Do it") : a === "hold" ? "Hold" : a === "rollfor" ? "Roll it for them" : "Play it myself", a === "rollfor" ? { for: el.dataset.for } : {});   /* for the history window */
+      (a === "doit" ? doIt(c, id) : a === "hold" ? hold(c, id) : a === "rollfor" ? rollFor(c, id, el.dataset.for) : playMyself(c, id)).catch(e => ui.notifications.error(e.message)); }));
+    root.querySelector('[data-do="history"]')?.addEventListener("click", ev => { ev.preventDefault(); Hooks.callAll(`${ID}.openHistory`); });
   }
 }
