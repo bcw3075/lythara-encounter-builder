@@ -480,7 +480,7 @@ async function judgeNow(combat, requestId) {
   if (!c.ok) return reject(combat, requestId, c.reason);
   await save(combat, requestId, { state: "ready", plan: whole(clean.plan), steps: c.steps, verdict: null });
   const tok = combat.scene.tokens.get(r.tokenId);
-  if (tok?.getFlag(ID, "auto")) doIt(combat, requestId).catch(e => console.error(e));
+  if (tok?.getFlag(ID, "auto")) (async () => { if (!(await pausedAuto(combat, requestId, tok))) await doIt(combat, requestId); })().catch(e => console.error(e));   /* Auto's own start waits out the game's pause */
   return { state: "ready", steps: c.steps };
 }
 /* The reason goes back to the thinker once, as a retry event. A second refusal goes to the GM. */
@@ -1414,7 +1414,7 @@ async function runTurn(combat, requestId) {
   await dropInstantAreas(combat, { id: requestId, pos: r.pos ?? 0 }).catch(e => console.warn(`${ID} | areas`, e));   /* an instant area the GM resolved from its card */
   await settleCover(combat, requestId, r.pos ?? 0, tok);   /* a reload between a step and ending its Take Cover */
   for (let i = r.pos ?? 0; i < r.steps.length; i++) {
-    if (await pausedAuto(combat, requestId, tok)) return;   /* the game's pause pauses Auto too (Rhea, 2026-11-08) */
+    if (i > (r.pos ?? 0) && await pausedAuto(combat, requestId, tok)) return;   /* the game's pause pauses Auto too (Rhea, 2026-11-08): the step the GM pressed for still runs */
     const now = { ...request(combat, requestId), id: requestId };   /* a stored request doesn't carry its own id; replan needs it */
     let step = r.steps[i];
     if (now.state === "manual") return;
@@ -1541,8 +1541,8 @@ export async function letGo(combat, requestId) {
   await saveTurns(combat, { [`escaped.${requestId}`]: whole({ tokenId: tok.id, name, xp, round: combat.round, at, combatantId: r.combatantId }) });
   await save(combat, requestId, { state: "done", extend: null, escaped: { name, xp, at }, note: [r.note, `${name} got away${xpWords}.`].filter(Boolean).join(" ") });
   await tok.update({ hidden: true, [`flags.${ID}.escaped`]: { round: combat.round, at, xp, combat: combat.id } });
-  /* its turn passes first, so core's turn bookkeeping sees a combatant removed from before the current one */
-  if (combatant && combat.combatant?.id === combatant.id && combat.started) await combat.nextTurn();
+  /* deleting the current combatant is enough: core's Combatant._preDeleteOperation hands the turn to the next survivor with turn events
+     (14.370). Calling nextTurn first and then deleting skipped the next creature's turn (seen live 2026-11-08: round 1 → 2, Test Hero's turn lost). */
   if (combatant) await combat.deleteEmbeddedDocuments("Combatant", [combatant.id]);
   return { name, xp };
 }
@@ -1601,7 +1601,7 @@ export async function bringBack(combat, tokenId) {
   if (combat.combatants.some(c => c.tokenId === tok.id)) throw new Error("It is already in the fight.");
   await tok.update({ hidden: false, [`flags.${ID}.-=escaped`]: null });
   const [c] = await combat.createEmbeddedDocuments("Combatant", [{ tokenId: tok.id, actorId: tok.actorId, sceneId: combat.scene.id }]);
-  if (c) await combat.rollInitiative([c.id]);
+  if (c) await combat.rollInitiative([c.id], { skipDialog: true });   /* PF2e's roll dialog would wait for ever on a page nobody watches (seen live 2026-11-08) */
   const rec = escapeRecord(combat, tok.id); if (rec) await saveTurns(combat, { [`escaped.${rec[0]}.returned`]: { round: combat.round, at: Date.now() } });
   return { name: tok.name, initiative: c?.initiative ?? null };
 }
