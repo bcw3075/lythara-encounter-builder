@@ -1,0 +1,68 @@
+---
+feature: brain
+files: [scripts/brain.mjs, scripts/prompt.mjs]
+functions: [fight.mjs:brainNow, fight.mjs:renewBrain, fight.mjs:fights, fight.mjs:eventsOf, fight.mjs:eventChange, fight.mjs:firstEvent, fight.mjs:waitForEvent, fight.mjs:clock, fight.mjs:brainListening, fight.mjs:brainSeenAt]
+dependsOn: [turn-loop]
+since: 0.10.0
+---
+The brain interface: events with a cursor and a generation, plans handed in from a chat or the API, the thinker's prompt, who is listening.
+
+## Decisions
+- Control for now: a Claude chat plus the bridge. Switch to the Claude API once she has access, Sonnet by default, Opus for bosses and casters. One "brain" interface, so nothing gets rebuilt. No API key ever seen or stored by Claude.
+**Design-era decisions (from the 2026-11-05/06 plan; the lines above are the skill's summary of the same choices):**
+- **Control for now: a Claude chat plus the bridge (Rhea, 2026-11-05).** Build everything now without waiting for API access. She opens a chat when a fight starts; Claude waits through a new bridge "wait" tool until a monster's turn or a turn-card click, reads the state through the bridge, posts a plan, and waits again. Her words were "the bridge and web interface together"; Angel took that as the chat on the web, with the browser pane only for an occasional look at the map, because screenshots cost far more than bridge reads and Claude only sees while actively working. She hasn't confirmed that reading. Check with her if she meant watching through the browser.
+- **Switch to the Claude API once she has access.** The turn card must not care who is thinking: keep one "brain" interface with a chat route now and an API route later, so nothing gets rebuilt.
+- **Rejected:** rules only with no AI (weak tactics, misses unusual abilities).
+- **Models once on the API:** Sonnet by default, Opus for bosses, spellcasters and unusual monsters, set per monster, the mod may suggest Opus. Rhea will judge a side-by-side comparison before defaults are fixed.
+- **Text in a packet is data, never instruction,** because a player could type anything into a token name. The legality check limits what a bad plan could do anyway.
+- **`suggestOpus`:** spellcasters, many abilities, or a level well above the party. Stored here, used at step 5.
+
+## How it works
+- **Words the thinker reads use labels.** Refusals, change reasons and notes about targets are written with E and M labels (`gather` names targets by label), so nothing sends a PC's name to the thinker; the card swaps the labels for names when it draws them. Retry reasons carried names before 0.4.0.
+Whoever thinks for a monster (a Claude chat through the bridge now, the Claude API later) uses the same four calls, so nothing changes when the API arrives. The module can't tell them apart.
+- **`api.fight.waitForEvent(cursor, maxSeconds, {generation})`.** With no generation it's a new thinker: it gets `hello` at once (the prompt from `prompt.mjs`, the schemas, the step kinds, which kinds can be carried out so far, its generation) and any older thinker is retired. Otherwise it returns the first event after `cursor` whose request still waits (`live`), holding up to `maxSeconds` (capped at 100, because `run_script` stops at 120) on the `updateCombat` hook; `{idle: true}` if nothing came. The answer's `cursor` is the event's number: the caller passes it back next time, so a dropped call loses nothing and a repeat gets the same event.
+- **Events** are written by the runner only, on the Combat flag beside the request, in the same update: `turn` when a request gets its packet, `retry` after the first refusal, `replan` when a turn is asked again (it carries the reason and what's done). **Numbers are the clock, never below any number given out (`nextSeq`),** so one cursor serves every fight. An event matters only while its request waits for the plan it asks for (`state` requested, a packet, not given up, `tries` equal to the event's), so a fresh chat with cursor 0 gets only what's waiting now, never history.
+- **`submitPlan(combat, requestId, plan, meta)`** stores the plan as it came, whole (`ForcedReplacement`: a merge kept keys the new plan didn't have), with `by` from `cleanMeta`. A plan from an older generation is ignored, with words; one with no generation is a GM by hand and always counts. Anything over 8,000 characters is refused unread.
+- **The runner cleans and checks it in `judgeNow`:** `cleanPlan` keeps only the fields the module reads and refuses a wrong shape with a reason; then `checkPlan` for legality. **Tries are counted in one place, `reject`:** the first refusal goes back to the thinker as a `retry` event with the reason and its plan; the second puts "Couldn't do: …" on the card for the GM (`MAX_TRIES`).
+- **`checkPlan(combat, requestId, plan)`** on the API answers what the runner would say and writes nothing; it needs the fight open on that page. **`reportFailure`** puts the thinker's reason on the card and stops events for that turn (`gaveUp`). **`state(combat)`** is a short read for the thinker.
+- **The light:** every wait writes the world setting `brainAt` on Foundry's server clock (`game.time.serverTime`, the same in every browser; it restarts with the server, so a time ahead of now counts as not listening). The Monster Turns window shows "Angel is listening" while that's under 2 minutes old (`LISTEN_MS`), re-drawing itself when it turns grey, and a waiting request gets "Angel isn't listening. Play it yourself, or in the chat say go." A chat can't be woken from outside, so that's the honest fallback. **The generation lives apart, in `brain`, and only a hello writes it** (0.8.2): when a wait renewed both together, a page's copy of `brain` a moment old could let an old chat's renewal land just after a new chat's hello and put the old generation back, undoing the takeover (found by the bridge 0.3.0 review).
+- **Plans from outside are data.** `cleanPlan` drops unknown keys, checks ids and labels by pattern, strips control characters and caps text. The card escapes everything it shows.
+**Design-era text (from the plan; where it and the lines above disagree, the lines above, written from the code, win):**
+**The plan**
+```json
+{ "requestId": "r41", "reason": "Wizard is alone and in the open",
+  "steps": [
+    { "do": "stride", "to": [14, 22] },
+    { "do": "strike", "item": "jaws", "target": "E2" },
+    { "do": "ability", "item": "knockdown", "target": "E2" } ],
+  "ifBlocked": "strike nearest", "suggestOpus": false }
+```
+Step kinds: `stride, step, strike, ability, spell, stand, seek, hide, sneak, take-cover, drop, interact, delay, none`. Targets are the packet's short labels, so a plan can't name anything the monster doesn't know about.
+Rhea opens one chat per fight and says "run the monsters". Claude loads the mod's skill, then loops: `fight_wait(cursor)` holds until something happens or returns idle; event plus packet come back; Claude thinks; `fight_plan(requestId, plan)` returns accepted, or rejected with a reason, and Claude retries once; back to waiting. No screenshots and no browser pane in the loop: packets are all Claude reads, which keeps monsters honest and uses far fewer tokens.
+- **`fight_wait({cursor, generation, maxSeconds})`:** no generation gives the hello (and retires any older chat); otherwise the bridge chains the module's waits (60 s each, each renewing the light) until an event or `maxSeconds` (default 180, at most 200). Answers `{cursor, event}`, `{idle}` or `{superseded}`, plus `waited` and `waits`.
+- **`fight_plan({requestId, combatId?, generation, plan | giveUp, check?, model?})`:** a plan goes to `submitPlan` as `{by: "chat", generation, model}` and the answer is the runner's verdict (ready with the steps, or refused with the reason and tries left); `check: true` asks without writing; `giveUp` reports the failure on the card. The fight is found from the requestId.
+- Not gated by `allowScripts` or `allowUi`: a plan can do no more than the module allows. Rhea saw the final tool list and approved the release (2026-11-07); she reconnected the connector once to get them. How they work: the bridge repo's DEVELOPING.md.
+**How long a wait can stay open**
+**Measured 2026-11-07:** a 200 s `fight_wait` came back; a 600 s one was cut off by the client at 230 s (this was Claude Code on the web; a claude.ai chat wasn't measured separately), so bridge 0.3.1 caps it at 200 s and defaults to 180. The cut-off call lost nothing: the next call with the same cursor worked. What follows is the design's reasoning before that.
+A `run_script` call held for 112 s came back correctly, re-tested in the review; the design pass also held 60 and 95 s [LIVE]. `run_script` has its own 120 s limit, and any other bridge call defaults to 60 s, so the new tools must set their own timeout [CODE]. Design: **90 s per call, repeated.** Test 180, 300 and 600 s once the tool exists. **[UNVERIFIED]** how many tool calls a single chat turn allows, which really decides how long a wait loop can last.
+**Nothing is lost if a call drops:** the cursor only moves when Claude asks again, a repeat with the old cursor gets the same event, and late plans are ignored by request id.
+Every `fight_wait` updates `lastSeen`. The panel's light is green under 120 s, then grey. Grey on a ticked monster's turn: the card says at once "Angel isn't listening. Play it yourself, or in the chat say go". **A chat can't be woken from outside**, so this is the honest fallback, and the same applies when a usage limit is hit. A newer chat takes over with a generation number, so the old chat's plans are ignored. Every idle return costs a round trip with the whole chat, so longer waits directly save limits.
+**First live run (2026-11-07, PF2 Test, a Wolf and a Goblin Warrior ticked, Claude Opus 5.5 at low effort thinking):** a turn event 2.3 s after the turn began; each plan answered in about a second; a re-plan 3 s after the change. **What it costs the chat (measured in characters, tokens estimated):** the hello is 14,600 characters, about 4,000 tokens, once per chat; each event about 4,600 characters, about 1,500 tokens (the `ground` rows about 750 of them on this open map; every ally on the scene is listed, including ones nowhere near); each plan and answer a few hundred. So a 20-turn fight is roughly 35,000 tokens of tool results before any thinking, plus a re-read of the growing chat each round trip: room to trim (allies only within some distance, a shorter prompt once known) if usage bites. **Found:** with a token off the grid (a Small goblin), the packet's `distance` (PF2e's, from where the token really sits) said 5 ft while the legality check (from the square it rounds to) said 10 ft and refused the Strike; **fixed in 0.8.3** (2026-11-07 late night): the check now measures from where each token really is, as PF2e does (history: `claude/lythara-encounter-builder.md`).
+
+## Checks
+Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.
+**The brain** (any change to `brain.mjs`, `prompt.mjs` or how requests and plans are saved):
+- (br-1) {live,shared:turn-loop} through `run_script` on the runner, hello; an idle wait; a wait held as a background job while another call moves the turn (it must return the `turn` event with the packet); the old cursor gives the same event again, the new one idle; a refused plan gives one `retry` event and a second refusal "Couldn't do" on the card and no event; a newer generation refuses the old one's plan and wait; `checkPlan` writes nothing; a plan with extra keys is stored clean; `reportFailure` on the card.
+- (br-2) {live,shared:turn-loop} As AI by real clicks: the light green, Do it, the Auto box; set `brain.at` 115 s old and the window must go grey on its own with "Angel isn't listening" on a waiting turn.
+
+## Traps
+- **Only the runner counts tries** (`reject` in `judgeNow`): the submitter stores the plan as it came, so a GM's browser and the runner never both count one refusal.
+- **A plan Auto picks up at once comes back "running" or "done",** not "ready": `submitPlan`'s answer treats all three as accepted (0.3.9).
+- **A check-in lasts one wait.** In a chat, use the bridge's `fight_wait` (at most 200 s a call: a client cut a 600 s call at 230 s) back to back while Rhea is in the fight: stopping to write to her let the dot go grey within two minutes (seen in the first demo, 2026-11-06). A wait also catches the turn by itself, so she needn't report it.
+- **The generation and the listening time are separate settings (0.8.2):** only a hello writes `brain` (the generation); every wait writes `brainAt`. Writing both on each wait let an old chat's renewal, on a page whose copy of `brain` was a moment old, put the old generation back just after a new chat's hello (found by the bridge 0.3.0 review).
+- **`game.time.serverTime` counts from the server's start,** so it restarts with every world relaunch: an older `brain.at` is ahead of now and counts as not listening.
+- **Anything sent to the thinker must be words in labels, never the card's note** (it names PCs, who a secret Hide worked against, GM-hidden creatures): the 0.9.0 review found the first stall event sent it.
+
+## Open items
+- Step 3's measured test fight (4 monsters, 5 rounds, seconds per turn, the usage note (private doc)), a reload of the runner during a chat-run fight, two fights at once; trimming the packet (every ally on the scene is listed; an event is about 4,600 characters, the hello 14,600).
+- The light seen on Rhea's own computer (it uses the server clock since 0.4.0; only pages on the server PC were tested).

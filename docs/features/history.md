@@ -1,0 +1,49 @@
+---
+feature: history
+files: [scripts/history.mjs, scripts/ui/history.mjs]
+functions: []
+dependsOn: [turn-loop]
+since: 0.10.0
+---
+The Monster Turns history window: the fight by round and turn, each step in full detail, saving to a journal.
+
+## Decisions
+- **The history window (Rhea, 2026-11-08):** its own window (History on Monster Turns), the whole encounter, grouped by round, turns foldable, live; Angel's whole plan and reason, then each action with its own `why` as it happens; full detail (totals vs AC/DC, degrees, damage, HP before and after, saves, refusals, re-plans, stalls, her presses) with links to the cards; monsters she plays get one line. **Saving is hers:** Save to journal, and Save / Discard at End Encounter; one closed folder "Monster Turns history", one entry per game night (date), one page per fight (saving again replaces it). GM only, never sent to the thinker (no `api.fight.history`).
+**Design-era decisions (from the 2026-11-05/06 plan; the lines above are the skill's summary of the same choices):**
+Its own feature, before fleeing monsters. Her choices, one question at a time:
+- **How long it lasts:** the whole encounter, in the window. **Saving is her choice:** a Save to journal button in the window, and **at End Encounter a small GM-only dialog asks Save to journal / Discard** (so forgetting loses nothing; it doesn't hold up ending the fight). Today a turn's record lives on the Combat flag and Foundry deletes it with the fight, so the history must be read (and saved) before the combat is deleted.
+- **Organised so it doesn't clutter (her ask):** one closed folder, **"Monster Turns history"**; **one journal entry per real date (game night, e.g. 2026-11-08), one page per fight** inside it, named by map and time. GM-only (ownership none). Flag them with the module id. A second save of the same fight replaces its page, not a new one.
+- **The "why":** **Angel's whole plan and its reason at the start of each turn, then each action with its own reason as it happens** (filling in live). Needs a short per-step reason in the plan (a `why` field on each step; prompt updated; a few words a step) beside the plan's `reason`; a re-plan shows the new plan and reason and what changed to cause it.
+- **Detail: full.** Attack totals against AC and the degree, damage rolled and applied (and "Down"), saves by creature with totals and degrees, distance moved and its cost, flat checks, follow-up checks, cover taken, hiding and coming out, cards left for the GM, refusals and retries, stalls, re-plans and their trigger, her own presses (Do it, Next step, Hold, Play it myself, Roll it for them), each with a small link that scrolls chat to that roll's card. GM-only, so AC and numbers are fine; nothing of this ever goes to the thinker.
+- **Where:** **its own window**, opened by a History button on the Monster Turns window; movable and resizable, grouped by round, each monster's turn foldable, newest at the bottom, following live. Monsters not run by Angel get a one-line entry (played by the GM) so the rounds read in order [ASSUMPTION, Angel's default].
+- **To settle while building:** where each action's numbers are recorded (the step log already holds most; anything missing is added at the moment it happens, not rebuilt from chat later); a chat card deleted later leaves its link dead (the line keeps its numbers); the record's size on the Combat flag over a long fight.
+
+## How it works
+- **On a request (0.10.0, for the history):** `presses` (by time in ms: `do` the button's words, `user`, `pos`, `for` a token id for Roll it for them), `refused` (by try: `reason`, the cleaned `plan`, `at`); on a step's record `hp` (`[was, now]` with temporary HP, or by token id for an area). On the plan, each step's `why` (the thinker's own reason, read only by the history). `turns.historySaved`: a signature of the requests when the history was last saved to the journal.
+The GM looks back through what each monster did and why: the card's words flash by. Her choices: shown for the whole encounter in **its own window** (History on Monster Turns), grouped by round, each turn foldable (the latest round open), newest at the bottom and following live; **Angel's whole plan and reason, then each action with its own reason** (the plan step's `why`, asked for in the prompt; the check ignores it); **full detail**: totals against AC or DC, degrees, damage, HP before and after with "Down", saves by creature, moves and their cost, flat checks, refusals with the refused plan, re-plans and why, stalls, notes and her own presses, each with a link that scrolls chat to the card (or opens it on its own); monsters she played get one line. **Saving is hers:** Save to journal, and at End Encounter a dialog asks Save or Discard (closing it keeps the fight). Saved fights go in one folder, "Monster Turns history" (flag `history`), one entry per date of the saving browser (flag `historyDate`), one page per fight (flag `historyCombat`): saving again replaces that page, wherever it is in the folder. No ownership: GM only.
+- **Built from the Combat flag each time** (`historyOf` is pure; `rounds` in the glue reads the fight, names and card numbers through `look`). Nothing extra is kept while the fight runs except what a card can't say: `hp`, `presses`, `refused`. A card deleted later loses its numbers in the window; the record's degree stays. The saved page keeps everything as it was.
+- **Never to the thinker:** it has names, HP and AC. Nothing in it goes into packets, events or `api.fight`; `api.fight.saveHistory` and `openHistory` are for GM tests.
+- **Whether it's saved** is a signature of the requests (`signature`), not a time: many writes don't move `since`, and the server clock restarts with the server (found by the review).
+- **Folding:** only a click on a turn's summary counts as the GM's choice. Drawing an open `<details>` fires `toggle` too, which pinned every default-open turn open (found by the review).
+- **A refused plan stays in `r.plan` until the next lands,** so while a turn is `requested` the part shows "Waiting for a plan" and the refusal, not the refused plan as the plan. `why` on a request without `parent` is why the turn ended (no actions left, too many re-plans), not a re-plan.
+- **End Encounter:** `preDeleteCombat` runs on the deleting user's browser; for a GM (not the runner) with unsaved history it cancels the delete (returns false, the one handler that does), asks, saves if chosen and deletes again with `{ [ID]: { asked: true } }`. A script deleting a fight from a GM page that isn't the runner should pass that option, or the dialog opens there. PF2e's End Encounter asks first ("End this combat?"), so there are two questions.
+- **Redraws:** `main.mjs` throttles the window to one redraw per 250 ms on flag writes, turn changes and fight or scene changes.
+
+## Checks
+Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.
+**The history window** (any change to `history.mjs`, `ui/history.mjs`, the records it reads, or the prompt's `why`):
+- (hi-1) {live,shared:brain} an Angel-run fight from a chat through `fight_wait`/`fight_plan` on Claude Test Scene (Dire Wolf ticked, Goblin Warrior unticked, Test Hero with 60 temporary HP).
+- (hi-2) {live,shared:brain} As AI by real clicks: History opens; Do it and Next steps fill it live with each action's reason and numbers and the presses; a refused plan, a re-plan (move Test Hero between steps) as a second part, Play it myself; an unticked monster's "played by the GM" line only once passed; folds kept through redraws; a card link; Save to journal, then "changed since saved" after a turn; End Encounter from PF2e HUD's tracker: close ours (fight stays), Save (page replaced, fight gone), and on a second fight Discard.
+- (hi-3) {live,player,shared:brain} Test Player can't see the folder or entry.
+- (hi-4) {live,shared:brain} Close Simple Calendar's window first: it covered the tracker's End Encounter button.
+- (hi-5) {live,shared:brain} Delete the test journal and folder after.
+
+## Traps
+- **Drawing an open `<details>` fires its `toggle` event,** so a toggle listener that records folds pins every default-open item open: record a fold only from a click on its `<summary>` (found by the 0.10.0 review).
+- **Whether something changed since a save can't be read from `since`:** many writes (saves, notes, presses, area results) don't move it, and the server clock restarts with the server. The history keeps a signature of the requests instead.
+- **A refused plan stays in `r.plan` until the next one lands** (`reject` doesn't clear it), and `why` on a request without `parent` means the turn ended, not a re-plan: anything reading requests for display must check `state` and `parent`.
+- **`preDeleteCombat` (End Encounter's question) runs in the deleting browser:** it skips the runner's page, but a script deleting a fight from another GM page opens the dialog there unless it passes `{ "lythara-encounter-builder": { asked: true } }`. PF2e asks "End Encounter?" first, so there are two questions.
+- **Hidden sessions run on UTC:** times and dates the history writes (page names, the entry's date) read in UTC there; Rhea's browser uses her own time.
+
+## Open items
+- 0.10.0, not tested live: spell, area, ability-save and stall lines in the history (unit tests only); Rhea's own browser (local time and date on the saved page); deleting a scene with a fight on it (the fight may go without the Save question); a long fight's redraw speed.

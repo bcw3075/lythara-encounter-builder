@@ -1,0 +1,24 @@
+{
+  "scripts": ["scripts"],
+  "functionOwned": ["scripts/fight.mjs", "scripts/turn.mjs"],
+  "features": "docs/features",
+  "changes": "docs/changes",
+  "developing": "docs/DEVELOPING.md",
+  "manifest": "module.json",
+  "zip": {"path": "dist/lythara-encounter-builder.zip", "include": ["module.json", "scripts"]},
+  "tests": "node tools/test/unit.mjs",
+  "mainBranch": "main",
+  "reviewPaths": ["scripts"],
+  "extraDocs": ["README.md", "tools/test/README.md"],
+  "setupChecks": [
+    {"path": "../lythara-survey-sheet", "hint": "clone the Survey Sheet repo beside this one (the unit tests use its generator)"},
+    {"path": "tools/test/data/spots.json", "hint": "copy the test data from the project docs claude/test-data/*.json"}
+  ],
+  "finishList": [
+    "claude/lythara-encounter-builder.md (what changed, what was verified)",
+    "claude/encounter-builder-plan.md status and next step",
+    "the lythara-encounter-builder skill card, only if the one-page skill text changed",
+    "claude/foundry-version-baseline.md if the installed version changed",
+    "claude/docs-index.md: Last checked for every doc touched, a row for any new doc"
+  ]
+}

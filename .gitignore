@@ -1,3 +1,5 @@
 __pycache__/
 tools/test/data/
 tools/test/out/
+.private-words
+.modtools-stamp.json
