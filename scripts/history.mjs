@@ -100,7 +100,7 @@ export function historyOf(t = {}, fight = {}, names = {}, look = {}) {
     const turns = rounds.get(r.round) ?? new Map(); rounds.set(r.round, turns);
     /* a turn taken after a Delay in the same round is its own turn (0.12.0), listed after the one it delayed on */
     const key = `${r.round}.${r.combatantId}${r.afterDelay ? ".back" : ""}`, c = order.find(x => x.id === r.combatantId);
-    const turn = turns.get(key) ?? { key, combatantId: r.combatantId, name: `${c?.name ?? names[r.tokenId] ?? "A monster"}${r.afterDelay ? " (back after delaying)" : ""}`, angel: true, parts: [], idx: r.delayed && Number.isFinite(r.turn) ? r.turn : at(r.combatantId) + (r.afterDelay ? 0.5 : 0) };   /* the turn it delayed on sits where it was then, not where it is now */
+    const turn = turns.get(key) ?? { key, combatantId: r.combatantId, name: `${c?.name ?? names[r.tokenId] ?? "A monster"}${r.afterDelay ? " (back after delaying)" : ""}`, angel: true, parts: [], idx: r.delayed && Number.isFinite(r.turn) ? r.turn : at(r.combatantId) + (r.afterDelay ? 0.5 : 0), delayedOn: !!r.delayed };   /* the turn it delayed on sits where it was then, not where it is now */
     turn.parts.push(partOf(id, r, look, n)); turns.set(key, turn);
   }
   /* a monster brought back (Rhea, 2026-11-08): one line in the round it returned, under its name; the escape line stays with the turn it fled on */
@@ -114,7 +114,7 @@ export function historyOf(t = {}, fight = {}, names = {}, look = {}) {
     if (turns.size) rounds.set(round, turns);
   }
   return [...rounds.entries()].sort((a, b) => a[0] - b[0]).map(([round, turns]) => ({ round, turns: [...turns.values()].sort((a, b) => a.idx - b.idx || (a.parts[0]?.at ?? 0) - (b.parts[0]?.at ?? 0))
-    .map(x => ({ ...x, parts: x.parts.sort((a, b) => a.at - b.at), current: round === fight.round && x.combatantId === fight.current })) }));
+    .map(x => ({ ...x, parts: x.parts.sort((a, b) => a.at - b.at), current: round === fight.round && x.combatantId === fight.current && !x.delayedOn })) }));
 }
 
 /* ---------- HTML: the window and the journal page ---------- */

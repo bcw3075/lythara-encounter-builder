@@ -146,3 +146,6 @@ tune
 extendEncounter
 actor.initiative.tiebreakPriority
 flags.pf2e.overridePriority
+pf2e-hud.delayed
+setInitiativeFromDrop
+flags.pf2e-hud.delayed

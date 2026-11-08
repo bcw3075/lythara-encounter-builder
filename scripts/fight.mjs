@@ -8,7 +8,7 @@ import { readMap, partySize, suggestedLevel } from "./builder.mjs";
 import { aimArea, aimWords, alliesCaught, burstReachable, caughtBy, shapeOf, squaresNear } from "./area.mjs";
 import { MAX_TRIES, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, stallOf, text, waitSeconds } from "./brain.mjs";
 
-const ID = "lythara-encounter-builder", WORKBENCH = "xdy-pf2e-workbench", TOOLBELT = "pf2e-toolbelt", VISIONER = "pf2e-visioner", GROUND_RADIUS = 10, STEP_MS = 20000, SETTLE_MS = 400, SCENE_MS = 30000, RESUMABLE = ["ready", "running", "held", "stopped", "saves"];
+const ID = "lythara-encounter-builder", WORKBENCH = "xdy-pf2e-workbench", TOOLBELT = "pf2e-toolbelt", VISIONER = "pf2e-visioner", HUD = "pf2e-hud", GROUND_RADIUS = 10, STEP_MS = 20000, SETTLE_MS = 400, SCENE_MS = 30000, RESUMABLE = ["ready", "running", "held", "stopped", "saves"];
 export const runnerName = () => game.settings.get(ID, "runner");
 const runner = () => game.users.getName(runnerName());
 const isRunner = () => game.user.isGM && runner()?.id === game.user.id;
@@ -284,6 +284,7 @@ async function onTurnChange(combat) {
   const mine = Object.values(turns(combat).requests).filter(r => r.combatantId === combatant.id && r.round === combat.round);
   if (mine.some(r => !r.delayed)) return;
   const afterDelay = mine.length > 0;
+  if (afterDelay && combatant.getFlag(HUD, "delayed")) await combatant.unsetFlag(HUD, "delayed").catch(e => console.warn(`${ID} | HUD delayed flag`, e));   /* back in the order: the tracker's hourglass goes */
   starting.add(key);
   try {
     await new Promise(r => setTimeout(r, SETTLE_MS));   /* start-of-turn effects; how long is enough is still to be measured */
@@ -848,7 +849,9 @@ async function runInteract(combat, id, i, step, tok) {
         if (roll.total < step.flat) await addNote(combat, id, `Its Interact failed its DC ${step.flat} flat check (${roll.total}): it is grabbed. The action is spent.`);
       } else if (now === "post") {
         stopAiming(); await record({ started: true });
-        const what = foundry.utils.escapeHTML(step.what ?? "");
+        /* the thinker writes labels; the card is read by people, so labels become token names (only names the fight already shows in its tracker) */
+        const labels = turns(combat).labels ?? {}, nameOf = l => { const a = Object.entries(labels).find(([, v]) => v === l); return a ? combat.scene.tokens.get(a[0])?.name ?? null : null; };
+        const what = foundry.utils.escapeHTML(String(step.what ?? "").replace(/\b[EM]\d{1,3}\b/g, l => nameOf(l) ?? l));
         const message = await watched(() => ChatMessage.implementation.create({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), content: `<p><strong>Interact</strong> <span class="action-glyph">1</span>: ${what}</p>` }));
         /* the record and the GM's instruction in one save, so a reload can't keep one without the other */
         await save(combat, id, { log: { [i]: { posted: { message: message?.id ?? null } } }, note: joinNote(combat, id, `Apply what it does from its Interact card.`) });
@@ -877,8 +880,16 @@ async function runDelay(combat, id, i, step, tok) {
   const priority = (other.overridePriority?.(other.initiative) ?? other.actor?.initiative?.tiebreakPriority ?? 3) + 0.5;
   await record({ ended: true, after: { id: other.id, initiative: other.initiative, priority } });
   await combat.nextTurn();
+  const nextId = combat.combatant?.id ?? null;   /* whose turn it is now: the pointer must still name them after the re-sort */
   await combat.setMultipleInitiatives([{ id: me.id, value: other.initiative, statistic: me.actor?.system?.initiative?.statistic ?? "perception", overridePriority: priority }]);
-  await record({ moved: true });
+  /* seen live (0.12.0 test build): the server's turn number stayed where nextTurn put it, which after the re-sort named the monster again (core keeps
+     the current creature in each page's copy only, and PF2e's own fix sends nothing when the copy already agrees), so save the pointer ourselves */
+  const keep = combat.turns.findIndex(c => c.id === nextId);
+  if (nextId && keep >= 0) await combat.update({ turn: keep }, { diff: false, turnEvents: false });
+  /* PF2e HUD's tracker marks a delayed creature with its own flag (its hourglass button sets it, and a second press brings the creature back right after
+     the current one): the module sets the same flag so the tracker shows the monster delayed, and clears it when its turn comes back (onTurnChange) */
+  if (game.modules.get(HUD)?.active) await me.setFlag(HUD, "delayed", true).catch(e => console.warn(`${ID} | HUD delayed flag`, e));
+  await record({ moved: true, turn: keep });
   return "delayed";
 }
 async function runTakeCover(combat, id, i, tok) {
