@@ -61,7 +61,7 @@ export const live = (ev, req) => ev.kind === "stall" ? stallLive(ev, req) : !!re
 /* ---------- stalls (Rhea, 2026-11-08) ---------- */
 /** How long a turn may sit before it counts as stalled: machine work (an action running, or the thinker's plan not in) 60 s; anything waiting on a person
     (a save, a card to apply, a stopped turn) 3 minutes. A turn waiting for the GM's Next step without Auto is normal and never stalls, nor does Held. */
-export const STALL_MS = { machine: 60000, person: 180000 };
+export const STALL_MS = { machine: 60000, person: 180000, extending: 240000 };
 const STALL_KIND = { requested: "machine", submitted: "machine", running: "machine", extending: "machine", saves: "person", stopped: "person", fled: "person" };
 /** Is this request stalled now? since: when it last moved on (state, step or a stage's record), on the server clock. auto: the monster's Auto box. */
 export function stallOf(req, { now, auto = false, machineMs = STALL_MS.machine } = {}) {
@@ -69,7 +69,7 @@ export function stallOf(req, { now, auto = false, machineMs = STALL_MS.machine }
   /* a request with no packet, or refused for the last time, waits on the GM, not on the thinker */
   const gm = req.state === "requested" && (!req.packet || (req.tries ?? 0) >= MAX_TRIES);
   const kind = gm ? "person" : STALL_KIND[req.state] ?? (req.state === "ready" && auto ? "person" : null); if (!kind) return null;
-  const waited = now - req.since; return waited >= (kind === "machine" ? machineMs : STALL_MS.person) ? { kind, state: gm ? "gm" : req.state, since: req.since, waited } : null;
+  const waited = now - req.since; return waited >= (kind === "machine" ? (req.state === "extending" ? Math.max(machineMs, STALL_MS.extending) : machineMs) : STALL_MS.person) ? { kind, state: gm ? "gm" : req.state, since: req.since, waited } : null;
 }
 /** A stall event matters while the request is still stuck at the same point. */
 export const stallLive = (ev, req) => !!req?.stall && req.stall.since === ev.since && req.since === ev.since && !["done", "manual", "held"].includes(req.state);

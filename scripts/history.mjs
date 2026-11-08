@@ -101,9 +101,9 @@ export function historyOf(t = {}, fight = {}, names = {}, look = {}) {
     turn.parts.push(partOf(id, r, look, n)); turns.set(key, turn);
   }
   /* a monster brought back (Rhea, 2026-11-08): one line in the round it returned, under its name; the escape line stays with the turn it fled on */
-  for (const [tokenId, e] of Object.entries(t.escaped ?? {})) { if (!e?.returned || !Number.isFinite(e.returned.round)) continue;
+  for (const [reqId, e] of Object.entries(t.escaped ?? {})) { if (!e?.returned || !Number.isFinite(e.returned.round)) continue;
     const turns = rounds.get(e.returned.round) ?? new Map(); rounds.set(e.returned.round, turns);
-    turns.set(`${e.returned.round}.back.${tokenId}`, { key: `${e.returned.round}.back.${tokenId}`, combatantId: null, name: e.name ?? names[tokenId] ?? "A monster", angel: false, returned: true, parts: [], idx: 998 }); }
+    turns.set(`${e.returned.round}.back.${reqId}`, { key: `${e.returned.round}.back.${reqId}`, combatantId: null, name: e.name ?? names[e.tokenId] ?? "A monster", angel: false, returned: true, parts: [], idx: 998 }); }
   for (let round = 1; round <= (fight.round ?? 0); round++) {
     const turns = rounds.get(round) ?? new Map();
     order.forEach((c, i) => { if (!c.npc || turns.has(`${round}.${c.id}`)) return; if (round === fight.round && i >= (fight.turn ?? 0)) return;

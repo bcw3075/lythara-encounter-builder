@@ -141,3 +141,6 @@ pxPerSq
 sqFt
 squareCosts
 tune
+
+# lythara-survey-sheet (its API this module calls)
+extendEncounter

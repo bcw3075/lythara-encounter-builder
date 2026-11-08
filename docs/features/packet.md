@@ -11,6 +11,7 @@ What a monster perceives: the packet built at the start of its turn, senses, lig
 (none recorded yet)
 
 ## How it works
+- **Hidden allies are left out (0.11.0):** `buildPacket` lists only allies that aren't hidden, so a GM-hidden or escaped ally never reaches the thinker with its square and health; `knownTo` already did the same. See `docs/features/fleeing.md`.
 - **The next diagonal in the packet:** `you.nextDiagonal` (5 or 10) says what the monster's next diagonal costs after what it has moved this turn (`nextDiagonalFt`, from the token's movement history), because the thinker can't see that history and a diagonal Step at 10 is refused.
 - **"Down" (0.9.0, Rhea):** `healthWord` says "Down" at 0 HP unless the creature is dead (core's Dead status, or a monster at 0 HP that isn't dying or unconscious), where PF2e HUD's list says its word for 0 HP.
 Worked out by the module, on the runner, with the fight open. Visioner can't answer it alone: with its automatic system off it says "observed" for a pair with no record, walls or no walls, and a monster token isn't a vision source (tested). Rules: Perception and Detection (https://2e.aonprd.com/Rules.aspx?ID=2400), Light (https://2e.aonprd.com/Rules.aspx?ID=2401).

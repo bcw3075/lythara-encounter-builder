@@ -276,9 +276,13 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("flee costs an action and is a move", COSTS.flee === 1 && isMove({ do: "flee" }) && STEP_KINDS.includes("flee") && spentBy([{ do: "flee" }]).actions === 1);
   check("flee done words", doneStep({ do: "flee", to: [0, 1] }, { moved: { to: [0, 1] } }).result === "reached the map's edge" && doneStep({ do: "flee", to: [0, 1] }, { moved: { to: [2, 3] } }).result === "stopped at [2, 3]");
   check("extended change in words", /extended to the north.*renumber|shifted/.test(describeChanges([{ who: "me", what: "extended", side: "north" }])) && !/shifted/.test(describeChanges([{ who: "me", what: "extended", side: "east" }])));
-  check("fled waits on a person, extending on the machine", stallOf({ state: "fled", since: 0 }, { now: 181000 })?.kind === "person" && stallOf({ state: "fled", since: 0 }, { now: 61000 }) === null && stallOf({ state: "extending", since: 0 }, { now: 61000 })?.kind === "machine" && /edge/.test(stallWords({ state: "fled", waited: 1000 })));
+  check("fled waits on a person, extending on the machine", stallOf({ state: "fled", since: 0 }, { now: 181000 })?.kind === "person" && stallOf({ state: "fled", since: 0 }, { now: 61000 }) === null && stallOf({ state: "extending", since: 0 }, { now: 250000 })?.kind === "machine" && /edge/.test(stallWords({ state: "fled", waited: 1000 })));
   check("extending counts as busy", requestBusy({ state: "extending" }) && requestBusy({ state: "fled", extend: "north" }) && !requestBusy({ state: "fled" }));
   check("prompt teaches flee", /"do": "flee"/.test(promptText({ canDo: Object.keys(COSTS), stepKinds: STEP_KINDS })) && /fleeing condition/.test(promptText({})));
+  check("a Large monster flees to the south-east corner", checkPlan({ steps: [{ do: "flee", to: [10, 10] }] }, { ...fctx, me: { square: [8, 8], size: 2 } }).steps?.[0]?.sides.join() === "east,south");
+  check("already on the ring: must move", /already at/.test(checkPlan({ steps: [{ do: "flee", to: [0, 1] }] }, { ...fctx, me: { square: [0, 1], size: 1 } }).reason ?? ""));
+  check("flee with no actions left refused", !checkPlan({ steps: [{ do: "flee", to: [0, 1] }] }, { ...fctx, actions: 0 }).ok);
+  check("extending stall words and busy", /extending/.test(stallWords({ state: "extending", waited: 1000 })) && !requestBusy({ state: "fled", extend: null }) && stallOf({ state: "extending", since: 0 }, { now: 200000 }) === null && stallOf({ state: "extending", since: 0 }, { now: 250000 })?.kind === "machine");
   check("cleanPlan accepts flee", cleanPlan({ steps: [{ do: "flee", to: [0, 1], why: "hurt" }] }).ok);
   check("but not 3 by 2", !checkPlan({ steps: [{ do: "stride", to: [3, 3] }, st({ item: "jaws", target: "E1" })] }, mctx).ok);
   check("two strides from where the first ended", checkPlan({ steps: [{ do: "stride", to: [3, 5] }, { do: "stride", to: [5, 4] }, st({ item: "bite", target: "E1" })] }, mctx).ok);
@@ -835,11 +839,15 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("history HTML: folds, links, escapes", /<details[^>]*open/.test(html) && /data-message="a2"/.test(html) && /played by the GM/.test(html));
   { const t2 = { labels: { t: "M1" }, requests: { a: { round: 1, combatantId: "c", tokenId: "t", state: "done", pos: 1, plan: { reason: "run", steps: [{ do: "flee", to: [0, 1], why: "hurt" }] }, steps: [{ do: "flee", from: [3, 3], to: [0, 1], cost: 20, sides: ["west"] }], log: { 0: { moved: { to: [0, 1], cost: 20 } } }, escaped: { name: "Wolf", xp: 30, at: 5 }, note: "Wolf got away (30 XP not earned)." },
       b: { round: 2, combatantId: "d", tokenId: "u", state: "fled", pos: 1, plan: { steps: [{ do: "flee", to: [0, 1] }] }, steps: [{ do: "flee", from: [3, 3], to: [0, 1], cost: 20, sides: ["west"] }], log: { 0: { moved: { to: [0, 1], cost: 20 } } } } },
-      escaped: { t: { name: "Wolf", xp: 30, round: 1, returned: { round: 2, at: 9 } } } };
+      escaped: { a: { tokenId: "t", name: "Wolf", xp: 30, round: 1, returned: { round: 2, at: 9 } } } };
     const rd = historyOf(t2, { round: 2, turn: 0, current: "d", order: [{ id: "c", name: "Wolf", npc: true }, { id: "d", name: "Goblin", npc: true }] }, { t: "Wolf", u: "Goblin" });
     const l1 = rd[0].turns[0].parts[0].lines, l2 = rd[1].turns.find(x => x.combatantId === "d").parts[0].lines;
     check("history: escape line, once", l1.filter(l => /Escaped: Wolf got away \(30 XP not earned\)/.test(l.text)).length === 1 && !l1.some(l => /got away\./.test(l.text)));
     check("history: at the edge line", l2.some(l => /At the map's edge/.test(l.text)));
+    const rd2 = historyOf({ ...t2, requests: { ...t2.requests, b: { ...t2.requests.b, state: "done", extended: "west", note: "x" } } }, { round: 2, turn: 0, current: "d", order: [{ id: "c", name: "Wolf", npc: true }, { id: "d", name: "Goblin", npc: true }] }, { t: "Wolf", u: "Goblin" });
+    check("history: extended line and the note", rd2[1].turns.find(x => x.combatantId === "d").parts[0].lines.some(l => /extended the map to the west/.test(l.text)) && rd2[1].turns.find(x => x.combatantId === "d").parts[0].lines.some(l => l.text === "x"));
+    check("history: a returned entry sorts after the turns", rd[1].turns.at(-1).returned === true);
+    check("history: the escape note is the latest note", /got away/.test(latestNote({ a: { ...t2.requests.a, at: 1 } })?.note ?? ""));
     check("history: brought back line", rd[1].turns.some(x => x.returned && x.name === "Wolf") && /brought back into the fight/.test(historyHTML(rd, esc)) && /brought back/.test(journalHTML(rd, esc)));
   }
   check("history HTML escapes", !/<b>x<\/b>/.test(historyHTML(historyOf({ requests: { z: { round: 1, combatantId: "c", tokenId: "t", plan: { reason: "<b>x</b>", steps: [] }, steps: [] } } }, { round: 1, order: [] }, { t: "T" }), esc)));

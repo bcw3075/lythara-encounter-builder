@@ -11,6 +11,7 @@ The module's glue: settings, the Encounters left-bar group, hooks and the `api` 
 (none recorded yet)
 
 ## How it works
+- **`pauseGame` hook (0.11.0):** redraws the Monster Turns window, whose card says when Auto is waiting on the game's pause (`docs/features/turn-loop.md`).
 **Design-era text (from the plan; where it and the lines above disagree, the lines above, written from the code, win):**
 **The design in one page**
 1. **Rhea clicks Build Encounter on a Survey Sheet map.** The mod reads the map. A Claude chat or Rhea by hand fills in a brief: which creatures, why they are here, what treasure. She sees a preview, then the mod places everything and files a GM journal. Numbers and names come from Notion or the rules, not the mod.
