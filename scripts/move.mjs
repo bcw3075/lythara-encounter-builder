@@ -8,11 +8,14 @@ const SQUARE_DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1],
     every second diagonal counting double. At different heights the vertical gap counts as a third axis (elevation in feet, depth in squares, which is
     the token's own depth, its size by default); at the same height it doesn't. With reach 10 it takes 5 ft off when the line has more than one
     diagonal, which is the rule that 10-foot reach reaches two squares diagonally. a, b: { x, y, size, elev, depth } in squares (elev in feet).
-    Checked against `distanceTo` live for Medium and Large at one height (2026-11-07). */
+    Checked against `distanceTo` live for Medium and Large at one height (2026-11-07). x and y may be fractional for a token off the grid: as PF2e does,
+    the overlap test uses where it really is, and then each creature's edges are snapped to the grid toward the other before the squares are counted, so
+    a creature half a square off is measured from the nearer square (a Small goblin at x 23.5 next to a creature at x 22 is 5 ft away, not 10). */
 export function distanceBetween(a, b, { reach = null } = {}) {
   const sa = a.size ?? 1, sb = b.size ?? 1;
-  const overX = b.x < a.x + sa && b.x + sb > a.x, overY = b.y < a.y + sa && b.y + sb > a.y;
-  const flat = overX && overY, dx = flat ? 0 : Math.max(b.x - (a.x + sa), a.x - (b.x + sb), 0) + 1, dy = flat ? 0 : Math.max(b.y - (a.y + sa), a.y - (b.y + sb), 0) + 1;
+  const overX = b.x < a.x + sa && b.x + sb > a.x, overY = b.y < a.y + sa && b.y + sb > a.y, flat = overX && overY;
+  const snap = (v, other) => (v < other ? Math.ceil : Math.floor)(v), ax = snap(a.x, b.x), bx = snap(b.x, a.x), ay = snap(a.y, b.y), by = snap(b.y, a.y), wa = Math.ceil(sa), wb = Math.ceil(sb);
+  const dx = flat ? 0 : Math.max(bx - (ax + wa), ax - (bx + wb), 0) + 1, dy = flat ? 0 : Math.max(by - (ay + wa), ay - (by + wb), 0) + 1;
   let dz = 0;
   if ((a.elev ?? 0) !== (b.elev ?? 0)) {
     const ta = (a.elev ?? 0) / FT, tb = (b.elev ?? 0) / FT, da = a.depth ?? sa, db = b.depth ?? sb;

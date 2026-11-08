@@ -208,6 +208,19 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
     const a = { x: 18 + ox + (ox < 0 ? -(size - 1) : 0), y: 35 + oy + (oy < 0 ? -(size - 1) : 0), size }, b = { x: 18, y: 35, size: 1 };
     check(`distance ${size} ${ox},${oy}`, distanceBetween(a, b) === plain && distanceBetween(a, b, { reach: 10 }) === r10 && distanceBetween(b, a) === plain, `${distanceBetween(a, b)} ${distanceBetween(a, b, { reach: 10 })}`);
   }
+  /* off the grid (0.8.3): PF2e snaps each creature's edges toward the other, so a Small goblin at x 23.5 beside a creature at x 22 is 5 ft away (found
+     2026-11-07 night, when the check measured from the rounded square, 10 ft, and refused a Strike the packet called 5 ft) */
+  check("off-grid next to it is 5", distanceBetween({ x: 23.5, y: 19.5 }, { x: 22, y: 19 }) === 5 && distanceBetween({ x: 22, y: 19 }, { x: 23.5, y: 19.5 }) === 5);
+  check("off-grid two squares off is 10", distanceBetween({ x: 24.5, y: 19.5 }, { x: 22, y: 19 }) === 10 && distanceBetween({ x: 23.5, y: 19.5 }, { x: 21, y: 19 }) === 10);
+  check("off-grid half overlapping is 0", distanceBetween({ x: 22.5, y: 19.5 }, { x: 22, y: 19 }) === 0 && distanceBetween({ x: 23, y: 19.5 }, { x: 22, y: 19 }) === 5);
+  check("off-grid Large and reach 10", distanceBetween({ x: 25.5, y: 22.5, size: 2 }, { x: 22, y: 19 }) === 20 && distanceBetween({ x: 25.5, y: 22.5, size: 2 }, { x: 22, y: 19 }, { reach: 10 }) === 15 && distanceBetween({ x: 25.5, y: 22.5, size: 2 }, { x: 22, y: 19 }) === distanceBetween({ x: 25, y: 22, size: 2 }, { x: 22, y: 19 }));
+  check("on the grid unchanged", distanceBetween({ x: 24, y: 20 }, { x: 22, y: 19 }) === 10);
+  {
+    const og = { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 5 }], me: { square: [24, 20], pos: [23.5, 19.5], size: 1 }, targets: { E1: { name: "E1", square: [22, 19], pos: [22, 19], size: 1 } }, speed: 25, route: (f, t) => ({ ok: true, route: [f, t], cost: 5 }) };
+    check("off-grid Strike measured where it stands", checkPlan({ steps: [{ do: "strike", item: "jaws", target: "E1" }] }, og).ok);
+    check("off-grid target measured where it stands", checkPlan({ steps: [{ do: "strike", item: "jaws", target: "E1" }] }, { ...og, me: { square: [21, 18], size: 1 }, targets: { E1: { name: "E1", square: [23, 20], pos: [22.5, 19.5], size: 1 } } }).ok);
+    check("after a move, measured from the new square", /out of reach/.test(checkPlan({ steps: [{ do: "stride", to: [26, 20] }, { do: "strike", item: "jaws", target: "E1" }] }, og).reason ?? ""));
+  }
   check("overlap is 0", distanceBetween({ x: 3, y: 3, size: 2 }, { x: 4, y: 4 }) === 0); check("footprint", footprintAt([2, 3], 2).map(p => p.join()).join(" ") === "2,3 3,3 2,4 3,4");
   /* a 12x12 world: difficult squares, a wall line, creatures */
   const W = ({ diff = [], deep = [], solid = [], who = {}, wall = () => false } = {}) => ({ cols: 12, rows: 12, terrain: (i, j) => deep.some(p => p[0] === i && p[1] === j) ? null : diff.some(p => p[0] === i && p[1] === j) ? 1 : 0,

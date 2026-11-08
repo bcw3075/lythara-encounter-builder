@@ -40,7 +40,8 @@ export const listWords = (xs = []) => xs.length < 2 ? xs.join("") : `${xs.slice(
 
 /** Check a plan against what the glue gathered. Returns { ok: true, steps } with each step resolved, or { ok: false, reason }.
     ctx: { actions (left this turn), attacksBefore (attacks already made this turn, for the multiple attack penalty), strikes: [{ id, name, reach, ranged, maxRange }],
-    targets: { label: { name, square, size, elev, depth, flat } or { name, distance, flat } }, me: { square, size, elev, depth }, speed (land), cantAct (why it can't act at all, or null),
+    targets: { label: { name, square, pos, size, elev, depth, flat } or { name, distance, flat } }, me: { square, pos, size, elev, depth } (pos: where the token
+    really is, in squares, fractional off the grid; distances use it, routes and occupancy the rounded square), speed (land), cantAct (why it can't act at all, or null),
     cantMove (why it can't use any move action, Stand included: grabbed, immobilized, restrained; or null), cantAttack (why it can't Strike, or null), prone (whether it starts the plan prone),
     route(from, to, before, { step, kind }) → { ok, route, cost } or { ok: false, reason }, before being the routes of this plan's earlier moves (the diagonal count
     runs across the turn), step asking for a single 5-ft square (a Step or a Crawl, named by kind) rather than a Stride }. Only what the monster perceives is in
@@ -61,8 +62,9 @@ export const listWords = (xs = []) => xs.length < 2 ? xs.join("") : `${xs.slice(
     coverFrom too. A Sneak goes like a Stride at half Speed; a Seek must be the plan's last step (it is asked again after, with what it found). */
 export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
-  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {};
-  const distanceTo = (t, reach) => here && t.square ? distanceBetween({ x: here[0], y: here[1], size: ctx.me.size ?? 1, elev: ctx.me.elev, depth: ctx.me.depth }, { x: t.square[0], y: t.square[1], size: t.size ?? 1, elev: t.elev, depth: t.depth }, { reach }) : t.distance;
+  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, herePos = ctx.me?.pos ?? here, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {};
+  /* distances from where each creature really stands (pos, fractional off the grid), as PF2e and the packet measure them; after a move, from the square it moved to */
+  const distanceTo = (t, reach) => { const p = t.pos ?? t.square; return herePos && p ? distanceBetween({ x: herePos[0], y: herePos[1], size: ctx.me.size ?? 1, elev: ctx.me.elev, depth: ctx.me.depth }, { x: p[0], y: p[1], size: t.size ?? 1, elev: t.elev, depth: t.depth }, { reach }) : t.distance; };
   for (const [n, step] of plan.steps.entries()) {
     const at = `Step ${n + 1}`;
     if (!(step.do in COSTS)) return { ok: false, reason: `${at}: I can't do "${step.do}" yet.` };
@@ -168,7 +170,7 @@ export function checkPlan(plan, ctx) {
       if (small && way.cost > STEP_FT) return { ok: false, reason: `${at}: ${step.do === "crawl" ? "crawling" : "stepping"} to [${step.to[0]}, ${step.to[1]}] counts as ${way.cost} ft, and a ${word} moves only ${STEP_FT} ft${way.route?.length === 2 && way.route[0][0] !== way.route[1][0] && way.route[0][1] !== way.route[1][1] ? " (every second diagonal in a turn counts 10 ft)" : ""}.` };
       if (way.cost > limit) return { ok: false, reason: step.do === "sneak" ? `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, and a Sneak moves at most half its Speed (${limit} ft).` : `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, more than its Speed of ${ctx.speed} ft.` };
       steps.push({ do: step.do, from: [...here], to: [...step.to], route: way.route, cost: way.cost }); routes.push(way.route);
-      here = [...step.to]; moved = true; took = tookProne = false; last = { do: step.do }; continue;
+      here = [...step.to]; herePos = here; moved = true; took = tookProne = false; last = { do: step.do }; continue;
     }
     if (ctx.cantAttack) return { ok: false, reason: `${at}: ${ctx.cantAttack}` };
     const s = ctx.strikes.find(x => x.id === step.item); if (!s) return { ok: false, reason: `${at}: it has no attack called "${step.item}".` };
