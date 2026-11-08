@@ -497,6 +497,13 @@ function eventChange(kind, requestId, tries, extra = {}) {
   const seq = nextSeq(Math.max(0, ...game.combats.contents.flatMap(c => Object.keys(turns(c).events ?? {}).map(Number))), Date.now());
   return { [`events.${seq}`]: { seq, kind, requestId, tries, ...extra } };
 }
+/** A turn Auto finished but never ended: its END_MS timer lived on a page that reloaded in between (found in the second measured run, 2026-11-08).
+    The runner's 10 s check ends it, as endAfter would have. Only the current creature's latest request, done, Auto still ticked. */
+function endLeftOver(combat) {
+  if (!combat.started || !combat.combatant) return;
+  const [id, r] = Object.entries(turns(combat).requests ?? {}).filter(([, x]) => x.combatantId === combat.combatant.id && x.round === combat.round).sort((a, b) => (b[1].at ?? 0) - (a[1].at ?? 0))[0] ?? [];
+  if (r?.state === "done" && Number.isFinite(r.since) && clock() - r.since > END_MS + 3000) endAfter(combat, id);
+}
 /** The stall check, on the runner every 10 s (Rhea, 2026-11-08): a turn that has sat past its limit (brain.mjs's stallOf) is marked on its request,
     which turns the GM's card amber, and Angel gets a "stall" event to look into it. Card only, no chat (her rule: no whispered cards). Anything the
     turn does next moves `since` on, which clears the mark. */
@@ -504,7 +511,8 @@ let stallTimer = null;
 export function watchStalls() { clearInterval(stallTimer); stallTimer = setInterval(() => { if (isRunner()) checkStalls().catch(e => console.warn(`${ID} | stalls`, e)); }, 10000); }
 async function checkStalls() {
   for (const combat of fights()) {
-    const r = currentRequest(combat); if (!r) continue;
+    const r = currentRequest(combat);
+    if (!r) { endLeftOver(combat); continue; }
     if (!Number.isFinite(r.since)) { await saveTurns(combat, { [`requests.${r.id}.since`]: clock() }); continue; }   /* a request from before 0.9.0 */
     const tok = combat.scene?.tokens.get(r.tokenId), s = stallOf(r, { now: clock(), auto: !!tok?.getFlag(ID, "auto"), machineMs: Math.max(60000, autoPause() * 1000 + 30000) });   /* a long Auto pause isn't a stall */
     if (!s || r.stall?.since === s.since) continue;
