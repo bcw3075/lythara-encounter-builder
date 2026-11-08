@@ -76,7 +76,10 @@ function partOf(id, r, look, n) {
   });
   for (const p of presses.filter(p => (p.pos ?? 0) >= steps.length)) lines.push(pressLine(p));
   if (r.stall) lines.push({ kind: "stall", text: `Stalled ${Math.round((r.stall.waited ?? 0) / 1000)} s (${r.stall.state}).` });
-  if (r.note) lines.push({ kind: "note", text: n.named(r.note) });
+  if (r.escaped) lines.push({ kind: "end", text: `Escaped: ${r.escaped.name ?? "it"} got away${r.escaped.xp != null ? ` (${r.escaped.xp} XP not earned)` : ""}.` });
+  else if (r.extended) lines.push({ kind: "note", text: `You extended the map to the ${r.extended}; the monster kept its turn.` });
+  else if (r.state === "fled") lines.push({ kind: "note", text: "At the map's edge, waiting for you." });
+  if (r.note && !r.escaped) lines.push({ kind: "note", text: n.named(r.note) });
   if (r.why && !r.parent && !r.replanned) lines.push({ kind: "end", text: `The turn ended: ${n.named(describeChanges(r.why, n.nameOf))}` });
   const end = r.state === "manual" ? "You played the rest yourself." : r.gaveUp ? `Angel gave up: ${n.named(r.verdict ?? "")}` : r.replanned ? "Asked again (below)." : /^Couldn't do/.test(r.verdict ?? "") ? `${n.named(r.verdict)} You played the turn.` : null;
   if (end) lines.push({ kind: "end", text: end });
@@ -97,6 +100,10 @@ export function historyOf(t = {}, fight = {}, names = {}, look = {}) {
     const turn = turns.get(key) ?? { key, combatantId: r.combatantId, name: c?.name ?? names[r.tokenId] ?? "A monster", angel: true, parts: [], idx: at(r.combatantId) };
     turn.parts.push(partOf(id, r, look, n)); turns.set(key, turn);
   }
+  /* a monster brought back (Rhea, 2026-11-08): one line in the round it returned, under its name; the escape line stays with the turn it fled on */
+  for (const [tokenId, e] of Object.entries(t.escaped ?? {})) { if (!e?.returned || !Number.isFinite(e.returned.round)) continue;
+    const turns = rounds.get(e.returned.round) ?? new Map(); rounds.set(e.returned.round, turns);
+    turns.set(`${e.returned.round}.back.${tokenId}`, { key: `${e.returned.round}.back.${tokenId}`, combatantId: null, name: e.name ?? names[tokenId] ?? "A monster", angel: false, returned: true, parts: [], idx: 998 }); }
   for (let round = 1; round <= (fight.round ?? 0); round++) {
     const turns = rounds.get(round) ?? new Map();
     order.forEach((c, i) => { if (!c.npc || turns.has(`${round}.${c.id}`)) return; if (round === fight.round && i >= (fight.turn ?? 0)) return;
@@ -123,12 +130,12 @@ export function historyHTML(rounds, esc, { links = true, open = () => true } = {
   if (!rounds.length) return "<p><em>Nothing yet: monster turns show here as they happen.</em></p>";
   return rounds.map(rd => `<section class="leb-h-round"><h3>Round ${rd.round}</h3>${rd.turns.map(t => t.angel
     ? `<details class="leb-h-turn${t.current ? " leb-h-cur" : ""}" data-key="${esc(t.key)}" ${open(t.key, t) ? "open" : ""}><summary><b>${esc(t.name)}</b>${t.current ? " (now)" : ""}${t.parts.length > 1 ? ` <span class="leb-h-by">· asked ${t.parts.length - 1} more time${t.parts.length > 2 ? "s" : ""}</span>` : ""}</summary>${t.parts.map(p => partHTML(p, esc, { links })).join('<hr class="leb-h-sep">')}</details>`
-    : `<p class="leb-h-gm"><b>${esc(t.name)}</b>: played by the GM.</p>`).join("")}</section>`).join("");
+    : `<p class="leb-h-gm"><b>${esc(t.name)}</b>: ${t.returned ? "brought back into the fight." : "played by the GM."}</p>`).join("")}</section>`).join("");
 }
 /** The journal page: the same, plain, everything unfolded, no buttons. */
 export function journalHTML(rounds, esc, { title = "", when = "" } = {}) {
   const body = rounds.map(rd => `<h2>Round ${rd.round}</h2>${rd.turns.map(t => t.angel
     ? `<h3>${esc(t.name)}</h3>${t.parts.map(p => partHTML(p, esc, { links: false })).join("<hr>")}`
-    : `<p><b>${esc(t.name)}</b>: played by the GM.</p>`).join("")}`).join("");
+    : `<p><b>${esc(t.name)}</b>: ${t.returned ? "brought back into the fight." : "played by the GM."}</p>`).join("")}`).join("");
   return `<p><em>${esc(title)}${when ? ` · ${esc(when)}` : ""}</em></p>${body || "<p>No monster turns were recorded.</p>"}`;
 }

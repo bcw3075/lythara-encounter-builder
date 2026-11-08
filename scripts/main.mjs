@@ -60,6 +60,7 @@ Hooks.on("updateChatMessage", (message, change) => { onMessageUpdate(message, ch
 Hooks.on("preUpdateCombatant", (combatant, change, options) => { keepTurn(combatant, change, options); });
 Hooks.on("updateCombatant", (combatant, change, options, userId) => { saveTurn(combatant, options, userId); });
 Hooks.on("renderChatMessageHTML", (message, html) => { onRenderMessage(message, html); });
+Hooks.on("pauseGame", () => { redrawTurns(); });   /* the card says when Auto is waiting on the pause */
 Hooks.on("updateCombat", (combat, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}`) || "turn" in change || "round" in change) redrawHistory(); if (turnsApp?.rendered && (foundry.utils.hasProperty(change, `flags.${ID}`) || "turn" in change || "round" in change)) turnsApp.render(); onCombatUpdate(combat, change); });
 Hooks.on("updateToken", (tok, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}`)) redrawTurns(); onTokenFlag(tok, change); });
 Hooks.on("userConnected", () => { redrawTurns(); });

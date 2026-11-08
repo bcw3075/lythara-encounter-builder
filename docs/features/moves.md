@@ -8,7 +8,7 @@ since: 0.10.0
 Stride, Step and Crawl: routes, costs by Foundry's own measurement, what bars moving, `move.mjs`.
 
 ## Decisions
-(none recorded yet)
+- **`flee` is a move (0.11.0):** checked and run exactly like a Stride (prone, Speed, route, Foundry's cost), plus it must end on the outermost ring of squares and be the plan's last step; `routeWords` knows the word. The rest of it is `docs/features/fleeing.md`.
 
 ## How it works
 - **Strides (0.4.6).** A plan step `{ do: "stride", to: [x, y] }`, squares being map squares from the top-left (a creature's square is its top-left one). `checkPlan` replays the plan from where the monster stands: a Stride moves where every later step is measured from, and costs an action.

@@ -3,7 +3,7 @@
 import { distanceBetween, headingOf } from "./move.mjs";
 import { placeable } from "./area.mjs";
 /** What each step kind costs. An ability's cost is its own (0 for a free action); 1 here is only the fallback. */
-export const COSTS = { strike: 1, stride: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, none: 0 };
+export const COSTS = { strike: 1, stride: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, flee: 1, none: 0 };
 /** A basic save's damage by the target's degree of success, 0 critical failure to 3 critical success: double, full, half, none. Rules: Basic Saving Throws
     (https://2e.aonprd.com/Rules.aspx?ID=2297). */
 export const SAVE_MULT = [2, 1, 0.5, 0];
@@ -14,10 +14,21 @@ export const SAVE_MULT = [2, 1, 0.5, 0];
 export const FOLLOW_UPS = { grab: "grapple", "improved-grab": "grapple", knockdown: "trip", "improved-knockdown": "trip", push: "shove", "improved-push": "shove", pull: "reposition", "improved-pull": "reposition" };
 export const CHECK_WORD = { grapple: "Grapple", trip: "Trip", shove: "Shove", reposition: "Reposition" };
 const SIZES = ["tiny", "sm", "med", "lg", "huge", "grg"];
-const MOVES = ["stride", "step", "crawl", "sneak"], ONE_SQUARE = ["step", "crawl"];
+const MOVES = ["stride", "step", "crawl", "sneak", "flee"], ONE_SQUARE = ["step", "crawl"];
 /** Steps that change only whether the monster is prone, and what they leave it. Rules: Prone (https://2e.aonprd.com/Conditions.aspx?ID=88). */
 export const POSTURES = { stand: false, "drop-prone": true };
-export const WORD = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak" };
+export const WORD = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak", flee: "Flee" };
+/* Fleeing off the map (Rhea, 2026-11-08): a `flee` step is a Stride that must end on the outermost ring of squares, the map's edge, and must be the plan's
+   last step. Once the monster stands there the turn stops and the GM chooses on the card: Extend map (the monster keeps its turn and is asked again
+   from a fresh packet) or Let it get away (it leaves the fight; its token stays, hidden and flagged). Ending an ordinary Stride on the ring triggers nothing. */
+export const SIDES = ["north", "east", "south", "west"];
+/** Which edges of a cols × rows map a creature of `size` squares touches when its top-left square is `square`: [] when none. */
+export function edgeSides(square, size = 1, cols = 0, rows = 0) {
+  if (!Array.isArray(square) || !(cols > 0 && rows > 0)) return [];
+  const [x, y] = square, n = Math.max(1, size), out = [];
+  if (y <= 0) out.push("north"); if (x + n >= cols) out.push("east"); if (y + n >= rows) out.push("south"); if (x <= 0) out.push("west");
+  return out;
+}
 /** A Step or a Crawl moves 5 ft; one that Foundry would charge more for (a diagonal after an odd number this turn) is refused. Rules: Step https://2e.aonprd.com/Actions.aspx?ID=2304; Crawl (Player Core): prone, Speed 10+, 5 ft, stays prone. */
 export const STEP_FT = 5;
 /** Hide, Sneak and Seek (Rhea, 2026-11-07): PF2e's own action posts its secret card, and the module presses Visioner's own buttons on it, so Visioner alone
@@ -63,13 +74,14 @@ export const listWords = (xs = []) => xs.length < 2 ? xs.join("") : `${xs.slice(
     coverFrom too. A Sneak goes like a Stride at half Speed; a Seek must be the plan's last step (it is asked again after, with what it found). */
 export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
-  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, herePos = ctx.me?.pos ?? here, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {}, shots = {};
+  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, herePos = ctx.me?.pos ?? here, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, fled = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {}, shots = {};
   /* distances from where each creature really stands (pos, fractional off the grid), as PF2e and the packet measure them; after a move, from the square it moved to */
   const distanceTo = (t, reach) => { const p = t.pos ?? t.square; return herePos && p ? distanceBetween({ x: herePos[0], y: herePos[1], size: ctx.me.span ?? ctx.me.size ?? 1, elev: ctx.me.elev, depth: ctx.me.depth }, { x: p[0], y: p[1], size: t.pos ? t.span ?? t.size ?? 1 : t.size ?? 1, elev: t.elev, depth: t.depth }, { reach }) : t.distance; };
   for (const [n, step] of plan.steps.entries()) {
     const at = `Step ${n + 1}`;
     if (!(step.do in COSTS)) return { ok: false, reason: `${at}: I can't do "${step.do}" yet.` };
     if (sought) return { ok: false, reason: `${at}: a Seek has to be the plan's last step. You are asked again after it, with what it found.` };
+    if (fled) return { ok: false, reason: `${at}: a flee has to be the plan's last step: at the edge the GM decides, and you are asked again if the map is extended.` };
     if (step.do === "spell") {
       if (ctx.cantAct) return { ok: false, reason: `${at}: ${ctx.cantAct}` };
       const sp = (ctx.spells ?? []).find(s => s.id === step.item);
@@ -170,7 +182,14 @@ export function checkPlan(plan, ctx) {
       if (!way.ok) return { ok: false, reason: `${at}: ${way.reason}` };
       if (small && way.cost > STEP_FT) return { ok: false, reason: `${at}: ${step.do === "crawl" ? "crawling" : "stepping"} to [${step.to[0]}, ${step.to[1]}] counts as ${way.cost} ft, and a ${word} moves only ${STEP_FT} ft${way.route?.length === 2 && way.route[0][0] !== way.route[1][0] && way.route[0][1] !== way.route[1][1] ? " (every second diagonal in a turn counts 10 ft)" : ""}.` };
       if (way.cost > limit) return { ok: false, reason: step.do === "sneak" ? `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, and a Sneak moves at most half its Speed (${limit} ft).` : `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, more than its Speed of ${ctx.speed} ft.` };
-      steps.push({ do: step.do, from: [...here], to: [...step.to], route: way.route, cost: way.cost }); routes.push(way.route);
+      let sides = null;
+      if (step.do === "flee") {
+        if (!ctx.edgeAt) return { ok: false, reason: `${at}: I can't tell where this map ends, so it can't flee off it here.` };
+        sides = ctx.edgeAt(step.to, ctx.me?.size ?? 1);
+        if (!sides.length) return { ok: false, reason: `${at}: a flee has to end on the outermost ring of squares, at the map's edge; [${step.to[0]}, ${step.to[1]}] isn't on it. Stride toward the edge instead and flee once it is within reach.` };
+      }
+      steps.push({ do: step.do, from: [...here], to: [...step.to], route: way.route, cost: way.cost, ...(sides ? { sides } : {}) }); routes.push(way.route);
+      if (step.do === "flee") fled = true;
       here = [...step.to]; herePos = here; moved = true; took = tookProne = false; last = { do: step.do }; continue;
     }
     if (ctx.cantAttack) return { ok: false, reason: `${at}: ${ctx.cantAttack}` };
@@ -393,7 +412,7 @@ export function doneStep(step, rec = {}) {
   if (step.do === "hide") return { do: "hide", result: rec.applied ? "hid (whether it worked is secret)" : rec.gm ? "card posted for the GM to apply" : "unknown" };
   if (step.do === "seek") return { do: "seek", aim: step.aim, result: rec.applied ? "searched: what it perceives now shows what it found" : rec.gm ? "card posted for the GM to apply" : "unknown" };
   if (step.do === "sneak") { const got = rec.moved?.to; return { do: "sneak", to: step.to, result: `${!got ? "unknown" : same(got, step.to) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]`}${rec.applied ? " (whether it stayed unseen is secret)" : rec.gm ? "; card posted for the GM to apply" : ""}` }; }
-  if (isMove(step)) { const got = rec.moved?.to; return { do: step.do, to: step.to, result: !got ? "unknown" : same(got, step.to) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]` }; }
+  if (isMove(step)) { const got = rec.moved?.to; return { do: step.do, to: step.to, result: !got ? "unknown" : same(got, step.to) ? (step.do === "flee" ? "reached the map's edge" : "arrived") : `stopped at [${got[0]}, ${got[1]}]` }; }
   if (step.do in POSTURES) return { do: step.do, result: rec.changed || rec.stood ? (step.do === "stand" ? "stood" : "dropped") : "unknown" };
   if (step.do === "take-cover") return { do: "take-cover", result: rec.covered ? "took cover" : "unknown" };
   if (step.do === "ability") return { do: "ability", item: step.item, ...(step.target ? { target: step.target } : {}), result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.check ? CHECK_OUTCOMES[rec.check.degree] ?? "unknown" : rec.posted ? (step.mode === "hold" ? "kept hold" : "card posted for the GM to apply") : "unknown" };
@@ -445,6 +464,7 @@ export function describeChange(c, nameOf = l => l, self = "It") {
   switch (c.what) {
     case "moved": return `${who} moved.`;
     case "stopped": return `${who} was stopped at [${c.at?.[0]}, ${c.at?.[1]}], short of where it was going.`;
+    case "extended": return `The map was extended to the ${c.side ?? "edge"}: there is more ground that way now, and ${who === "It" ? "it keeps its turn" : `${who} keeps its turn`}.${c.side === "north" || c.side === "west" ? " Every square's number shifted by the new strip, so read positions afresh from this packet." : ""}`;
     case "sought": return `${who} finished Seeking: what it perceives now shows what it found.`;
     case "noShot": return `${who} couldn't shoot its ${c.item ?? "weapon"}${c.why ? ` (${c.why})` : ""}; ${c.spent ? "the action is spent (its flat check was rolled)" : "the action isn't spent"}.`;
     case "hurt": return `${who} was hurt.`;
@@ -463,7 +483,7 @@ export const describeChanges = (list = [], nameOf, self) => list.map(c => descri
 /** A resolved step in plain words, for the card. */
 export function describeStep(s) {
   if (s.do === "none") return "Does nothing.";
-  if (isMove(s)) { const way = s.from ? headingOf(s.from, s.to) : ""; return `${WORD[s.do]}s ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}${s.do === "sneak" ? " (a secret Stealth check; Visioner applies the result)" : ""}.`; }
+  if (isMove(s)) { const way = s.from ? headingOf(s.from, s.to) : ""; return `${WORD[s.do]}s ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}${s.do === "sneak" ? " (a secret Stealth check; Visioner applies the result)" : s.do === "flee" ? ` at the ${listWords(s.sides ?? [])} edge of the map: you decide whether it gets away or the map grows` : ""}.`; }
   if (s.do === "hide") return `Hides (a secret Stealth check against each creature it has cover or concealment from; Visioner applies the result).`;
   if (s.do === "seek") return s.aim?.type === "burst" ? `Seeks in a ${s.aim.size}-foot burst from the corner [${s.aim.corner[0]}, ${s.aim.corner[1]}] (a secret Perception check; Visioner applies the result).` : `Seeks in a ${s.aim?.size ?? SEEK.cone}-foot cone toward square ${s.aim?.toward?.[0]}, ${s.aim?.toward?.[1]} (a secret Perception check; Visioner applies the result).`;
   if (s.do === "stand") return "Stands up.";
@@ -607,7 +627,7 @@ export function currentOf(requests = {}, round, combatantId) {
   return Object.entries(requests).map(([id, r]) => ({ id, ...r })).filter(r => !["done", "manual"].includes(r.state) && r.round === round && r.combatantId === combatantId).at(-1) ?? null;
 }
 /** Whether a request has work in flight or about to start. Waiting on a person or a plan doesn't count. */
-export const requestBusy = r => !!r && (r.state === "running" || r.state === "submitted" || !!r.go);
+export const requestBusy = r => !!r && (r.state === "running" || r.state === "submitted" || r.state === "extending" || !!r.go || !!r.extend);
 /** The note to show between turns: only the latest finished turn's, so an old warning never outlives the turn it was about. A turn that was re-planned
     is several requests linked by `parent`, and a warning from its first part (a PC at 0 HP) still counts. */
 export function latestNote(requests = {}) {

@@ -7,7 +7,7 @@ import { PROMPT_VERSION, promptText } from "./prompt.mjs";
 
 export const PLAN_SCHEMA = 1;
 /** Every kind a plan may name. The module carries out only those in turn.mjs's COSTS so far; checkPlan turns down the rest by name. */
-export const STEP_KINDS = ["stride", "step", "crawl", "strike", "ability", "spell", "stand", "drop-prone", "seek", "hide", "sneak", "take-cover", "interact", "delay", "none"];
+export const STEP_KINDS = ["stride", "step", "crawl", "strike", "ability", "spell", "stand", "drop-prone", "seek", "hide", "sneak", "take-cover", "flee", "interact", "delay", "none"];
 export const MAX_STEPS = 8, MAX_TRIES = 2, LISTEN_MS = 120000, MAX_WAIT_S = 100;   /* run_script stops at 120 s */
 const LABEL = /^[EM]\d{1,3}$/, ITEM = /^[\w-]{1,80}$/, BY = ["chat", "api", "gm"];
 
@@ -62,7 +62,7 @@ export const live = (ev, req) => ev.kind === "stall" ? stallLive(ev, req) : !!re
 /** How long a turn may sit before it counts as stalled: machine work (an action running, or the thinker's plan not in) 60 s; anything waiting on a person
     (a save, a card to apply, a stopped turn) 3 minutes. A turn waiting for the GM's Next step without Auto is normal and never stalls, nor does Held. */
 export const STALL_MS = { machine: 60000, person: 180000 };
-const STALL_KIND = { requested: "machine", submitted: "machine", running: "machine", saves: "person", stopped: "person" };
+const STALL_KIND = { requested: "machine", submitted: "machine", running: "machine", extending: "machine", saves: "person", stopped: "person", fled: "person" };
 /** Is this request stalled now? since: when it last moved on (state, step or a stage's record), on the server clock. auto: the monster's Auto box. */
 export function stallOf(req, { now, auto = false, machineMs = STALL_MS.machine } = {}) {
   if (!req || req.gaveUp || !Number.isFinite(req.since) || !Number.isFinite(now) || now < req.since) return null;
@@ -75,7 +75,7 @@ export function stallOf(req, { now, auto = false, machineMs = STALL_MS.machine }
 export const stallLive = (ev, req) => !!req?.stall && req.stall.since === ev.since && req.since === ev.since && !["done", "manual", "held"].includes(req.state);
 /** What it's waiting on, in words for the card and the thinker. */
 export function stallWords(stall) {
-  const what = { gm: "waiting for you to play the turn", requested: "waiting for Angel's plan", submitted: "checking the plan", running: "an action has been running", saves: "waiting for a save", stopped: "stopped, waiting for you", ready: "waiting for you (a card to apply, then Next step)" }[stall?.state] ?? "not moving";
+  const what = { gm: "waiting for you to play the turn", requested: "waiting for Angel's plan", submitted: "checking the plan", running: "an action has been running", saves: "waiting for a save", stopped: "stopped, waiting for you", ready: "waiting for you (a card to apply, then Next step)", fled: "at the map's edge, waiting for you (Extend map or Let it get away)", extending: "the map has been extending" }[stall?.state] ?? "not moving";
   const m = Math.floor((stall?.waited ?? 0) / 60000), sec = Math.round((stall?.waited ?? 0) / 1000);
   return `Stalled: ${what}, for ${m >= 1 ? `${m} minute${m === 1 ? "" : "s"}` : `${sec} seconds`}.`;
 }

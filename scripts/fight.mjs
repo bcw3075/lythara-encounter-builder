@@ -1,10 +1,10 @@
 /* A fight's turns. One named account does the work (the runner: the Claude Bridge unless the setting says otherwise), on its own page with the
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
-   summarised chat loses nothing. For now it runs Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak and Seek; see claude/encounter-builder-plan.md for the rest of step 2. */
-import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES, WORD, absorbOwn, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds } from "./turn.mjs";
+   summarised chat loses nothing. For now it runs Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek and fleeing off the map; see claude/encounter-builder-plan.md for the rest of step 2. */
+import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES, SIDES, WORD, absorbOwn, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds } from "./turn.mjs";
 import { cutShort, diagonalsIn, featureNear, findRoute, findStep, footprintAt, routeWords } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
-import { readMap } from "./builder.mjs";
+import { readMap, partySize, suggestedLevel } from "./builder.mjs";
 import { aimArea, aimWords, alliesCaught, burstReachable, caughtBy, shapeOf, squaresNear } from "./area.mjs";
 import { MAX_TRIES, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, stallOf, text, waitSeconds } from "./brain.mjs";
 
@@ -332,6 +332,7 @@ function act(combat) {
   if (r.state === "submitted") judge(combat, r.id).catch(e => console.error(`${ID} | plan`, e));
   else if (r.state === "saves" && Object.values(r.rollFor ?? {}).some(Boolean)) doIt(combat, r.id).catch(e => console.error(`${ID} | turn`, e));   /* Roll it for them */
   else if (r.go && RESUMABLE.includes(r.state)) doIt(combat, r.id).catch(e => console.error(`${ID} | turn`, e));
+  else if (r.state === "fled" && r.extend) runExtend(combat, r.id).catch(e => console.error(`${ID} | extend`, e));
 }
 /** A monster ticked during its own turn. */
 export function onTokenFlag(tok, change) {
@@ -345,6 +346,8 @@ export async function onRunnerReady() {
   for (const combat of game.combats.filter(c => c.started)) {
     const r = currentRequest(combat);
     if (r?.state === "running" && !running.has(r.id)) await save(combat, r.id, { state: "stopped", go: false, note: `${game.user.name}'s page reloaded during this turn. Check the chat and HP, then Do it carries on from where it stopped.` });
+    /* a reload while the map was extending: whether or not it grew, asking again from a fresh packet is right (the monster can flee to the same edge again) */
+    if (r?.state === "extending" && r.extending && !running.has(r.id)) { const tok = combat.scene?.tokens.get(r.tokenId); if (tok && await ensureScene(combat)) await afterExtend(combat, r.id, r.extending, tok).catch(e => console.error(`${ID} | extend`, e)); }
     await onTurnChange(combat); act(combat);
     if (r?.state === "saves") doIt(combat, r.id).catch(e => console.error(`${ID} | turn`, e));   /* a save rolled while this page was away */
   }
@@ -366,6 +369,8 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
   return { actions: Math.max(0, actionsOf(actor, combat) - (req.spent ?? 0) - used.actions), attacksBefore: (req.attacks ?? 0) + used.attacks, strikes, targets,
     me: { square: squareOf(tok, scene), ...placeOf(tok, scene), size: sizeOf(tok), ...heightOf(tok), cat: actor.size ?? null }, speed, cantAct: cantAct(actor), cantMove: cantMove(actor), cantAttack: cantAttack(actor), prone: !!actor.hasCondition?.("prone"), route,
     tookCover: takingCover(tok), coverFrom, nearCover: nearCoverFor(scene),
+    /* flee: the map's edges as the scene stands now (an extended map has new bounds), never a stored size */
+    edgeAt: (sq, n) => edgeSides(sq, n, ...mapSquares(scene)),
     /* Hide: the light at a square (where it stands, or will after a move) and its own concealment */
     lightAt: sq => { const px = scene.grid.size, d = scene.dimensions, n = sizeOf(tok); return lightOn({ x: d.sceneX + (sq[0] + n / 2) * px, y: d.sceneY + (sq[1] + n / 2) * px }, scene); }, concealed: !!actor.hasCondition?.("concealed"),
     /* abilities, and its last action before this plan (a Grab or Knockdown needs it): the step just done, or the last thing done before a re-plan */
@@ -1375,11 +1380,24 @@ function endAfter(combat, requestId) {
   ending.add(key);
   setTimeout(async () => {
     try {
+      while (game.paused) await new Promise(r => setTimeout(r, 300));   /* paused: the turn ends once the GM unpauses, if it is still this monster's */
       const n = request(combat, requestId);
       if (n?.state !== "done" || !combat.started || combat.round !== r.round || combat.combatant?.id !== r.combatantId || currentRequest(combat) || !tok.getFlag(ID, "auto")) return;   /* Auto read again: unticked in the 2 s, the GM ends it */
       await combat.nextTurn();
     } catch (e) { console.error(`${ID} | ending the turn`, e); } finally { ending.delete(key); }
   }, END_MS);
+}
+/* The game's pause pauses Auto (Rhea, 2026-11-08: "Pause would pause all actions"): while `game.paused`, Auto starts no action and ends no turn, and
+   goes on when the GM unpauses. A GM's own press (Do it, Next step) still acts while paused: she asked for it. Returns true when the turn should
+   stop instead (Hold, Play it myself, or the turn moved on while waiting). */
+async function pausedAuto(combat, requestId, tok) {
+  if (!tok?.getFlag(ID, "auto") || !game.paused) return false;
+  while (game.paused) {
+    await new Promise(r => setTimeout(r, 300));
+    const n = request(combat, requestId);
+    if (!n || n.hold || n.state === "manual" || n.state === "done" || !combat.started || combat.combatant?.id !== n.combatantId) return true;
+  }
+  return false;
 }
 /* Auto's pause between actions, so each roll can be followed. Hold and Play it myself end it at once. */
 async function pauseBetween(combat, id) {
@@ -1395,6 +1413,7 @@ async function runTurn(combat, requestId) {
   await dropInstantAreas(combat, { id: requestId, pos: r.pos ?? 0 }).catch(e => console.warn(`${ID} | areas`, e));   /* an instant area the GM resolved from its card */
   await settleCover(combat, requestId, r.pos ?? 0, tok);   /* a reload between a step and ending its Take Cover */
   for (let i = r.pos ?? 0; i < r.steps.length; i++) {
+    if (await pausedAuto(combat, requestId, tok)) return;   /* the game's pause pauses Auto too (Rhea, 2026-11-08) */
     const now = { ...request(combat, requestId), id: requestId };   /* a stored request doesn't carry its own id; replan needs it */
     let step = r.steps[i];
     if (now.state === "manual") return;
@@ -1449,7 +1468,9 @@ async function runTurn(combat, requestId) {
       if (step.do === "seek" && result !== "gm" && request(combat, requestId).state !== "manual") return replan(combat, { ...request(combat, requestId), id: requestId }, i + 1, [{ who: "me", what: "sought" }], tok, { counted: false });   /* a reload before this repeats nothing: the Seek's record says it's done, and this is reached again */
       /* a Stride, Step or Crawl that ended short of its square: the rest was planned from there, so ask again (the reason names the square, never what stopped it) */
       const at = squareOf(tok, combat.scene);
-      if (isMove(step) && result !== "gm" && !same(at, step.to) && i + 1 < r.steps.length && request(combat, requestId).state !== "manual") return replan(combat, { ...request(combat, requestId), id: requestId }, i + 1, [{ who: "me", what: "stopped", at }], tok);
+      if (isMove(step) && result !== "gm" && !same(at, step.to) && (i + 1 < r.steps.length || step.do === "flee") && request(combat, requestId).state !== "manual") return replan(combat, { ...request(combat, requestId), id: requestId }, i + 1, [{ who: "me", what: "stopped", at }], tok);
+      /* at the map's edge (Rhea, 2026-11-08): the turn stops, Auto or not, and the GM chooses Extend map or Let it get away on the card */
+      if (step.do === "flee" && result !== "gm" && request(combat, requestId).state !== "manual") return save(combat, requestId, { pos: i + 1, coverSettled: i + 1, state: "fled", fled: { sides: edgeSides(at, sizeOf(tok), ...mapSquares(combat.scene)), at } });
       /* an ability whose effects are the GM's to apply: the turn waits for Next step, Auto or not (the look before the next action then sees what changed) */
       if (result === "gm" && request(combat, requestId).state !== "manual") { const end = i + 1 >= r.steps.length;
         if (!end) await addNote(combat, requestId, "Then press Next step.");
@@ -1487,6 +1508,87 @@ async function replan(combat, r, i, changes, tok, { counted = true } = {}) {
   await saveTurns(combat, { [`${at}.state`]: "done", [`${at}.pos`]: i, [`${at}.replanned`]: id,
     [`requests.${id}`]: { state: "requested", combatantId: r.combatantId, tokenId: r.tokenId, round: r.round, turn: r.turn, at: Date.now(), since: clock(), log: {}, labels: built.labels, packet: built.packet, seen: situationNow(combat, tok, built.labels, built.others), note: null, tries: 0, pos: 0, spent, attacks, done, replans, why: changes, parent: r.id },
     ...eventChange("replan", id, 0), ...packetExtras(combat, tok, built) });
+}
+/* ---------- fleeing off the map (Rhea, 2026-11-08) ---------- */
+const SURVEY = "lythara-survey-sheet", EXTEND_SQUARES = 10, EXTEND_MAX = 120, EXTEND_MS = 90000;
+/** The map's size in squares as the scene stands now. */
+const mapSquares = scene => [Math.round(scene.dimensions.sceneWidth / scene.grid.size), Math.round(scene.dimensions.sceneHeight / scene.grid.size)];
+const surveyApi = () => game.modules.get(SURVEY)?.active ? game.modules.get(SURVEY).api ?? null : null;
+/** Why the map can't be extended that way, or null. The Survey Sheet grows an encounter map by EXTEND_SQUARES squares and stops at EXTEND_MAX a side. */
+export function extendProblem(scene, side) {
+  if (!SIDES.includes(side)) return "Pick an edge: north, east, south or west.";
+  if (!surveyApi()?.extendEncounter) return "Lythara Survey Sheet isn't on, so the map can't be extended.";
+  if (!scene?.getFlag(SURVEY, "encounter")) return "This scene isn't an encounter map, so it can't be extended.";
+  const [cols, rows] = mapSquares(scene), horiz = side === "east" || side === "west";
+  if ((horiz ? cols : rows) + EXTEND_SQUARES > EXTEND_MAX) return `The map is at its limit (${EXTEND_MAX} squares a side) that way.`;
+  return null;
+}
+/** The XP the party would have earned for this monster: PF2e's own calculation for one creature of its level against the party's level and size. null when it can't be worked out. */
+export function escapeXP(tok) {
+  try { const level = tok.actor?.level; if (!Number.isFinite(level)) return null; return game.pf2e.gm.calculateXP(suggestedLevel(), partySize(), [level], [], {}).totalXP ?? null; } catch { return null; }
+}
+const escapedOf = combat => turns(combat).escaped ?? {};
+/** Let it get away (Rhea, 2026-11-08): the monster leaves the fight. Its token stays on the scene, hidden and flagged, HP and conditions kept; nothing is
+    deleted but its combatant. The threat stays as built; the XP not earned is noted on the card and in the history. No chat message. Any GM may press it. */
+export async function letGo(combat, requestId) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  const r = request(combat, requestId); if (r?.state !== "fled") throw new Error("That monster isn't at the map's edge.");
+  const tok = combat.scene?.tokens.get(r.tokenId), combatant = combat.combatants.get(r.combatantId); if (!tok) throw new Error("Its token is gone.");
+  const xp = escapeXP(tok), name = tok.name, at = Date.now(), xpWords = xp != null ? ` (${xp} XP not earned)` : "";
+  await save(combat, requestId, { state: "done", escaped: { name, xp, at }, note: `${name} got away${xpWords}.` });
+  await saveTurns(combat, { [`escaped.${tok.id}`]: whole({ name, xp, round: combat.round, at, requestId, combatantId: r.combatantId }) });
+  await tok.update({ hidden: true, [`flags.${ID}.escaped`]: { round: combat.round, at, xp, combat: combat.id } });
+  /* its turn passes first, so core's turn bookkeeping sees a combatant removed from before the current one */
+  if (combatant && combat.combatant?.id === combatant.id && combat.started) await combat.nextTurn();
+  if (combatant) await combat.deleteEmbeddedDocuments("Combatant", [combatant.id]);
+  return { name, xp };
+}
+/** Extend map (Rhea, 2026-11-08): the GM's press asks the runner, which grows the map and then asks the thinker again from a fresh packet; the monster keeps its turn. */
+export async function extendMap(combat, requestId, side) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  const r = request(combat, requestId); if (r?.state !== "fled") throw new Error("That monster isn't at the map's edge.");
+  if (!(r.fled?.sides ?? []).includes(side)) throw new Error(`It isn't at the ${side} edge.`);
+  const why = extendProblem(combat.scene, side); if (why) throw new Error(why);
+  return save(combat, requestId, { extend: side });
+}
+async function runExtend(combat, requestId) {
+  if (!isRunner()) return; if (running.has(requestId)) return;
+  running.add(requestId);
+  try {
+    const r = request(combat, requestId), side = r?.extend; if (r?.state !== "fled" || !side) return;
+    const tok = combat.scene.tokens.get(r.tokenId); if (!tok) return save(combat, requestId, { state: "stopped", extend: null, note: "Its token is gone." });
+    await save(combat, requestId, { state: "extending", extend: null, extending: side });
+    try {
+      const why = extendProblem(combat.scene, side); if (why) throw new Error(why);
+      await within(surveyApi().extendEncounter(combat.scene, side, EXTEND_SQUARES), EXTEND_MS, "The map took too long to extend.");
+      /* the redraw: every client rebuilds its canvas; the packet needs this page's canvas back on the fight scene with the token drawn */
+      for (let t = 0; t < EXTEND_MS && !(await ensureScene(combat) && tok.object && !tok.object.destroyed); t += 500) await sleep(500);
+      await sleep(SETTLE_MS);
+    } catch (e) { console.error(`${ID} | extend`, e); return save(combat, requestId, { state: "fled", note: `The map couldn't be extended (${e.message}).` }); }
+    await afterExtend(combat, requestId, side, tok);
+  } finally { running.delete(requestId); }
+}
+/** The map has grown: the monster keeps its turn and the thinker is asked again from a fresh packet (not counted as a re-plan). */
+async function afterExtend(combat, requestId, side, tok) {
+  await save(combat, requestId, { state: "fled", extended: side, extending: null });
+  const r = request(combat, requestId);
+  await replan(combat, { ...r, id: requestId }, r.pos ?? r.steps.length, [{ who: "me", what: "extended", side }], tok, { counted: false });
+}
+/** Escaped monsters still on this fight's scene: their hidden, flagged tokens, newest first. */
+export function escapedList(combat) {
+  const scene = combat?.scene; if (!scene) return [];
+  return scene.tokens.contents.filter(t => t.getFlag(ID, "escaped") && !combat.combatants.some(c => c.tokenId === t.id)).map(t => { const e = t.getFlag(ID, "escaped"), rec = escapedOf(combat)[t.id]; return { id: t.id, name: t.name, round: e.round, xp: e.xp ?? rec?.xp ?? null, at: e.at }; }).sort((a, b) => b.at - a.at);
+}
+/** Bring back (Rhea, 2026-11-08): the token is shown again, joins the fight where it stands now (the GM may move it first) and rolls initiative as any monster joining a fight. The history keeps the escape line and adds a returned line. */
+export async function bringBack(combat, tokenId) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  const tok = combat.scene?.tokens.get(tokenId); if (!tok?.getFlag(ID, "escaped")) throw new Error("That monster hasn't escaped.");
+  if (combat.combatants.some(c => c.tokenId === tok.id)) throw new Error("It is already in the fight.");
+  await tok.update({ hidden: false, [`flags.${ID}.-=escaped`]: null });
+  const [c] = await combat.createEmbeddedDocuments("Combatant", [{ tokenId: tok.id, actorId: tok.actorId, sceneId: combat.scene.id }]);
+  if (c) await combat.rollInitiative([c.id]);
+  if (escapedOf(combat)[tok.id]) await saveTurns(combat, { [`escaped.${tok.id}.returned`]: { round: combat.round, at: Date.now() } });
+  return { name: tok.name, initiative: c?.initiative ?? null };
 }
 /** Is this page working on a turn, or about to? For tools that share the runner's page. The in-memory sets cover the start of a turn, before any request
     exists, so only the runner's own page has the full answer; on any other page it's the flag alone. */

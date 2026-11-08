@@ -12,7 +12,7 @@ import { CHECK_WORD, FOLLOW_UPS, SAVE_MULT, abilityCost, followUpOutcome, lastAc
 import { MAX_REPLANS, changesSince, checkPlan, coverAfterTaking, currentOf, endsCover, nextCover, damageOptions, describeChange, describeChanges, absorbOwn, describeStep, doneStep, isMove, latestNote, nextAction, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "../../scripts/turn.mjs";
 import { aimArea, burstReachable, caughtBy, crossesWall, placeable, shapeOf, squaresNear, squaresOf } from "../../scripts/area.mjs";
 import { aimText, areaHurt, forThinker, listWords, nextArea } from "../../scripts/turn.mjs";
-import { COSTS, SEEK, isAttack, nextStealth, revealsAfter, revealsBefore, sneakSpeed } from "../../scripts/turn.mjs";
+import { COSTS, SEEK, SIDES, edgeSides, isAttack, nextStealth, revealsAfter, revealsBefore, sneakSpeed } from "../../scripts/turn.mjs";
 import { promptText } from "../../scripts/prompt.mjs";
 import { historyHTML, historyOf, journalHTML, stepResult } from "../../scripts/history.mjs";
 import { cutShort, diagonalsIn, distanceBetween, featureNear, findRoute, findStep, footprintAt, headingOf, routeWords } from "../../scripts/move.mjs";
@@ -200,7 +200,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   /* the campaign words live in the git-ignored .private-words at the repo root (master copy in a private project doc), never here */
   const wordsFile = path.resolve(HERE, "../../.private-words"), words = fs.existsSync(wordsFile) ? fs.readFileSync(wordsFile, "utf8").split("\n").map(l => l.split("#")[0].trim()).filter(Boolean) : null;
   check("prompt names no campaign", words ? !words.some(w => new RegExp(`(?<![A-Za-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9])`, "i").test(h.prompt)) : (console.log("  (no .private-words: campaign-word check skipped)"), true));
-  check("prompt explains asking again", h.promptVersion === 12 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 13 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -260,6 +260,26 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("stride in words", describeStep(p.steps[0]) === "Strides 25 ft east, to square 5, 5.");
   p = checkPlan({ steps: [{ do: "stride", to: [4, 5] }, st({ item: "bite", target: "E1" })] }, mctx); check("reach measured from the new square", !p.ok && /10 ft away from \[4, 5\], out of reach of Bite/.test(p.reason), p.reason);
   check("10-ft reach two diagonals", checkPlan({ steps: [{ do: "stride", to: [4, 3] }, st({ item: "jaws", target: "E1" })] }, mctx).ok);
+
+  /* fleeing off the map (2026-11-08): a flee is a Stride that must end on the outermost ring and be the plan's last step */
+  check("edges of a 12x12 map", edgeSides([0, 5], 1, 12, 12).join() === "west" && edgeSides([11, 0], 1, 12, 12).join() === "north,east" && edgeSides([5, 5], 1, 12, 12).length === 0 && edgeSides([10, 10], 2, 12, 12).join() === "east,south" && edgeSides([0, 0], 1, 0, 0).length === 0);
+  check("sides in order", SIDES.join() === "north,east,south,west");
+  const fctx = { ...mctx, edgeAt: (sq, n) => edgeSides(sq, n, 12, 12) };
+  p = checkPlan({ steps: [{ do: "flee", to: [0, 1] }] }, fctx); check("flee to the west edge", p.ok && p.steps[0].do === "flee" && p.steps[0].sides.join() === "west" && p.steps[0].cost === 20, JSON.stringify(p));
+  check("flee in words", /^Flees 20 ft north, to square 0, 1 at the west edge of the map: you decide/.test(describeStep(p.steps[0])), describeStep(p.steps[0]));
+  check("flee not on the ring refused", /outermost ring/.test(checkPlan({ steps: [{ do: "flee", to: [3, 5] }] }, fctx).reason ?? ""));
+  check("flee too far refused like a Stride", /more than its Speed/.test(checkPlan({ steps: [{ do: "flee", to: [11, 11] }] }, fctx).reason ?? ""));
+  check("flee must be last", /last step/.test(checkPlan({ steps: [{ do: "flee", to: [0, 1] }, st({ item: "jaws", target: "E1" })] }, fctx).reason ?? ""));
+  check("stride then flee", checkPlan({ steps: [{ do: "stride", to: [0, 5] }, { do: "flee", to: [0, 1] }] }, { ...fctx, me: { square: [4, 5], size: 1 } }).ok);
+  check("flee needs the map's bounds", /where this map ends/.test(checkPlan({ steps: [{ do: "flee", to: [0, 1] }] }, mctx).reason ?? ""));
+  check("a Stride onto the ring is just a Stride", checkPlan({ steps: [{ do: "stride", to: [0, 1] }] }, fctx).steps[0].sides === undefined);
+  check("flee costs an action and is a move", COSTS.flee === 1 && isMove({ do: "flee" }) && STEP_KINDS.includes("flee") && spentBy([{ do: "flee" }]).actions === 1);
+  check("flee done words", doneStep({ do: "flee", to: [0, 1] }, { moved: { to: [0, 1] } }).result === "reached the map's edge" && doneStep({ do: "flee", to: [0, 1] }, { moved: { to: [2, 3] } }).result === "stopped at [2, 3]");
+  check("extended change in words", /extended to the north.*renumber|shifted/.test(describeChanges([{ who: "me", what: "extended", side: "north" }])) && !/shifted/.test(describeChanges([{ who: "me", what: "extended", side: "east" }])));
+  check("fled waits on a person, extending on the machine", stallOf({ state: "fled", since: 0 }, { now: 181000 })?.kind === "person" && stallOf({ state: "fled", since: 0 }, { now: 61000 }) === null && stallOf({ state: "extending", since: 0 }, { now: 61000 })?.kind === "machine" && /edge/.test(stallWords({ state: "fled", waited: 1000 })));
+  check("extending counts as busy", requestBusy({ state: "extending" }) && requestBusy({ state: "fled", extend: "north" }) && !requestBusy({ state: "fled" }));
+  check("prompt teaches flee", /"do": "flee"/.test(promptText({ canDo: Object.keys(COSTS), stepKinds: STEP_KINDS })) && /fleeing condition/.test(promptText({})));
+  check("cleanPlan accepts flee", cleanPlan({ steps: [{ do: "flee", to: [0, 1], why: "hurt" }] }).ok);
   check("but not 3 by 2", !checkPlan({ steps: [{ do: "stride", to: [3, 3] }, st({ item: "jaws", target: "E1" })] }, mctx).ok);
   check("two strides from where the first ended", checkPlan({ steps: [{ do: "stride", to: [3, 5] }, { do: "stride", to: [5, 4] }, st({ item: "bite", target: "E1" })] }, mctx).ok);
   check("a stride uses an action", /no actions left/.test(checkPlan({ steps: [{ do: "stride", to: [3, 5] }, { do: "stride", to: [5, 4] }, st({ item: "bite", target: "E1" }), st({ item: "bite", target: "E1" })] }, mctx).reason));
@@ -813,6 +833,15 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("history: names, not labels, for the GM", !/\bE1\b/.test(JSON.stringify(wolf)) && /Pup/.test(wolf.parts[1].reason));
   const html = historyHTML(rds, esc, { open: () => true });
   check("history HTML: folds, links, escapes", /<details[^>]*open/.test(html) && /data-message="a2"/.test(html) && /played by the GM/.test(html));
+  { const t2 = { labels: { t: "M1" }, requests: { a: { round: 1, combatantId: "c", tokenId: "t", state: "done", pos: 1, plan: { reason: "run", steps: [{ do: "flee", to: [0, 1], why: "hurt" }] }, steps: [{ do: "flee", from: [3, 3], to: [0, 1], cost: 20, sides: ["west"] }], log: { 0: { moved: { to: [0, 1], cost: 20 } } }, escaped: { name: "Wolf", xp: 30, at: 5 }, note: "Wolf got away (30 XP not earned)." },
+      b: { round: 2, combatantId: "d", tokenId: "u", state: "fled", pos: 1, plan: { steps: [{ do: "flee", to: [0, 1] }] }, steps: [{ do: "flee", from: [3, 3], to: [0, 1], cost: 20, sides: ["west"] }], log: { 0: { moved: { to: [0, 1], cost: 20 } } } } },
+      escaped: { t: { name: "Wolf", xp: 30, round: 1, returned: { round: 2, at: 9 } } } };
+    const rd = historyOf(t2, { round: 2, turn: 0, current: "d", order: [{ id: "c", name: "Wolf", npc: true }, { id: "d", name: "Goblin", npc: true }] }, { t: "Wolf", u: "Goblin" });
+    const l1 = rd[0].turns[0].parts[0].lines, l2 = rd[1].turns.find(x => x.combatantId === "d").parts[0].lines;
+    check("history: escape line, once", l1.filter(l => /Escaped: Wolf got away \(30 XP not earned\)/.test(l.text)).length === 1 && !l1.some(l => /got away\./.test(l.text)));
+    check("history: at the edge line", l2.some(l => /At the map's edge/.test(l.text)));
+    check("history: brought back line", rd[1].turns.some(x => x.returned && x.name === "Wolf") && /brought back into the fight/.test(historyHTML(rd, esc)) && /brought back/.test(journalHTML(rd, esc)));
+  }
   check("history HTML escapes", !/<b>x<\/b>/.test(historyHTML(historyOf({ requests: { z: { round: 1, combatantId: "c", tokenId: "t", plan: { reason: "<b>x</b>", steps: [] }, steps: [] } } }, { round: 1, order: [] }, { t: "T" }), esc)));
   check("journal HTML: no links", !/data-message/.test(journalHTML(rds, esc, { title: "Fight" })) && /Round 1/.test(journalHTML(rds, esc, {})));
   check("history: a step done with no record isn't 'not reached'", /did nothing/.test(stepResult({ do: "none" }, {}, look, undefined, true).text) && /done/.test(stepResult({ do: "stand" }, {}, look, undefined, true).text));
