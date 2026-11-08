@@ -53,9 +53,14 @@ const onFightScene = combat => canvas.ready && canvas.scene?.id === combat.scene
 const strikesWithIds = actor => { const list = (actor.system.actions ?? []).filter(a => a.type === "strike"), ids = strikeIds(list.map(a => ({ slug: a.slug ?? a.item?.id, ranged: !!a.item?.isRanged }))); return list.map((a, i) => ({ id: ids[i], strike: a })); };
 const conditionsOn = actor => (actor.conditions?.active ?? []).map(c => c.slug);
 const squareOf = (tok, scene) => { const px = scene.grid.size, d = scene.dimensions; return [Math.round((tok.x - d.sceneX) / px), Math.round((tok.y - d.sceneY) / px)]; };
-/** Where a token really is, in squares, fractional when it sits off the grid (a Small creature dropped between squares). Distances use this, as PF2e's do;
-    routes, occupancy and the square the thinker is told use squareOf. Rounded to a millionth so pixel arithmetic can't land a hair off a whole square. */
-const posOf = (tok, scene) => { const px = scene.grid.size, d = scene.dimensions, f = v => Math.round(v * 1e6) / 1e6; return [f((tok.x - d.sceneX) / px), f((tok.y - d.sceneY) / px)]; };
+/** Where a token really is for distances, as PF2e's `distanceTo` measures it (its `mechanicalBounds`, PF2e 8.7.0): { pos, span } in squares, pos fractional
+    when it sits off the grid (a Small creature dropped between squares), span its real width. A Tiny token counts as the whole square holding its top-left
+    corner. Routes, occupancy and the square the thinker is told use squareOf and sizeOf. Rounded to a millionth so pixel arithmetic can't land a hair off a
+    whole square. */
+const placeOf = (tok, scene) => {
+  const px = scene.grid.size, d = scene.dimensions, f = v => Math.round(v * 1e6) / 1e6, x = f((tok.x - d.sceneX) / px), y = f((tok.y - d.sceneY) / px), w = Number(tok.width) || 1;
+  return (tok.isTiny ?? w < 1) ? { pos: [Math.floor(x), Math.floor(y)], span: 1 } : { pos: [x, y], span: Math.max(1, w) };
+};
 /** How many squares a side a token covers: 1 for Medium and smaller, 2 for Large... */
 const sizeOf = tok => Math.max(1, Math.round(tok.width ?? 1));
 const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
@@ -301,7 +306,7 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
   const strikes = strikesWithIds(actor).map(({ id, strike: a }) => ({ id, name: a.label, reach: actor.getReach({ action: "attack", weapon: a.item }), ranged: !!a.item?.isRanged, maxRange: a.item?.range?.max ?? null, effects: [...(a.item?.system?.attackEffects?.value ?? [])] }));
   /* only what it perceived when asked, and still does: a plan can't name anything else */
   const now = new Map(sense(combat, tok, turns(combat).memory?.[tok.id] ?? {}).map(o => [o.id, o])), targets = {};
-  for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && canTarget(o.state)) targets[label] = { name: label, square: o.square, pos: posOf(o.token, scene), size: sizeOf(o.token), ...heightOf(o.token), flat: flatDC(o.state), cat: o.token.actor?.size ?? null, held: !!turns(combat).grips?.[tok.id]?.[tokenId] && isHeld(o.token.actor) }; }
+  for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && canTarget(o.state)) targets[label] = { name: label, square: o.square, ...(o.state === "hidden" ? {} : placeOf(o.token, scene)), size: sizeOf(o.token), ...heightOf(o.token), flat: flatDC(o.state), cat: o.token.actor?.size ?? null, held: !!turns(combat).grips?.[tok.id]?.[tokenId] && isHeld(o.token.actor) }; }
   /* moves are worked out only for a plan that has a Stride, Step or Crawl, so trouble there can't stop a plan of Strikes */
   const speed = landSpeed(actor); let route = null;
   if (moves) { try { route = await mover(combat, tok, speed, knownTo(combat, tok, [...now.values()])); } catch (e) { console.error(`${ID} | moves`, e); const why = `I couldn't work out moves here (${e.message}).`; route = () => ({ ok: false, reason: why }); } }
@@ -309,7 +314,7 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
   const vis = visionerApi(), coverFrom = {};
   if (vis) for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && SEES.includes(o.state)) { const l = coverOf(vis, o.token, tok); if (STANDARD.includes(l)) coverFrom[label] = l; } }
   return { actions: Math.max(0, actionsOf(actor, combat) - (req.spent ?? 0) - used.actions), attacksBefore: (req.attacks ?? 0) + used.attacks, strikes, targets,
-    me: { square: squareOf(tok, scene), pos: posOf(tok, scene), size: sizeOf(tok), ...heightOf(tok), cat: actor.size ?? null }, speed, cantAct: cantAct(actor), cantMove: cantMove(actor), cantAttack: cantAttack(actor), prone: !!actor.hasCondition?.("prone"), route,
+    me: { square: squareOf(tok, scene), ...placeOf(tok, scene), size: sizeOf(tok), ...heightOf(tok), cat: actor.size ?? null }, speed, cantAct: cantAct(actor), cantMove: cantMove(actor), cantAttack: cantAttack(actor), prone: !!actor.hasCondition?.("prone"), route,
     tookCover: takingCover(tok), coverFrom, nearCover: nearCoverFor(scene),
     /* Hide: the light at a square (where it stands, or will after a move) and its own concealment */
     lightAt: sq => { const px = scene.grid.size, d = scene.dimensions, n = sizeOf(tok); return lightOn({ x: d.sceneX + (sq[0] + n / 2) * px, y: d.sceneY + (sq[1] + n / 2) * px }, scene); }, concealed: !!actor.hasCondition?.("concealed"),
@@ -321,7 +326,7 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
 /** Its allies the GM hasn't hidden, and itself, by label, for a spell aimed at a friend. */
 function alliesByLabel(combat, tok) {
   const labels = turns(combat).labels ?? {}, scene = combat.scene, out = {};
-  for (const t of [tok, ...alliesOf(scene, tok).filter(a => !a.hidden)]) { const l = labels[t.id]; if (l) out[l] = { name: l, square: squareOf(t, scene), pos: posOf(t, scene), size: sizeOf(t), ...heightOf(t), flat: 0, ally: true }; }
+  for (const t of [tok, ...alliesOf(scene, tok).filter(a => !a.hidden)]) { const l = labels[t.id]; if (l) out[l] = { name: l, square: squareOf(t, scene), ...placeOf(t, scene), size: sizeOf(t), ...heightOf(t), flat: 0, ally: true }; }
   return out;
 }
 /** A label's token: the creatures it perceived when asked, then its allies and itself. */

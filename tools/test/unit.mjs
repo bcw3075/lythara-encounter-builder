@@ -219,6 +219,9 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
     const og = { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 5 }], me: { square: [24, 20], pos: [23.5, 19.5], size: 1 }, targets: { E1: { name: "E1", square: [22, 19], pos: [22, 19], size: 1 } }, speed: 25, route: (f, t) => ({ ok: true, route: [f, t], cost: 5 }) };
     check("off-grid Strike measured where it stands", checkPlan({ steps: [{ do: "strike", item: "jaws", target: "E1" }] }, og).ok);
     check("off-grid target measured where it stands", checkPlan({ steps: [{ do: "strike", item: "jaws", target: "E1" }] }, { ...og, me: { square: [21, 18], size: 1 }, targets: { E1: { name: "E1", square: [23, 20], pos: [22.5, 19.5], size: 1 } } }).ok);
+    check("a hidden target (no pos) is measured from the square the monster knows", /out of reach/.test(checkPlan({ steps: [{ do: "strike", item: "jaws", target: "E1" }] }, { ...og, me: { square: [21, 18], size: 1 }, targets: { E1: { name: "E1", square: [23, 20], size: 1, flat: 11 } } }).reason ?? ""));
+    check("its real width counts", checkPlan({ steps: [{ do: "strike", item: "jaws", target: "E1" }] }, { ...og, me: { square: [24, 20], pos: [24, 20], span: 1, size: 1 }, targets: { E1: { name: "E1", square: [21, 19], pos: [21, 19], span: 2.4, size: 2 } } }).ok);
+    check("Hide reads the light where it really stands", checkPlan({ steps: [{ do: "hide" }] }, { ...og, lightAt: sq => sq[0] % 1 ? "dim" : "bright" }).ok);
     check("after a move, measured from the new square", /out of reach/.test(checkPlan({ steps: [{ do: "stride", to: [26, 20] }, { do: "strike", item: "jaws", target: "E1" }] }, og).reason ?? ""));
   }
   check("overlap is 0", distanceBetween({ x: 3, y: 3, size: 2 }, { x: 4, y: 4 }) === 0); check("footprint", footprintAt([2, 3], 2).map(p => p.join()).join(" ") === "2,3 3,3 2,4 3,4");

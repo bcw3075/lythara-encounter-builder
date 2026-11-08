@@ -40,8 +40,9 @@ export const listWords = (xs = []) => xs.length < 2 ? xs.join("") : `${xs.slice(
 
 /** Check a plan against what the glue gathered. Returns { ok: true, steps } with each step resolved, or { ok: false, reason }.
     ctx: { actions (left this turn), attacksBefore (attacks already made this turn, for the multiple attack penalty), strikes: [{ id, name, reach, ranged, maxRange }],
-    targets: { label: { name, square, pos, size, elev, depth, flat } or { name, distance, flat } }, me: { square, pos, size, elev, depth } (pos: where the token
-    really is, in squares, fractional off the grid; distances use it, routes and occupancy the rounded square), speed (land), cantAct (why it can't act at all, or null),
+    targets: { label: { name, square, pos, span, size, elev, depth, flat } or { name, distance, flat } }, me: { square, pos, span, size, elev, depth } (pos and span: where the
+    token really is and how wide, in squares, as PF2e measures it, fractional off the grid; distances use them, routes and occupancy the rounded square and
+    size; a hidden target has no pos, so it is measured from the square the monster knows), speed (land), cantAct (why it can't act at all, or null),
     cantMove (why it can't use any move action, Stand included: grabbed, immobilized, restrained; or null), cantAttack (why it can't Strike, or null), prone (whether it starts the plan prone),
     route(from, to, before, { step, kind }) → { ok, route, cost } or { ok: false, reason }, before being the routes of this plan's earlier moves (the diagonal count
     runs across the turn), step asking for a single 5-ft square (a Step or a Crawl, named by kind) rather than a Stride }. Only what the monster perceives is in
@@ -64,7 +65,7 @@ export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
   let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, herePos = ctx.me?.pos ?? here, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {};
   /* distances from where each creature really stands (pos, fractional off the grid), as PF2e and the packet measure them; after a move, from the square it moved to */
-  const distanceTo = (t, reach) => { const p = t.pos ?? t.square; return herePos && p ? distanceBetween({ x: herePos[0], y: herePos[1], size: ctx.me.size ?? 1, elev: ctx.me.elev, depth: ctx.me.depth }, { x: p[0], y: p[1], size: t.size ?? 1, elev: t.elev, depth: t.depth }, { reach }) : t.distance; };
+  const distanceTo = (t, reach) => { const p = t.pos ?? t.square; return herePos && p ? distanceBetween({ x: herePos[0], y: herePos[1], size: ctx.me.span ?? ctx.me.size ?? 1, elev: ctx.me.elev, depth: ctx.me.depth }, { x: p[0], y: p[1], size: t.pos ? t.span ?? t.size ?? 1 : t.size ?? 1, elev: t.elev, depth: t.depth }, { reach }) : t.distance; };
   for (const [n, step] of plan.steps.entries()) {
     const at = `Step ${n + 1}`;
     if (!(step.do in COSTS)) return { ok: false, reason: `${at}: I can't do "${step.do}" yet.` };
@@ -130,7 +131,7 @@ export function checkPlan(plan, ctx) {
          only turns down a Hide with nothing at all to hide behind, from what the monster knows: standard cover from a creature it sees, Taking Cover, its
          own concealment, or dim light or darkness where it stands. Cover from a square it isn't on yet can't be read, so after a move only a wall or a thick
          trunk next to it, or the light there, counts. */
-      const light = here && ctx.lightAt ? ctx.lightAt(here) : "bright", size = ctx.me?.size ?? 1;
+      const light = herePos && ctx.lightAt ? ctx.lightAt(herePos) : "bright", size = ctx.me?.size ?? 1;
       const from = moved ? [] : Object.entries(ctx.coverFrom ?? {}).filter(([, l]) => l === "standard" || l === "greater").map(([k]) => k);
       const why = from.length ? "cover" : took ? "taking-cover" : ctx.concealed ? "concealed" : light !== "bright" ? light : moved && here && ctx.nearCover?.(here, size) ? "near" : null;
       if (!why) return { ok: false, reason: `${at}: Hide needs cover or concealment: standard cover from a creature it sees, Taking Cover, being concealed, or dim light or darkness where it stands (it's bright there)${moved ? `; after a move in the same plan only a wall or trunk next to its new square, or the light there, counts` : ""}.` };
