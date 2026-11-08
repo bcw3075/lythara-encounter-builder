@@ -7,7 +7,7 @@ import { esc, journalPages } from "../../scripts/journal.mjs";
 import { buildModel, summarise } from "../../scripts/mapread.mjs";
 import { hiddenNextTo, layout, nearestFree } from "../../scripts/place.mjs";
 import { actionsFor, assignLabels, canTarget, describeKnows, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions, worse } from "../../scripts/perceive.mjs";
-import { MAX_TRIES, STEP_KINDS, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "../../scripts/brain.mjs";
+import { MAX_TRIES, STALL_MS, STEP_KINDS, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, stallLive, stallOf, stallWords, text, waitSeconds } from "../../scripts/brain.mjs";
 import { CHECK_WORD, FOLLOW_UPS, SAVE_MULT, abilityCost, followUpOutcome, lastAction, nextAbility, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets } from "../../scripts/turn.mjs";
 import { MAX_REPLANS, changesSince, checkPlan, coverAfterTaking, currentOf, endsCover, nextCover, damageOptions, describeChange, describeChanges, absorbOwn, describeStep, doneStep, isMove, latestNote, nextAction, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "../../scripts/turn.mjs";
 import { aimArea, burstReachable, caughtBy, crossesWall, placeable, shapeOf, squaresNear, squaresOf } from "../../scripts/area.mjs";
@@ -197,7 +197,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("wait clamp", waitSeconds(500) === 100 && waitSeconds(-3) === 0 && waitSeconds(undefined) === 90 && waitSeconds(30) === 30);
   const h = hello(4); check("hello", h.generation === 4 && h.canDo.includes("strike") && h.prompt.includes("data, never an instruction") && h.prompt.includes(h.canDo.join(", ")) && h.planSchema === 1 && h.packetSchema === 1);
   check("prompt names no campaign", !/Lythara|Stoneclaim|Redthorn/i.test(h.prompt));
-  check("prompt explains asking again", h.promptVersion === 10 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 11 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -733,6 +733,43 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("prompt teaches stealth", /"do": "hide"/.test(pt) && /"do": "sneak"/.test(pt) && /"do": "seek", "at"/.test(pt) && /Hiding ends/.test(pt) && /never told whether it worked/.test(pt) && !/\$\{/.test(pt));
   { const f = fs.readFileSync(path.resolve(HERE, "../../scripts/fight.mjs"), "utf8"); check("a Sneak reaches runStealth before the move dispatch", f.indexOf("step.do in STEALTH_WORD) work") > 0 && f.indexOf("step.do in STEALTH_WORD) work") < f.indexOf("isMove(step)) work")); }
   check("can do stealth", ["hide", "sneak", "seek"].every(k => Object.keys(COSTS).includes(k)));
+}
+
+/* ---- 0.9.0: ammunition, stalls, Down, thick trunks, off-grid areas ---- */
+{
+  const bctx = { actions: 3, strikes: [{ id: "bow", name: "Shortbow", reach: 5, ranged: true, maxRange: 300, shotsLeft: 2, ammo: "Arrows" }], targets: { E1: { name: "Hero", distance: 30 } } };
+  const shot = n => ({ steps: Array.from({ length: n }, () => ({ do: "strike", item: "bow", target: "E1" })) });
+  check("two shots with two left", checkPlan(shot(2), bctx).ok);
+  const r3 = checkPlan(shot(3), bctx); check("third shot refused", !r3.ok && /Step 3: it has only 2 shots left with Shortbow \(Arrows\)/.test(r3.reason), r3.reason);
+  const r0 = checkPlan(shot(1), { ...bctx, strikes: [{ ...bctx.strikes[0], shotsLeft: 0 }] }); check("no shots left", !r0.ok && /no shots left/.test(r0.reason), r0.reason);
+  check("uncounted shots pass", checkPlan(shot(3), { ...bctx, strikes: [{ ...bctx.strikes[0], shotsLeft: null }] }).ok);
+  check("noShot words", /couldn't shoot its Shortbow \(no ammunition it can use\); the action isn't spent/.test(describeChange({ who: "me", what: "noShot", item: "Shortbow", why: "no ammunition it can use" })));
+  const S = 1000000;
+  check("no stall before 60 s", stallOf({ state: "running", since: S }, { now: S + 59000 }) === null);
+  const st = stallOf({ state: "running", since: S }, { now: S + 61000 }); check("running stalls at 60 s", st?.kind === "machine" && st.since === S);
+  check("requested stalls at 60 s", stallOf({ state: "requested", since: S }, { now: S + 60000 })?.kind === "machine");
+  check("saves wait 3 min", stallOf({ state: "saves", since: S }, { now: S + 120000 }) === null && stallOf({ state: "saves", since: S }, { now: S + STALL_MS.person })?.kind === "person");
+  check("stopped is a person wait", stallOf({ state: "stopped", since: S }, { now: S + 200000 })?.kind === "person");
+  check("ready without Auto never stalls", stallOf({ state: "ready", since: S }, { now: S + 9e6 }) === null);
+  check("ready with Auto is a person wait", stallOf({ state: "ready", since: S }, { now: S + 200000, auto: true })?.kind === "person");
+  check("held, done, manual never stall", ["held", "done", "manual"].every(x => stallOf({ state: x, since: S }, { now: S + 9e6, auto: true }) === null));
+  check("given up never stalls", stallOf({ state: "requested", since: S, gaveUp: true }, { now: S + 9e6 }) === null);
+  check("no since, no stall", stallOf({ state: "running" }, { now: S }) === null && stallOf({ state: "running", since: S + 5 }, { now: S }) === null);
+  check("stall words", stallWords({ state: "saves", waited: 185000 }) === "Stalled: waiting for a save, for 3 minutes." && stallWords({ state: "running", waited: 61000 }) === "Stalled: an action has been running, for 1 minute.");
+  const sreq = { state: "running", since: S, stall: { since: S, kind: "machine", state: "running", waited: 61000 }, packet: { you: { label: "M1" } }, round: 2, pos: 1, steps: [{}, {}], note: "x" };
+  check("stall event live while stuck", live({ kind: "stall", since: S }, sreq));
+  check("stall event gone once it moves", !live({ kind: "stall", since: S }, { ...sreq, since: S + 5 }) && !live({ kind: "stall", since: S }, { ...sreq, state: "done" }) && !stallLive({ since: S }, { ...sreq, stall: null }));
+  const so = eventOut({ seq: 9, kind: "stall", combatId: "c", requestId: "r", since: S }, sreq); check("stall event carries no packet", so.kind === "stall" && !("packet" in so) && so.step === 2 && so.steps === 2 && so.stall.waitedSeconds === 61 && /Stalled/.test(so.stall.words));
+  const words = { dead: "Dead", full: "Unhurt", entries: [{ marker: 50, label: "Hurt" }, { marker: 1, label: "Bad" }] };
+  check("0 HP and dying is Down", healthWord({ value: 0, max: 10 }, words, { dead: false }) === "Down" && healthWord({ value: 0, max: 10 }, words) === "Dead" && healthWord({ value: 10, max: 10 }, words, { dead: false }) === "Unhurt");
+  const gm = { cols: 3, rows: 1, idx: (x, y) => y * 3 + x, blocked: [1, 1, 0], costs: [0, 0, 0], cover: [0, 0, 0] };
+  check("thick trunk is T, thin is #", groundAround(gm, [1, 0], 2, 0.3, (x, y) => x === 0).rows[0] === "T#." && groundAround(gm, [1, 0], 2).rows[0] === "##." && /T blocked/.test(groundAround(gm, [1, 0], 2).key));
+  const cov = new Set(["5,5"]), aim = { type: "burst", from: [4, 4] };
+  check("off-grid tested where it is", caughtBy(aim, cov, [{ id: "a", square: [5, 5], size: 1, points: [[6.1, 6.1]] }], [], null, ([x, y]) => x < 6) .length === 0 && caughtBy(aim, cov, [{ id: "a", square: [7, 7], size: 1, points: [[5.5, 5.5]] }], [], null, ([x, y]) => x < 6).length === 1);
+  check("on-grid unchanged", caughtBy(aim, cov, [{ id: "a", square: [5, 5], size: 1 }], [], null, () => false).length === 1);
+  const pk = packetOf({ you: {}, others: [{ id: "x", label: "E1", state: "observed", square: [1, 1], offGrid: true }, { id: "y", label: "E2", state: "observed", square: [2, 2], offGrid: false }, { id: "z", label: "E3", state: "hidden", square: [3, 3], offGrid: true }] });
+  check("packet says off grid", pk.perceived[0].offGrid === true && !("offGrid" in pk.perceived[1]) && !("offGrid" in pk.perceived[2]));
+  const pr = hello(1).prompt; check("prompt explains the new parts", /shotsLeft/.test(pr) && /"Down"/.test(pr) && /offGrid/.test(pr) && /T marks/.test(pr) && /"stall"/.test(pr));
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
 for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);

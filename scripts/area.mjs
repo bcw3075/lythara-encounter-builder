@@ -98,13 +98,16 @@ export function crossesWall(a, b, walls = []) {
 /** Whether a burst's corner can be reached: line of effect from the caster's centre to it (Rules: a burst needs line of effect to its origin). */
 export const burstReachable = (aim, walls = []) => aim.type !== "burst" || !crossesWall(aim.centre, aim.from, walls);
 /** Who an area catches. covered: the set of "x,y" squares Foundry says the shape covers; creatures: [{ id, square, size }]; walls: solid wall segments in
-    squares (line of effect: only walls that block both movement and sight, never trunks: Rhea, 2026-11-07). A creature is caught if any square of its space
+    squares (line of effect: only walls that block both movement and sight, never trunks: Rhea, 2026-11-07). A creature off the grid carries `points`
+    (Foundry's containment test points, in squares) and is caught if insideAt says one is in the shape, as a placed Region tests it. Otherwise it is caught if any square of its space
     is covered and has line of effect to that square's centre from aim.from (a burst's corner, nudged to the caster's side; the caster's centre for the rest). The caster isn't caught by its own emanation. */
-export function caughtBy(aim, covered, creatures = [], walls = [], selfId = null) {
+export function caughtBy(aim, covered, creatures = [], walls = [], selfId = null, insideAt = null) {
   const out = [];
   for (const c of creatures) {
     if (aim.type === "emanation" && c.id === selfId) continue;
-    const hit = squaresOf(c.square, c.size ?? 1).some(([x, y]) => covered.has(`${x},${y}`) && !crossesWall(aim.from ?? aim.origin, [x + 0.5, y + 0.5], walls));
+    /* off the grid (points, in squares): where it really is, as Foundry tests a token against a Region (insideAt), with line of effect to that point */
+    const hit = c.points && insideAt ? c.points.some(p => insideAt(p) && !crossesWall(aim.from ?? aim.origin, p, walls))
+      : squaresOf(c.square, c.size ?? 1).some(([x, y]) => covered.has(`${x},${y}`) && !crossesWall(aim.from ?? aim.origin, [x + 0.5, y + 0.5], walls));
     if (hit) out.push(c.id);
   }
   return out;

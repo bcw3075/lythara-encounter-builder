@@ -6,7 +6,7 @@ import { cutShort, diagonalsIn, featureNear, findRoute, findStep, footprintAt, r
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap } from "./builder.mjs";
 import { aimArea, aimWords, alliesCaught, burstReachable, caughtBy, shapeOf, squaresNear } from "./area.mjs";
-import { MAX_TRIES, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, text, waitSeconds } from "./brain.mjs";
+import { MAX_TRIES, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, stallOf, text, waitSeconds } from "./brain.mjs";
 
 const ID = "lythara-encounter-builder", WORKBENCH = "xdy-pf2e-workbench", TOOLBELT = "pf2e-toolbelt", VISIONER = "pf2e-visioner", GROUND_RADIUS = 10, STEP_MS = 20000, SETTLE_MS = 400, SCENE_MS = 30000, RESUMABLE = ["ready", "running", "held", "stopped", "saves"];
 export const runnerName = () => game.settings.get(ID, "runner");
@@ -21,7 +21,9 @@ const turns = combat => ({ requests: {}, ...combat.getFlag(ID, "turns") });   /*
 export const applySetting = () => game.settings.get(ID, "applyMonsterDamage");
 /* frequent writes: don't make the tracker redraw for each one. Two browsers write here, so only the change goes: a whole copy of the request could
    put back what the other just wrote. */
-async function save(combat, id, change) { await combat.update({ [`flags.${ID}.turns.requests.${id}`]: change }, { render: false, [ID]: { quiet: true } }); }
+async function save(combat, id, change) {
+  if (["state", "pos", "log"].some(k => k in change)) change = { ...change, since: clock() };   /* it moved on: the stall check counts from here */
+  await combat.update({ [`flags.${ID}.turns.requests.${id}`]: change }, { render: false, [ID]: { quiet: true } }); }
 const saveTurns = (combat, change) => combat.update(Object.fromEntries(Object.entries(change).map(([k, v]) => [`flags.${ID}.turns.${k}`, v])), { render: false, [ID]: { quiet: true } });
 const request = (combat, id) => turns(combat).requests[id];
 export const currentRequest = combat => currentOf(turns(combat).requests, combat.round, combat.combatant?.id);   /* only this turn's: an old unfinished one stays out of the way */
@@ -61,6 +63,8 @@ const placeOf = (tok, scene) => {
   const px = scene.grid.size, d = scene.dimensions, f = v => Math.round(v * 1e6) / 1e6, x = f((tok.x - d.sceneX) / px), y = f((tok.y - d.sceneY) / px), w = Number(tok.width) || 1;
   return (tok.isTiny ?? w < 1) ? { pos: [Math.floor(x), Math.floor(y)], span: 1 } : { pos: [x, y], span: Math.max(1, w) };
 };
+/** Is the token off the grid (its top-left corner between squares)? Its square is then the one it rounds to, while distances are from where it is. */
+const offGrid = (tok, scene) => { const { pos } = placeOf(tok, scene); return !Number.isInteger(pos[0]) || !Number.isInteger(pos[1]); };
 /** How many squares a side a token covers: 1 for Medium and smaller, 2 for Large... */
 const sizeOf = tok => Math.max(1, Math.round(tok.width ?? 1));
 const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
@@ -83,7 +87,9 @@ function sense(combat, tok, memory = {}) {
   });
 }
 const healthWords = () => healthEntries(game.settings.get("pf2e-hud", "healthStatusData"), game.i18n.localize("pf2e-hud.health-status.default"));
-const wordsFor = actor => { try { return healthWord(actor.hitPoints ?? {}, healthWords()); } catch { const h = actor.hitPoints; return h?.max ? (h.value <= 0 ? "Down" : h.value >= h.max ? "Unhurt" : "Hurt") : null; } };   /* PF2e HUD may be off or renamed its setting */
+/* dead: core's Dead status, or a monster at 0 HP that isn't dying or unconscious (PF2e's NPCs die at 0); anyone else at 0 HP is "Down" */
+const isDeadNow = actor => !!actor.statuses?.has?.("dead") || (actor.type === "npc" && (actor.hitPoints?.value ?? 1) <= 0 && !actor.hasCondition?.("dying") && !actor.hasCondition?.("unconscious"));
+const wordsFor = actor => { try { return healthWord(actor.hitPoints ?? {}, healthWords(), { dead: isDeadNow(actor) }); } catch { const h = actor.hitPoints; return h?.max ? (h.value <= 0 ? (isDeadNow(actor) ? "Dead" : "Down") : h.value >= h.max ? "Unhurt" : "Hurt") : null; } };   /* PF2e HUD may be off or renamed its setting */
 function gearOf(actor) {
   /* what it looks like: never a rune or an item's hidden name. PF2e builds "+1 Striking Longsword" from the runes; the source name is the plain one. */
   const show = i => i.isIdentified === false ? (i.system.identification?.unidentified?.name ?? i._source?.name ?? i.name) : (i._source?.name ?? i.name);
@@ -93,10 +99,41 @@ function actionsOf(actor, combat) {
   const n = s => actor.getCondition?.(s)?.value ?? 0, r = actor.getFlag(WORKBENCH, "stunReduction"), reduced = r && r.combat === combat.id && r.round === combat.round ? r.reducedBy : 0;
   return actionsFor({ quickened: actor.hasCondition?.("quickened"), slowed: n("slowed"), stunned: n("stunned"), reduced });
 }
+/* Ammunition (Rhea, 2026-11-08: "Module takes 1 Arrow itself"). PF2e Ranged Combat 8.0.7 reads a monster's ammunition one short (it sees 1 Arrow as none)
+   and its shot then takes 2 (a player's takes 1: tested with Valeros). So on a monster's shot the module turns Ranged Combat's counting off with its own
+   "skip-post-processing" roll option and takes the weapon's expend itself, from the stack Ranged Combat's check chose. Its check before the shot still
+   reads one short, so the last Arrow can't be fired: `shotsLeft` is what that check lets through, read from Ranged Combat itself so it follows its
+   version. Without Ranged Combat, PF2e's own count (an NPC's attack has no ammunition linked, so nothing is counted or taken). */
+const RANGED = "pf2e-ranged-combat", rangedOn = () => !!game.modules.get(RANGED)?.active;
+let rangedSystem = null;
+async function rangedWeapons() { if (!rangedOn()) return null; try { rangedSystem ??= (await import(foundry.utils.getRoute(`modules/${RANGED}/scripts/weapons/system.js`))).WeaponSystem; return rangedSystem; } catch (e) { console.warn(`${ID} | Ranged Combat`, e); return null; } }
+/** What a Strike's shots use: null if nothing is counted, otherwise { shotsLeft, ammo (its name), stack (the item id it takes from), expend }. */
+export async function ammoOf(actor, strike) {
+  const item = strike.item; if (!item?.isRanged) return null;
+  if (actor.type === "npc" && rangedOn()) {
+    const W = await rangedWeapons(); let w = null; try { w = W?.transformWeapon(actor, item); } catch (e) { console.warn(`${ID} | Ranged Combat weapon`, e); }
+    if (!w || w.expend == null || w.expend <= 0) return null;
+    if (w.isRepeating || w.capacity > 0) return null;   /* loaded weapons: Ranged Combat's own loading rules, not counted here */
+    const usable = (w.compatibleAmmunition ?? []).filter(a => a.quantity > 0), pick = w.selectedInventoryAmmunition && usable.find(a => a.id === w.selectedInventoryAmmunition.id) ? w.selectedInventoryAmmunition : usable.length === 1 ? usable[0] : null;
+    const from = pick ? [pick] : usable, uses = from.reduce((n, a) => n + (a.calculateTotalRemainingUses?.() ?? a.quantity), 0);
+    return { shotsLeft: Math.floor(uses / w.expend), ammo: (pick ?? usable[0] ?? (w.compatibleAmmunition ?? [])[0])?.name ?? "ammunition", stack: pick?.id ?? null, expend: w.expend };
+  }
+  const expend = item.system?.expend ?? 0, a = item.ammo; if (!(expend > 0) || !a) return null;
+  const left = a.isOfType?.("ammo") && a.system.uses?.max > 1 ? a.system.uses.value + (a.quantity - 1) * a.system.uses.max : a.quantity;
+  return { shotsLeft: Math.floor(left / expend), ammo: a.name, stack: null, expend };
+}
+/** Take a monster's shot's ammunition from the stack (uses first, then the stack), as Ranged Combat would for one shot. */
+async function takeAmmo(actor, ammo) {
+  const it = ammo?.stack ? actor.items.get(ammo.stack) : null; if (!it) return null;
+  let q = it.quantity, u = it.system.uses?.value ?? 1; const max = it.system.uses?.max ?? 1;
+  for (let n = ammo.expend; n > 0 && q > 0; n--) { u -= 1; if (u <= 0) { q -= 1; u = max; } }
+  await it.update({ "system.quantity": Math.max(0, q), ...(max > 1 ? { "system.uses.value": u } : {}) });
+  return Math.max(0, q);
+}
 async function strikesOf(actor) {
   const out = []; for (const { id, strike: a } of strikesWithIds(actor)) {
     let damage = null; try { damage = await a.damage({ getFormula: true }); } catch (e) { console.warn(`${ID} | damage formula`, e); }
-    out.push({ id, name: a.label, mod: strikeMods(a.variants.map(v => v.label)), reach: actor.getReach({ action: "attack", weapon: a.item }), ...(a.item?.isRanged ? { range: a.item.range?.increment ?? null, maxRange: a.item.range?.max ?? null } : {}), damage: typeof damage === "string" ? damage : null, traits: (a.traits ?? []).map(t => t.name).filter(t => t !== "attack"), effects: a.item?.system?.attackEffects?.value ?? [] });
+    out.push({ id, name: a.label, mod: strikeMods(a.variants.map(v => v.label)), reach: actor.getReach({ action: "attack", weapon: a.item }), ...(a.item?.isRanged ? { range: a.item.range?.increment ?? null, maxRange: a.item.range?.max ?? null } : {}), damage: typeof damage === "string" ? damage : null, traits: (a.traits ?? []).map(t => t.name).filter(t => t !== "attack"), effects: a.item?.system?.attackEffects?.value ?? [], ...(await ammoOf(actor, a).then(m => m ? { shotsLeft: m.shotsLeft, ammo: m.ammo } : {}).catch(() => ({}))) });
   } return out;
 }
 const localize = k => game.i18n.localize(k);
@@ -195,14 +232,17 @@ async function buildPacket(combat, tok, turn = {}) {
   const you = { label: labels[tok.id], name: tok.name, square, size: a.size, nextDiagonal: nextDiagonalFt(tok, scene), actionsLeft: Math.max(0, actionsOf(a, combat) - (turn.spent ?? 0)), attacksMade: turn.attacks ?? 0, hp: `${h.value}/${h.max}`, speed: speeds.land?.value ?? 0, ...(Object.keys(extra).length ? { speeds: extra } : {}), conditions: (a.conditions?.active ?? []).map(c => c.value ? `${c.slug} ${c.value}` : c.slug), strikes: await strikesOf(a), abilities: abilitiesOf(a), tactics: tacticsOf(scene, tok) };
   const book = await spellBook(a); if (book.length) you.spells = spellsOf(book);
   const cover = visionerApi();
-  you.takeCover = { taking: takingCover(tok), nextToCover: nearCoverFor(scene)(square, sizeOf(tok)), standardCoverFrom: cover ? others.filter(o => SEES.includes(o.state) && labels[o.id] && STANDARD.includes(coverOf(cover, o.token, tok))).map(o => labels[o.id]) : [] };
+  if (offGrid(tok, scene)) you.offGrid = true;
+  /* already Taking Cover: the cover it has now comes from that, so it isn't listed as cover to Take Cover from (it can't take it again until it moves or attacks) */
+  const taking = takingCover(tok);
+  you.takeCover = { taking, ...(taking ? { why: "It is Taking Cover now: the cover it has comes from that. It ends when it moves off its square or attacks." } : {}), nextToCover: nearCoverFor(scene)(square, sizeOf(tok)), standardCoverFrom: cover && !taking ? others.filter(o => SEES.includes(o.state) && labels[o.id] && STANDARD.includes(coverOf(cover, o.token, tok))).map(o => labels[o.id]) : [] };
   /* what it knows of its own stealth (Rhea, 2026-11-07, B): what it last tried and whether it is still hiding, the light where it stands, its own
      concealment and who it has standard cover from; never whether a secret roll worked */
   const tried = t.stealth?.[tok.id] ?? null;
   you.stealth = { lastTried: tried ? `${tried.did === "sneak" ? "Sneaked" : "Hid"} in round ${tried.round}, and has only Hidden, Sneaked or Stepped since` : null, light: lightOn(tok.object.center, scene), concealed: !!a.hasCondition?.("concealed"), standardCoverFrom: you.takeCover.standardCoverFrom };
-  const packet = packetOf({ you, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], ground: groundAround(model, square, GROUND_RADIUS),
+  const packet = packetOf({ you, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], ground: groundAround(model, square, GROUND_RADIUS, undefined, takeCoverSquares(scene)),
     allies: allies.map(x => ({ label: labels[x.id], name: x.name, square: squareOf(x, scene), healthWord: wordsFor(x.actor), conditions: visibleConditions(conditionsOn(x.actor)) })),
-    others: others.map(o => ({ id: o.id, state: o.state, label: labels[o.id], square: o.square, size: o.token.actor.size, distance: o.distance, gear: gearOf(o.token.actor), conditions: visibleConditions(conditionsOn(o.token.actor)), healthWord: wordsFor(o.token.actor), cover: cover?.getAutoCoverState?.(tok.object, o.token.object) ?? "none" })) });
+    others: others.map(o => ({ id: o.id, state: o.state, label: labels[o.id], square: o.square, offGrid: offGrid(o.token, scene), size: o.token.actor.size, distance: o.distance, gear: gearOf(o.token.actor), conditions: visibleConditions(conditionsOn(o.token.actor)), healthWord: wordsFor(o.token.actor), cover: cover?.getAutoCoverState?.(tok.object, o.token.object) ?? "none" })) });
   return { packet, labels: labelsOf(others.map(o => ({ id: o.id, state: o.state, label: labels[o.id] }))), fresh, others };
 }
 /* Keep what each ticked monster can perceive as the fight moves, so a monster's memory is where it last perceived someone and not where they stood on its own last turn. */
@@ -236,7 +276,7 @@ async function onTurnChange(combat) {
     await new Promise(r => setTimeout(r, SETTLE_MS));   /* start-of-turn effects; how long is enough is still to be measured */
     if (combat.combatant?.id !== combatant.id) return;
     const opened = await ensureScene(combat);
-    const id = foundry.utils.randomID(8), base = { state: "requested", combatantId: combatant.id, tokenId: tok.id, round: combat.round, turn: combat.turn, at: Date.now(), log: {} };
+    const id = foundry.utils.randomID(8), base = { state: "requested", combatantId: combatant.id, tokenId: tok.id, round: combat.round, turn: combat.turn, at: Date.now(), since: clock(), log: {} };
     if (!opened || !tok.object) return await save(combat, id, { ...base, labels: {}, note: cantOpen() });   /* no map, no packet: words instead of silent wrong answers */
     let built; try { built = await buildPacket(combat, tok); } catch (e) { console.error(`${ID} | packet`, e); return await save(combat, id, { ...base, labels: {}, note: `I couldn't work out what ${tok.name} perceives (${e.message}). Play this turn yourself.` }); }
     await saveTurns(combat, { [`requests.${id}`]: { ...base, labels: built.labels, packet: built.packet, seen: situationNow(combat, tok, built.labels, built.others), note: null, tries: 0, pos: 0 }, ...eventChange("turn", id, 0), ...packetExtras(combat, tok, built) });
@@ -303,7 +343,7 @@ export async function onRunnerReady() {
     are labels, because a refusal's reason goes back to the thinker; the card puts names in. */
 async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = true, before = null, spells = false } = {}) {
   const scene = combat.scene, tok = scene.tokens.get(req.tokenId), actor = tok.actor;
-  const strikes = strikesWithIds(actor).map(({ id, strike: a }) => ({ id, name: a.label, reach: actor.getReach({ action: "attack", weapon: a.item }), ranged: !!a.item?.isRanged, maxRange: a.item?.range?.max ?? null, effects: [...(a.item?.system?.attackEffects?.value ?? [])] }));
+  const strikes = await Promise.all(strikesWithIds(actor).map(async ({ id, strike: a }) => { const m = await ammoOf(actor, a).catch(() => null); return { id, name: a.label, reach: actor.getReach({ action: "attack", weapon: a.item }), ranged: !!a.item?.isRanged, maxRange: a.item?.range?.max ?? null, effects: [...(a.item?.system?.attackEffects?.value ?? [])], ...(m ? { shotsLeft: m.shotsLeft, ammo: m.ammo } : {}) }; }));
   /* only what it perceived when asked, and still does: a plan can't name anything else */
   const now = new Map(sense(combat, tok, turns(combat).memory?.[tok.id] ?? {}).map(o => [o.id, o])), targets = {};
   for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && canTarget(o.state)) targets[label] = { name: label, square: o.square, ...(o.state === "hidden" ? {} : placeOf(o.token, scene)), size: sizeOf(o.token), ...heightOf(o.token), flat: flatDC(o.state), cat: o.token.actor?.size ?? null, held: !!turns(combat).grips?.[tok.id]?.[tokenId] && isHeld(o.token.actor) }; }
@@ -430,7 +470,7 @@ async function judgeNow(combat, requestId) {
 /* The reason goes back to the thinker once, as a retry event. A second refusal goes to the GM. */
 async function reject(combat, requestId, reason) {
   const tries = (request(combat, requestId).tries ?? 0) + 1, last = tries >= MAX_TRIES, at = `requests.${requestId}`;
-  await saveTurns(combat, { [`${at}.state`]: "requested", [`${at}.tries`]: tries, [`${at}.steps`]: null, [`${at}.verdict`]: last ? `Couldn't do: ${reason}` : reason, ...(last ? {} : eventChange("retry", requestId, tries)) });   /* an earlier plan's steps go: they'd read as this one's */
+  await saveTurns(combat, { [`${at}.state`]: "requested", [`${at}.since`]: clock(), [`${at}.tries`]: tries, [`${at}.steps`]: null, [`${at}.verdict`]: last ? `Couldn't do: ${reason}` : reason, ...(last ? {} : eventChange("retry", requestId, tries)) });   /* an earlier plan's steps go: they'd read as this one's */
   return { state: "requested", reason, triesLeft: Math.max(0, MAX_TRIES - tries) };
 }
 
@@ -445,9 +485,23 @@ const brainNow = () => ({ generation: game.settings.get(ID, "brain")?.generation
 const renewBrain = () => game.settings.set(ID, "brainAt", clock());
 const fights = () => game.combats.filter(c => c.started);
 const eventsOf = combat => Object.values(turns(combat).events ?? {}).map(e => ({ ...e, combatId: combat.id }));
-function eventChange(kind, requestId, tries) {
+function eventChange(kind, requestId, tries, extra = {}) {
   const seq = nextSeq(Math.max(0, ...game.combats.contents.flatMap(c => Object.keys(turns(c).events ?? {}).map(Number))), Date.now());
-  return { [`events.${seq}`]: { seq, kind, requestId, tries } };
+  return { [`events.${seq}`]: { seq, kind, requestId, tries, ...extra } };
+}
+/** The stall check, on the runner every 10 s (Rhea, 2026-11-08): a turn that has sat past its limit (brain.mjs's stallOf) is marked on its request,
+    which turns the GM's card amber, and Angel gets a "stall" event to look into it. Card only, no chat (her rule: no whispered cards). Anything the
+    turn does next moves `since` on, which clears the mark. */
+let stallTimer = null;
+export function watchStalls() { clearInterval(stallTimer); stallTimer = setInterval(() => { if (isRunner()) checkStalls().catch(e => console.warn(`${ID} | stalls`, e)); }, 10000); }
+async function checkStalls() {
+  for (const combat of fights()) {
+    const r = currentRequest(combat); if (!r) continue;
+    if (!Number.isFinite(r.since)) { await saveTurns(combat, { [`requests.${r.id}.since`]: clock() }); continue; }   /* a request from before 0.9.0 */
+    const tok = combat.scene?.tokens.get(r.tokenId), s = stallOf(r, { now: clock(), auto: !!tok?.getFlag(ID, "auto") });
+    if (!s || r.stall?.since === s.since) continue;
+    await saveTurns(combat, { [`requests.${r.id}.stall`]: whole(s), ...eventChange("stall", r.id, r.tries ?? 0, { since: s.since }) });
+  }
 }
 function firstEvent(cursor) {
   const reqOf = e => request(game.combats.get(e.combatId), e.requestId);
@@ -560,9 +614,15 @@ async function runStrike(combat, id, i, step, tok, target) {
         await record({ flat: { dc: step.flat, total: roll.total, ok: roll.total >= step.flat } });
         if (roll.total < step.flat) await save(combat, id, { note: `${step.itemName} at ${step.targetName} failed its DC ${step.flat} flat check (${roll.total}). The action is spent.` });
       } else if (now === "attack") {
+        const ammo = await ammoOf(tok.actor, strike).catch(() => null), own = !!ammo?.stack;   /* a monster's shot under Ranged Combat: the module takes the ammunition */
+        if (ammo && ammo.shotsLeft < 1) return "noShot";
         aimAt(target); await record({ started: true });
-        const { message, roll } = await watched(async () => { const card = waitFor("attack-roll"), roll = await strike.variants[step.variant].roll({ event: clickWith("showCheckDialogs"), target: target.object }); return { message: await card, roll }; });
-        await record({ attack: { message: message.id, degree: roll?.degreeOfSuccess ?? message.rolls?.[0]?.degreeOfSuccess ?? 0 } });
+        let shot;
+        try { shot = await watched(async () => { const card = waitFor("attack-roll"), roll = await strike.variants[step.variant].roll({ event: clickWith("showCheckDialogs"), target: target.object, ...(own ? { options: ["skip-post-processing"] } : {}) }); if (!roll) return { roll: null }; return { message: await card, roll }; }); }
+        catch (e) { if (ammo && /ranged combat/i.test(e.message)) { await record({ started: false }); return "noShot"; } throw e; }   /* its "no valid ammunition" window: nothing was rolled */
+        if (!shot.roll) { if (ammo) { await record({ started: false }); return "noShot"; } throw new Error(`${step.itemName} didn't roll.`); }
+        const { message, roll } = shot, left = own ? await takeAmmo(tok.actor, ammo) : null;
+        await record({ attack: { message: message.id, degree: roll?.degreeOfSuccess ?? message.rolls?.[0]?.degreeOfSuccess ?? 0, ...(left != null ? { ammoLeft: left } : {}) } });
       } else if (now === "damage") {
         const degree = get().attack.degree; aimAt(target); await record({ damageStarted: true });
         const message = await watched(async () => { const card = waitFor("damage-roll"); await strike[degree === 3 ? "critical" : "damage"]({ event: clickWith("showDamageDialogs"), target: target.object, mapIncreases: step.variant }); return card; });
@@ -674,15 +734,23 @@ function takingCover(tok) {
     from (CoverDetector, 8.14.17: one that blocks sight, or one set to give standard or greater cover). An open door doesn't count; neither does a wall set
     to give lesser cover or none, or no cover at all (Survey Sheet's thin trunks: Rhea's rule, under 3 ft across is lesser cover, too thin to hide behind).
     Known gap: an invisible wall round a map's edge blocks sight, so it counts too. */
+function coverSegs(scene) {
+  const px = scene.grid.size, d = scene.dimensions, NONE = 0, open = CONST.WALL_DOOR_STATES?.OPEN ?? 1;
+  return scene.walls.contents.filter(w => { const f = w.flags?.[VISIONER] ?? {}; if (w.door && w.ds === open) return false;
+      return STANDARD.includes(f.coverOverride) || (w.sight !== NONE && !["lesser", "none"].includes(f.coverOverride) && f.provideCover !== false); })
+    .map(w => [(w.c[0] - d.sceneX) / px, (w.c[1] - d.sceneY) / px, (w.c[2] - d.sceneX) / px, (w.c[3] - d.sceneY) / px]);
+}
 function nearCoverFor(scene) {
   let segs = null;
-  return (square, size = 1) => {
-    if (!segs) { const px = scene.grid.size, d = scene.dimensions, NONE = 0, open = CONST.WALL_DOOR_STATES?.OPEN ?? 1;
-      segs = scene.walls.contents.filter(w => { const f = w.flags?.[VISIONER] ?? {}; if (w.door && w.ds === open) return false;
-          return STANDARD.includes(f.coverOverride) || (w.sight !== NONE && !["lesser", "none"].includes(f.coverOverride) && f.provideCover !== false); })
-        .map(w => [(w.c[0] - d.sceneX) / px, (w.c[1] - d.sceneY) / px, (w.c[2] - d.sceneX) / px, (w.c[3] - d.sceneY) / px]); }
-    return !!square && featureNear(square, size, segs);
-  };
+  return (square, size = 1) => { segs ??= coverSegs(scene); return !!square && featureNear(square, size, segs); };
+}
+/** For the packet's ground map: the squares holding a wall Take Cover can use (a thick trunk, a solid wall), as takeCoverAt(x, y). A segment counts for a
+    square it passes through the inside of (sampled every tenth of a square, edges left out), so a trunk ring marks the square it stands in. */
+function takeCoverSquares(scene) {
+  const at = new Set();
+  for (const [x1, y1, x2, y2] of coverSegs(scene)) { const n = Math.max(1, Math.ceil(Math.hypot(x2 - x1, y2 - y1) * 10));
+    for (let k = 0; k <= n; k++) { const x = x1 + (x2 - x1) * k / n, y = y1 + (y2 - y1) * k / n, fx = x - Math.floor(x), fy = y - Math.floor(y); if (fx > 0.02 && fx < 0.98 && fy > 0.02 && fy < 0.98) at.add(`${Math.floor(x)},${Math.floor(y)}`); } }
+  return (x, y) => at.has(`${x},${y}`);
 }
 /** PF2e's own "Effect: Cover" with its level already chosen, so its prompt doesn't open where nobody can click it (a rule's `selection` skips it). */
 async function addCoverEffect(actor, level) {
@@ -1099,9 +1167,12 @@ function coverage(scene, tok, aim, from) {
   const g = scene.grid.size, X = scene.dimensions.sceneX, Y = scene.dimensions.sceneY, covered = new Set();
   /* the same test as core's highlighted squares (Region#_getCoveredGridSpaceOffsets): a square's centre inside the shape, with its 0.75 px tolerance */
   for (const [x, y] of squaresNear(aim, from)) if (doc.polygonTree.testPoint({ x: X + (x + 0.5) * g, y: Y + (y + 0.5) * g }, 0.75)) covered.add(`${x},${y}`);
-  const creatures = scene.tokens.contents.filter(t => t.actor?.isOfType?.("creature") && !t.actor.isDead).map(t => ({ id: t.id, square: t.id === tok.id ? from.square : squareOf(t, scene), size: sizeOf(t) }));
-  const walls = solidWalls(scene);
-  return { shape, covered, reachable: burstReachable(aim, walls), ids: caughtBy(aim, covered, creatures, walls, tok.id) };
+  /* a creature off the grid is tested where it really is, as Foundry tests a token against a placed Region (its containment test points), so the check
+     and the area on the map agree; one on the grid by its squares, as before */
+  const points = t => t.getContainmentTestPoints({ x: t.x, y: t.y, elevation: t.elevation, width: t.width, height: t.height, depth: t.depth, shape: t.shape }).map(p => [(p.x - X) / g, (p.y - Y) / g]);
+  const creatures = scene.tokens.contents.filter(t => t.actor?.isOfType?.("creature") && !t.actor.isDead).map(t => ({ id: t.id, square: t.id === tok.id ? from.square : squareOf(t, scene), size: sizeOf(t), ...(t.id !== tok.id && offGrid(t, scene) ? { points: points(t) } : {}) }));
+  const walls = solidWalls(scene), insideAt = ([x, y]) => doc.polygonTree.testPoint({ x: X + x * g, y: Y + y * g }, 0.75);
+  return { shape, covered, reachable: burstReachable(aim, walls), ids: caughtBy(aim, covered, creatures, walls, tok.id, insideAt) };
 }
 /** The plan check's view of an area: who it catches, as labels the monster may know. Allies the GM hid, and creatures it doesn't perceive, are caught but
     never named to the thinker; their token ids go on the step for the GM's card only. now: what `sense` gave. */
@@ -1271,6 +1342,22 @@ export async function doIt(combat, requestId) {
   const n = request(combat, requestId); if (n?.state === "saves" && saveArrived(combat, n)) setTimeout(() => doIt(combat, requestId).catch(e => console.error(`${ID} | turn`, e)), 0);
 }
 const autoPause = () => Math.max(0, Number(game.settings.get(ID, "autoPause")) || 0);
+/* Auto ends the monster's turn itself (Rhea, 2026-11-07: "If it's on auto then yes"), END_MS after its last action, so the last roll can be seen. Only
+   when the turn finished by itself: a card for the GM to apply, a stop, Play it myself or a turn handed to the GM leave it to the GM. Nothing ends a
+   turn that has moved on, or one with another request still going (a re-plan). */
+const END_MS = 2000, ending = new Set();
+function endAfter(combat, requestId) {
+  const r = request(combat, requestId), tok = combat.scene?.tokens.get(r?.tokenId), key = `${combat.id}.${r?.round}.${r?.combatantId}`;
+  if (!r || !tok?.getFlag(ID, "auto") || ending.has(key)) return;
+  ending.add(key);
+  setTimeout(async () => {
+    try {
+      const n = request(combat, requestId);
+      if (n?.state !== "done" || !combat.started || combat.round !== r.round || combat.combatant?.id !== r.combatantId || currentRequest(combat)) return;
+      await combat.nextTurn();
+    } catch (e) { console.error(`${ID} | ending the turn`, e); } finally { ending.delete(key); }
+  }, END_MS);
+}
 /* Auto's pause between actions, so each roll can be followed. Hold and Play it myself end it at once. */
 async function pauseBetween(combat, id) {
   const end = Date.now() + autoPause() * 1000;
@@ -1322,6 +1409,8 @@ async function runTurn(combat, requestId) {
     if (work) {
       let result; try { result = await work(); } catch (e) { console.error(e); result = "ask"; await save(combat, requestId, { note: e.message }); }
       if (result === "stopped") return save(combat, requestId, { state: "stopped" });
+      /* a shot it couldn't make (no ammunition left, or Ranged Combat refused): nothing was rolled, so ask again with the action unspent */
+      if (result === "noShot") return replan(combat, { ...request(combat, requestId), id: requestId }, i, [{ who: "me", what: "noShot", item: step.itemName, why: "no ammunition it can use" }], tok);
       /* a save the player rolls: the turn waits, with no timer, until their row on the spell's card has it (or the GM presses Roll it for them) */
       if (result === "wait") return save(combat, requestId, { state: request(combat, requestId).state === "manual" ? "manual" : "saves" });
       if (result === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} may not have finished. ${isMove(step) ? "Put the monster where it should be" : step.do in POSTURES ? "Check whether it is prone" : step.do === "take-cover" ? "Check whether it is Taking Cover" : step.do === "ability" ? "Check the chat, HP and conditions" : step.do === "spell" ? "Check the chat, the spell's slot or use, HP and conditions" : step.do in STEALTH_WORD ? `Check its ${STEALTH_WORD[step.do]} card and apply Visioner's results if they aren't${step.do === "sneak" ? ", and where it stands" : ""}` : "Check the chat and HP"}, then play the rest yourself.`.trim() });
@@ -1339,12 +1428,12 @@ async function runTurn(combat, requestId) {
         return save(combat, requestId, { pos: i + 1, coverSettled: i + 1, state: end ? "done" : "ready" }); }
     }
     if (request(combat, requestId).state === "manual") return;
-    if (i + 1 >= r.steps.length) return save(combat, requestId, { pos: i + 1, coverSettled: i + 1, state: "done" });
+    if (i + 1 >= r.steps.length) { await save(combat, requestId, { pos: i + 1, coverSettled: i + 1, state: "done" }); return endAfter(combat, requestId); }
     if (!tok.getFlag(ID, "auto")) return save(combat, requestId, { pos: i + 1, coverSettled: i + 1, state: "ready" });   /* Next step */
     await save(combat, requestId, { pos: i + 1, coverSettled: i + 1 });
     await pauseBetween(combat, requestId);
   }
-  if (request(combat, requestId).state !== "manual") return save(combat, requestId, { state: "done" });
+  if (request(combat, requestId).state !== "manual") { await save(combat, requestId, { state: "done" }); return endAfter(combat, requestId); }
 }
 /** What changed since the plan was made, or why the next step no longer works (`changes`, empty when it can go on), and the next step as it checks out now (`next`). */
 async function lookAgain(combat, r, i, tok) {
@@ -1362,13 +1451,13 @@ async function replan(combat, r, i, changes, tok, { counted = true } = {}) {
   /* with no actions left the turn ends, unless an Improved Grab or the like can still follow the Strike that just hit (a free action) */
   const freeNext = () => { const l = lastAction({ done: done.at(-1) ?? null, strikes: strikesWithIds(tok.actor).map(({ id, strike: a }) => ({ id, effects: [...(a.item?.system?.attackEffects?.value ?? [])] })) });
     return l?.do === "strike" && l.hit === true && abilityList(tok.actor).some(a => a.followUp && a.kind === "free" && l.effects.includes(a.effect)); };
-  if (actionsOf(tok.actor, combat) - spent <= 0 && !freeNext()) return saveTurns(combat, { [`${at}.state`]: "done", [`${at}.pos`]: i, [`${at}.why`]: changes, [`${at}.note`]: [r.note, `${why} No actions left, so the turn ends here.`].filter(Boolean).join(" ") });   /* keep a note from its steps (out of hiding, 0 HP) */
+  if (actionsOf(tok.actor, combat) - spent <= 0 && !freeNext()) { await saveTurns(combat, { [`${at}.state`]: "done", [`${at}.since`]: clock(), [`${at}.pos`]: i, [`${at}.why`]: changes, [`${at}.note`]: [r.note, `${why} No actions left, so the turn ends here.`].filter(Boolean).join(" ") }); return endAfter(combat, r.id); }   /* keep a note from its steps (out of hiding, 0 HP) */
   if (replans > MAX_REPLANS) return saveTurns(combat, { [`${at}.state`]: "done", [`${at}.pos`]: i, [`${at}.why`]: changes, [`${at}.note`]: [r.note, `${why} That would be re-plan ${replans} this turn, so play the rest yourself.`].filter(Boolean).join(" ") });
   let built; try { built = await buildPacket(combat, tok, { spent, attacks, done, note: `Asked again mid-turn: ${why}` }); }
   catch (e) { console.error(`${ID} | packet`, e); return save(combat, r.id, { state: "stopped", note: `Something changed (${why}) and I couldn't work out what ${tok.name} perceives now (${e.message}). Play the rest yourself.` }); }
   const id = foundry.utils.randomID(8);
   await saveTurns(combat, { [`${at}.state`]: "done", [`${at}.pos`]: i, [`${at}.replanned`]: id,
-    [`requests.${id}`]: { state: "requested", combatantId: r.combatantId, tokenId: r.tokenId, round: r.round, turn: r.turn, at: Date.now(), log: {}, labels: built.labels, packet: built.packet, seen: situationNow(combat, tok, built.labels, built.others), note: null, tries: 0, pos: 0, spent, attacks, done, replans, why: changes, parent: r.id },
+    [`requests.${id}`]: { state: "requested", combatantId: r.combatantId, tokenId: r.tokenId, round: r.round, turn: r.turn, at: Date.now(), since: clock(), log: {}, labels: built.labels, packet: built.packet, seen: situationNow(combat, tok, built.labels, built.others), note: null, tries: 0, pos: 0, spent, attacks, done, replans, why: changes, parent: r.id },
     ...eventChange("replan", id, 0), ...packetExtras(combat, tok, built) });
 }
 /** Is this page working on a turn, or about to? For tools that share the runner's page. The in-memory sets cover the start of a turn, before any request

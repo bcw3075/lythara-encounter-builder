@@ -54,13 +54,36 @@ export function cleanMeta(m = {}) {
 export const nextSeq = (maxSeen = 0, now = 0) => Math.max(Math.floor(now), Math.floor(maxSeen) + 1);
 /** An event still matters while its request waits for the plan it asks for. A turn event wants the first plan, a retry the second; once a plan is in,
     a turn is played, or the thinker gave up, it's history. */
-export const live = (ev, req) => !!req?.packet && req.state === "requested" && !req.gaveUp && (req.tries ?? 0) === ev.tries;
+export const live = (ev, req) => ev.kind === "stall" ? stallLive(ev, req) : !!req?.packet && req.state === "requested" && !req.gaveUp && (req.tries ?? 0) === ev.tries;
+
+/* ---------- stalls (Rhea, 2026-11-08) ---------- */
+/** How long a turn may sit before it counts as stalled: machine work (an action running, or the thinker's plan not in) 60 s; anything waiting on a person
+    (a save, a card to apply, a stopped turn) 3 minutes. A turn waiting for the GM's Next step without Auto is normal and never stalls, nor does Held. */
+export const STALL_MS = { machine: 60000, person: 180000 };
+const STALL_KIND = { requested: "machine", submitted: "machine", running: "machine", saves: "person", stopped: "person" };
+/** Is this request stalled now? since: when it last moved on (state, step or a stage's record), on the server clock. auto: the monster's Auto box. */
+export function stallOf(req, { now, auto = false } = {}) {
+  if (!req || req.gaveUp || !Number.isFinite(req.since) || !Number.isFinite(now) || now < req.since) return null;
+  const kind = STALL_KIND[req.state] ?? (req.state === "ready" && auto ? "person" : null); if (!kind) return null;
+  const waited = now - req.since; return waited >= STALL_MS[kind] ? { kind, state: req.state, since: req.since, waited } : null;
+}
+/** A stall event matters while the request is still stuck at the same point. */
+export const stallLive = (ev, req) => !!req?.stall && req.stall.since === ev.since && req.since === ev.since && !["done", "manual", "held"].includes(req.state);
+/** What it's waiting on, in words for the card and the thinker. */
+export function stallWords(stall) {
+  const what = { requested: "waiting for Angel's plan", submitted: "checking the plan", running: "an action has been running", saves: "waiting for a save", stopped: "stopped, waiting for you", ready: "waiting for you (a card to apply, then Next step)" }[stall?.state] ?? "not moving";
+  const m = Math.floor((stall?.waited ?? 0) / 60000), sec = Math.round((stall?.waited ?? 0) / 1000);
+  return `Stalled: ${what}, for ${m >= 1 ? `${m} minute${m === 1 ? "" : "s"}` : `${sec} seconds`}.`;
+}
 /** The first event after the cursor that still matters. events: [{ seq, ... }] from every running fight; isLive(ev) says whether it still matters. */
 export function pickEvent(events = [], cursor = 0, isLive = () => true) {
   return [...events].filter(e => e.seq > (cursor ?? 0)).sort((a, b) => a.seq - b.seq).find(isLive) ?? null;
 }
 /** What the thinker receives for an event: the event, its packet, and how many tries are left. The packet already went through packetOf. */
 export function eventOut(ev, req) {
+  /* a stall: no packet (nothing to plan), just what's stuck, so the thinker can look into it (the note, the runner's windows) and clear it or tell the GM */
+  if (ev.kind === "stall") return { seq: ev.seq, kind: "stall", combatId: ev.combatId, requestId: ev.requestId, round: req.round, monster: req.packet?.you?.label ?? null, state: req.state,
+    stall: { kind: req.stall?.kind ?? null, waitedSeconds: Math.round((req.stall?.waited ?? 0) / 1000), words: stallWords(req.stall) }, step: (req.pos ?? 0) + 1, steps: req.steps?.length ?? 0, note: req.note ?? null, verdict: req.verdict ?? null };
   return { seq: ev.seq, kind: ev.kind, combatId: ev.combatId, requestId: ev.requestId, round: req.round, monster: req.packet?.you?.label ?? null, triesLeft: MAX_TRIES - (req.tries ?? 0),
     ...(ev.kind === "retry" ? { reason: req.verdict, yourPlan: req.plan ?? null } : ev.kind === "replan" ? { reason: describeChanges(req.why), done: req.done ?? [] } : {}), packet: req.packet };
 }
