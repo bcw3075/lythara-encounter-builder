@@ -715,6 +715,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   /* the prompt */
   const pt = promptText({ canDo: Object.keys(COSTS), stepKinds: STEP_KINDS });
   check("prompt teaches stealth", /"do": "hide"/.test(pt) && /"do": "sneak"/.test(pt) && /"do": "seek", "at"/.test(pt) && /Hiding ends/.test(pt) && /never told whether it worked/.test(pt) && !/\$\{/.test(pt));
+  { const f = fs.readFileSync(path.resolve(HERE, "../../scripts/fight.mjs"), "utf8"); check("a Sneak reaches runStealth before the move dispatch", f.indexOf("step.do in STEALTH_WORD) work") > 0 && f.indexOf("step.do in STEALTH_WORD) work") < f.indexOf("isMove(step)) work")); }
   check("can do stealth", ["hide", "sneak", "seek"].every(k => Object.keys(COSTS).includes(k)));
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */

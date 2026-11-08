@@ -517,8 +517,8 @@ export function nextCover(rec = {}, active = false) {
   if (!rec.started) return active ? "already" : "act";
   return "ask";
 }
-/** What to do next with a Hide, Sneak or Seek, from its record. Never repeated: when the record can't tell whether a stage finished, "ask" (or "check", where
-    the card itself can tell: Visioner's Apply button turns into Revert once it has applied). PF2e's own action posts the card with the secret roll
+/** What to do next with a Hide, Sneak or Seek, from its record. Never repeated: when the record can't tell whether a stage finished, "ask" ("check" after
+    Apply was pressed: the glue looks for Visioner's Revert on the card, which survives only if the card wasn't redrawn, and otherwise asks). PF2e's own action posts the card with the secret roll
     ("roll"); "gm" when Visioner's buttons aren't on it, so the GM applies the result from the card. A Sneak then presses Start Sneak ("start", and
     "check-start" after a reload), moves like a Stride ("move": the glue goes by the move's own record, `started` and `moved`), and applies. A Seek is
     limited to its area when it applies. rec: rollStarted, card, gm, startStarted, startDone, started, moved, applyStarted, applied. */

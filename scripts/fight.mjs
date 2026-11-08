@@ -191,7 +191,7 @@ async function buildPacket(combat, tok, turn = {}) {
   /* what it knows of its own stealth (Rhea, 2026-11-07, B): what it last tried and whether it is still hiding, the light where it stands, its own
      concealment and who it has standard cover from; never whether a secret roll worked */
   const tried = t.stealth?.[tok.id] ?? null;
-  you.stealth = { lastTried: tried ? `${tried.did === "sneak" ? "Sneaked" : "Hid"} in round ${tried.round}, and hasn't come out of hiding since` : null, light: lightOn(tok.object.center, scene), concealed: !!a.hasCondition?.("concealed"), standardCoverFrom: you.takeCover.standardCoverFrom };
+  you.stealth = { lastTried: tried ? `${tried.did === "sneak" ? "Sneaked" : "Hid"} in round ${tried.round}, and has only Hidden, Sneaked or Stepped since` : null, light: lightOn(tok.object.center, scene), concealed: !!a.hasCondition?.("concealed"), standardCoverFrom: you.takeCover.standardCoverFrom };
   const packet = packetOf({ you, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], ground: groundAround(model, square, GROUND_RADIUS),
     allies: allies.map(x => ({ label: labels[x.id], name: x.name, square: squareOf(x, scene), healthWord: wordsFor(x.actor), conditions: visibleConditions(conditionsOn(x.actor)) })),
     others: others.map(o => ({ id: o.id, state: o.state, label: labels[o.id], square: o.square, size: o.token.actor.size, distance: o.distance, gear: gearOf(o.token.actor), conditions: visibleConditions(conditionsOn(o.token.actor)), healthWord: wordsFor(o.token.actor), cover: cover?.getAutoCoverState?.(tok.object, o.token.object) ?? "none" })) });
@@ -828,17 +828,23 @@ const sleep = ms => new Promise(res => setTimeout(res, ms));
 const cardEl = id => ui.chat?.element?.querySelector?.(`[data-message-id="${id}"]`) ?? null;
 async function cardButton(id, action, ms = 3000) { for (let t = 0; t <= ms; t += 100) { const b = cardEl(id)?.querySelector?.(`[data-action="${action}"]`); if (b) return b; await sleep(100); } return null; }
 const press = b => b.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-/** Press Visioner's Apply Changes on a card and wait for its answer: "applied" (the button became Revert), "none" (Visioner found nothing to change), or
-    null if the button isn't there. Visioner marks the button "processing" while it works and takes that off when it's done. */
+/** Press Visioner's Apply Changes on a card and wait for its answer: "applied" (Visioner turned the pressed button into Revert), "none" (it found nothing
+    to change), or null if the button isn't there. Visioner marks the button "processing" while it works (synchronously, so a press can't run twice) and
+    takes that off when done, on the pressed button itself even if the card has been redrawn meanwhile; a redrawn card always shows Apply again, because
+    Visioner's panels never draw Revert, so only the pressed button tells. */
 async function applyOnCard(id, kind) {
   const b = await cardButton(id, `apply-now-${kind}`); if (!b) return null;
   press(b);
   for (let t = 0; t < STEP_MS; t += 100) {
+    if (!b.classList.contains("processing")) return b.dataset.action === `revert-now-${kind}` ? "applied" : "none";
     await sleep(100);
-    if (cardEl(id)?.querySelector?.(`[data-action="revert-now-${kind}"]`)) return "applied";
-    const a = cardEl(id)?.querySelector?.(`[data-action="apply-now-${kind}"]`); if (t >= 300 && a && !a.classList.contains("processing")) return "none";
   }
   throw new Error(`Visioner's ${kind} result didn't come within ${STEP_MS / 1000} seconds.`);
+}
+/** Run a change to a card and wait until the chat log has drawn it again, so a button found after it is the new one. */
+async function redrawn(id, change) {
+  const old = cardEl(id); await change();
+  for (let t = 0; t < 3000 && cardEl(id) === old; t += 100) await sleep(100);
 }
 /** A Seek's area in Visioner's own terms: a circle at a grid corner, or a cone from the monster's centre toward a square's centre. */
 function seekArea(aim, tok, scene) {
@@ -874,6 +880,7 @@ async function runStealth(combat, id, i, step, tok) {
     if (now === "roll") {
       await record({ rollStarted: true });
       pending = { tokenId: tok.id, waiters: new Map() };
+      stopAiming();   /* PF2e would take a target left over from an earlier step into the check's roll options */
       let card; try { card = await watched(async () => { const c = waitForAny(["skill-check", "perception-check"]); await game.pf2e.actions.get(kind).use({ actors: [tok.actor], event: clickWith("showCheckDialogs") }); return c; }); }
       finally { pending = null; }
       await record({ card: { message: card.id } });
@@ -885,17 +892,20 @@ async function runStealth(combat, id, i, step, tok) {
         await record({ startStarted: true });
         if (b) press(b);
       }
-      for (let t = 0; t < STEP_MS && !game.messages.get(msgId)?.flags?.[VISIONER]?.sneakStartStates; t += 100) await sleep(100);
-      if (!game.messages.get(msgId)?.flags?.[VISIONER]?.sneakStartStates) { await addNote(combat, id, `Visioner's Start Sneak didn't record ${tok.name}'s start.`); return "ask"; }
+      /* Start Sneak writes sneakStartStates, sneakStartPosition, then startStates (which its results window reads): wait for all three before correcting */
+      const started = () => { const f = game.messages.get(msgId)?.flags?.[VISIONER] ?? {}; return !!(f.sneakStartStates && f.sneakStartPosition && f.startStates); };
+      for (let t = 0; t < STEP_MS && !started(); t += 100) await sleep(100);
+      if (!started()) { await addNote(combat, id, `Visioner's Start Sneak didn't record ${tok.name}'s start.`); return "ask"; }
+      await sleep(300);   /* its last write, then the panel's redraw */
       await fixSneakStart(game.messages.get(msgId), tok);
       await record({ startDone: true });
     } else if (now === "apply" || now === "check") {
       if (!message) return toGm(`${tok.name}'s ${word} card is gone.`);
-      if (now === "check") {   /* begun before a reload: the card says whether Visioner applied it */
+      if (now === "check") {   /* begun before a reload: a Revert button survives only if the card wasn't redrawn, so usually the GM looks */
         if (await cardButton(msgId, `revert-now-${kind}`, 1500)) { await record({ applied: "applied" }); await rememberStealth(combat, tok, kind); continue; }
-        await addNote(combat, id, `I can't tell whether Visioner applied ${tok.name}'s ${word}.`); return "ask";
+        await addNote(combat, id, `I can't tell whether Visioner applied ${tok.name}'s ${word}: look at its card (Open ${word} Results shows it).`); return "ask";
       }
-      if (kind === "seek") await message.update({ [`flags.${VISIONER}.seekTemplate`]: seekArea(step.aim, tok, combat.scene) });   /* before the button: Visioner reads it when pressed */
+      if (kind === "seek") await redrawn(msgId, () => message.update({ [`flags.${VISIONER}.seekTemplate`]: seekArea(step.aim, tok, combat.scene) }));   /* before the button, which must be the redrawn one: Visioner reads the flag when pressed */
       if (!(await cardButton(msgId, `apply-now-${kind}`))) return toGm(`Visioner's Apply Changes isn't on ${tok.name}'s ${word} card.`);
       await record({ applyStarted: true });
       const got = await watched(() => applyOnCard(msgId, kind));
@@ -918,12 +928,14 @@ function hiddenFromWho(tok) {
     or Step, and after an attack (which keeps its off-guard for that attack). After an attack Visioner's own Attack Consequences on its card goes first;
     otherwise Visioner's public setVisibility. The GM can hide it again in Visioner's manager. With Visioner's automatic system on, Visioner decides. */
 async function comeOut(combat, id, tok, why, cardId = null) {
+  /* what it knows it tried is forgotten at any revealing action, whether or not anyone had it hidden: keeping it only when a Hide failed would tell the
+     thinker the secret result */
+  if (turns(combat).stealth?.[tok.id]) await saveTurns(combat, { [`stealth.${tok.id}`]: foundry.data.operators.ForcedDeletion.create() });
   const who = hiddenFromWho(tok); if (!who.length) return;
   if (game.settings.get(VISIONER, "autoVisibilityEnabled")) return addNote(combat, id, `${tok.name} was hidden before ${why}; Visioner's automatic visibility decides whether it still is.`);
   let left = who;
   if (cardId) { try { if (await applyOnCard(cardId, "consequences")) left = hiddenFromWho(tok); } catch (e) { console.warn(`${ID} | consequences`, e); } }
   const vis = visionerApi(); for (const t of left) await vis.setVisibility(t.id, tok.id, "observed");
-  await saveTurns(combat, { [`stealth.${tok.id}`]: foundry.data.operators.ForcedDeletion.create() });
   await addNote(combat, id, `${tok.name} was hidden from ${listWords(who.map(t => t.name))}, and ${why} makes it observed by them (hide it again in Visioner's manager to allow a quiet action).`);
 }
 const actWords = step => step.do === "stride" ? "its Stride" : step.do === "crawl" ? "its Crawl" : step.do === "stand" ? "standing up" : step.do === "drop-prone" ? "dropping prone" : step.do === "take-cover" ? "Taking Cover" : step.do === "seek" ? "its Seek" : step.do === "spell" ? `casting ${step.itemName}` : step.do === "ability" ? `using ${step.itemName}` : step.do === "strike" ? `its ${step.itemName}` : "acting";
@@ -1266,7 +1278,8 @@ async function runTurn(combat, requestId) {
     if (step.do === "strike") {
       const target = combat.scene.tokens.get(r.labels[step.target]); if (!target) return save(combat, requestId, { state: "stopped", note: `${step.targetName} is gone.` });
       work = () => runStrike(combat, requestId, i, step, tok, target);
-    } else if (isMove(step)) work = () => runStride(combat, requestId, i, step, tok);
+    } else if (step.do in STEALTH_WORD) work = () => runStealth(combat, requestId, i, step, tok);   /* before moves: a Sneak is a move too */
+    else if (isMove(step)) work = () => runStride(combat, requestId, i, step, tok);
     else if (step.do in POSTURES) work = () => runPosture(combat, requestId, i, step.do, tok);
     else if (step.do === "take-cover") work = () => runTakeCover(combat, requestId, i, tok);
     else if (step.do === "ability") {
@@ -1275,7 +1288,7 @@ async function runTurn(combat, requestId) {
     } else if (step.do === "spell") {
       const tid = step.target ? tokenIdOf(combat, r, step.target) : null, target = tid ? combat.scene.tokens.get(tid) : null; if (step.target && !target) return save(combat, requestId, { state: "stopped", note: `${step.targetName} is gone.` });
       work = step.area?.aim ? () => runArea(combat, requestId, i, step, tok) : () => runSpell(combat, requestId, i, step, tok, target);
-    } else if (step.do in STEALTH_WORD) work = () => runStealth(combat, requestId, i, step, tok);
+    }
     if (work) {
       let result; try { result = await work(); } catch (e) { console.error(e); result = "ask"; await save(combat, requestId, { note: e.message }); }
       if (result === "stopped") return save(combat, requestId, { state: "stopped" });
@@ -1286,10 +1299,10 @@ async function runTurn(combat, requestId) {
       if (revealsAfter(step)) await comeOut(combat, requestId, tok, actWords(step), request(combat, requestId).log?.[i]?.attack?.message ?? null).catch(e => console.warn(`${ID} | out of hiding`, e));
       await settleCover(combat, requestId, i + 1, tok, i);   /* its own attack or move ends a Take Cover */
       /* a Seek ends the plan: ask again with what it found, while it has actions left (replan ends the turn otherwise) */
-      if (step.do === "seek" && result !== "gm" && request(combat, requestId).state !== "manual") { await save(combat, requestId, { pos: i + 1, coverSettled: i + 1 }); return replan(combat, { ...request(combat, requestId), id: requestId }, i + 1, [{ who: "me", what: "sought" }], tok); }
+      if (step.do === "seek" && result !== "gm" && request(combat, requestId).state !== "manual") return replan(combat, { ...request(combat, requestId), id: requestId }, i + 1, [{ who: "me", what: "sought" }], tok, { counted: false });   /* a reload before this repeats nothing: the Seek's record says it's done, and this is reached again */
       /* a Stride, Step or Crawl that ended short of its square: the rest was planned from there, so ask again (the reason names the square, never what stopped it) */
       const at = squareOf(tok, combat.scene);
-      if (isMove(step) && !same(at, step.to) && i + 1 < r.steps.length && request(combat, requestId).state !== "manual") return replan(combat, { ...request(combat, requestId), id: requestId }, i + 1, [{ who: "me", what: "stopped", at }], tok);
+      if (isMove(step) && result !== "gm" && !same(at, step.to) && i + 1 < r.steps.length && request(combat, requestId).state !== "manual") return replan(combat, { ...request(combat, requestId), id: requestId }, i + 1, [{ who: "me", what: "stopped", at }], tok);
       /* an ability whose effects are the GM's to apply: the turn waits for Next step, Auto or not (the look before the next action then sees what changed) */
       if (result === "gm" && request(combat, requestId).state !== "manual") { const end = i + 1 >= r.steps.length;
         if (!end) await addNote(combat, requestId, "Then press Next step.");
@@ -1312,8 +1325,9 @@ async function lookAgain(combat, r, i, tok) {
   return rest.ok ? { changes: [], next: rest.steps[0] } : { changes: [{ who: "plan", what: "illegal", reason: rest.reason }] };
 }
 /** Drop the rest of the plan and ask again, for the same turn: a new request with a fresh packet, what's done so far, and why. The old one ends there. */
-async function replan(combat, r, i, changes, tok) {
-  const used = spentBy(r.steps.slice(0, i)), spent = (r.spent ?? 0) + used.actions, attacks = (r.attacks ?? 0) + used.attacks, replans = (r.replans ?? 0) + 1;
+async function replan(combat, r, i, changes, tok, { counted = true } = {}) {
+  /* counted: false for the re-ask after a Seek, which is part of the plan, not something that went wrong, so it doesn't use up MAX_REPLANS */
+  const used = spentBy(r.steps.slice(0, i)), spent = (r.spent ?? 0) + used.actions, attacks = (r.attacks ?? 0) + used.attacks, replans = (r.replans ?? 0) + (counted ? 1 : 0);
   const done = [...(r.done ?? []), ...r.steps.slice(0, i).map((s, k) => doneStep(s, r.log?.[k]))], why = describeChanges(changes), at = `requests.${r.id}`;
   /* with no actions left the turn ends, unless an Improved Grab or the like can still follow the Strike that just hit (a free action) */
   const freeNext = () => { const l = lastAction({ done: done.at(-1) ?? null, strikes: strikesWithIds(tok.actor).map(({ id, strike: a }) => ({ id, effects: [...(a.item?.system?.attackEffects?.value ?? [])] })) });
