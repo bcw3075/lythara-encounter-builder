@@ -747,7 +747,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   const S = 1000000;
   check("no stall before 60 s", stallOf({ state: "running", since: S }, { now: S + 59000 }) === null);
   const st = stallOf({ state: "running", since: S }, { now: S + 61000 }); check("running stalls at 60 s", st?.kind === "machine" && st.since === S);
-  check("requested stalls at 60 s", stallOf({ state: "requested", since: S }, { now: S + 60000 })?.kind === "machine");
+  check("requested stalls at 60 s", stallOf({ state: "requested", since: S, packet: {} }, { now: S + 60000 })?.kind === "machine");
   check("saves wait 3 min", stallOf({ state: "saves", since: S }, { now: S + 120000 }) === null && stallOf({ state: "saves", since: S }, { now: S + STALL_MS.person })?.kind === "person");
   check("stopped is a person wait", stallOf({ state: "stopped", since: S }, { now: S + 200000 })?.kind === "person");
   check("ready without Auto never stalls", stallOf({ state: "ready", since: S }, { now: S + 9e6 }) === null);
@@ -769,6 +769,12 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("on-grid unchanged", caughtBy(aim, cov, [{ id: "a", square: [5, 5], size: 1 }], [], null, () => false).length === 1);
   const pk = packetOf({ you: {}, others: [{ id: "x", label: "E1", state: "observed", square: [1, 1], offGrid: true }, { id: "y", label: "E2", state: "observed", square: [2, 2], offGrid: false }, { id: "z", label: "E3", state: "hidden", square: [3, 3], offGrid: true }] });
   check("packet says off grid", pk.perceived[0].offGrid === true && !("offGrid" in pk.perceived[1]) && !("offGrid" in pk.perceived[2]));
+  check("no packet or no tries left waits on the GM", stallOf({ state: "requested", since: 1, tries: 2, packet: {} }, { now: 200000 })?.state === "gm" && stallOf({ state: "requested", since: 1 }, { now: 120000 }) === null && /play the turn/.test(stallWords({ state: "gm", waited: 181000 })));
+  check("long Auto pause isn't a stall", stallOf({ state: "running", since: 1 }, { now: 70001, machineMs: 90000 }) === null);
+  const leak = eventOut({ seq: 1, kind: "stall", since: 1 }, { state: "running", since: 1, stall: { since: 1, state: "running", waited: 61000 }, note: "Valeros is at 0 HP", packet: { you: { label: "M1" } } });
+  check("stall event carries no note", !JSON.stringify(leak).includes("Valeros"));
+  check("shots from one stack counted together", !checkPlan({ steps: [{ do: "strike", item: "a", target: "E1" }, { do: "strike", item: "b", target: "E1" }] }, { actions: 3, strikes: [{ id: "a", name: "A", ranged: true, shotsLeft: 1, stack: "s1" }, { id: "b", name: "B", ranged: true, shotsLeft: 1, stack: "s1" }], targets: { E1: { name: "Hero", distance: 30 } } }).ok);
+  check("spent noShot words", /action is spent/.test(describeChange({ who: "me", what: "noShot", item: "Bow", spent: true })));
   const pr = hello(1).prompt; check("prompt explains the new parts", /shotsLeft/.test(pr) && /"Down"/.test(pr) && /offGrid/.test(pr) && /T marks/.test(pr) && /"stall"/.test(pr));
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */

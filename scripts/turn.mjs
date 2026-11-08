@@ -39,7 +39,7 @@ const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
 export const listWords = (xs = []) => xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`;
 
 /** Check a plan against what the glue gathered. Returns { ok: true, steps } with each step resolved, or { ok: false, reason }.
-    ctx: { actions (left this turn), attacksBefore (attacks already made this turn, for the multiple attack penalty), strikes: [{ id, name, reach, ranged, maxRange, shotsLeft (null: not counted), ammo (its name) }],
+    ctx: { actions (left this turn), attacksBefore (attacks already made this turn, for the multiple attack penalty), strikes: [{ id, name, reach, ranged, maxRange, shotsLeft (null: not counted), ammo (its name), stack (shots from one stack are counted together) }],
     targets: { label: { name, square, pos, span, size, elev, depth, flat } or { name, distance, flat } }, me: { square, pos, span, size, elev, depth } (pos and span: where the
     token really is and how wide, in squares, as PF2e measures it, fractional off the grid; distances use them, routes and occupancy the rounded square and
     size; a hidden target has no pos, so it is measured from the square the monster knows), speed (land), cantAct (why it can't act at all, or null),
@@ -178,7 +178,7 @@ export function checkPlan(plan, ctx) {
     const t = ctx.targets[step.target]; if (!t) return { ok: false, reason: `${at}: it doesn't know of "${step.target}".` };
     const where = steps.some(x => MOVES.includes(x.do)) ? ` from [${here[0]}, ${here[1]}]` : "";
     /* ammunition: shotsLeft is what the shot's own checks will let through (fight.mjs's ammoOf), counted through the plan */
-    if (s.shotsLeft != null) { const n = (shots[s.id] ?? 0) + 1; if (n > s.shotsLeft) return { ok: false, reason: `${at}: it has ${s.shotsLeft ? `only ${s.shotsLeft} shot${s.shotsLeft === 1 ? "" : "s"}` : "no shots"} left with ${s.name} (${s.ammo ?? "ammunition"}).` }; shots[s.id] = n; }
+    if (s.shotsLeft != null) { const k = s.stack ?? s.id, n = (shots[k] ?? 0) + 1; if (n > s.shotsLeft) return { ok: false, reason: `${at}: it has ${s.shotsLeft ? `only ${s.shotsLeft} shot${s.shotsLeft === 1 ? "" : "s"}` : "no shots"} left with ${s.name} (${s.ammo ?? "ammunition"}).` }; shots[k] = n; }
     if (s.ranged) { const d = distanceTo(t, null); if (s.maxRange && d > s.maxRange) return { ok: false, reason: `${at}: ${t.name} is ${d} ft away${where}, out of range of ${s.name} (${s.maxRange} ft).` }; }
     else { const d = distanceTo(t, s.reach); if (d > s.reach) return { ok: false, reason: `${at}: ${t.name} is ${d} ft away${where}, out of reach of ${s.name} (${s.reach} ft).` }; }
     steps.push({ do: "strike", item: s.id, itemName: s.name, target: step.target, targetName: t.name ?? step.target, variant: Math.min(attacks, 2), flat: t.flat ?? 0 });
@@ -446,7 +446,7 @@ export function describeChange(c, nameOf = l => l, self = "It") {
     case "moved": return `${who} moved.`;
     case "stopped": return `${who} was stopped at [${c.at?.[0]}, ${c.at?.[1]}], short of where it was going.`;
     case "sought": return `${who} finished Seeking: what it perceives now shows what it found.`;
-    case "noShot": return `${who} couldn't shoot its ${c.item ?? "weapon"}${c.why ? ` (${c.why})` : ""}; the action isn't spent.`;
+    case "noShot": return `${who} couldn't shoot its ${c.item ?? "weapon"}${c.why ? ` (${c.why})` : ""}; ${c.spent ? "the action is spent (its flat check was rolled)" : "the action isn't spent"}.`;
     case "hurt": return `${who} was hurt.`;
     case "healed": return `${who} regained HP.`;
     case "actions": return `${its} actions this turn are now ${c.now}.`;

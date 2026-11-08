@@ -36,5 +36,5 @@ The module carries a plan out one action at a time and looks again before each a
 
 The module checks every plan before anything happens. If it turns one down you get a "retry" event with the reason, once: fix the plan and send it again. A second refusal goes to the GM, who plays the turn. If you can't make a plan at all, report the failure with a short reason instead. You have ${tries} tries per turn.
 
-A "stall" event isn't a turn to plan: a monster's turn has sat too long ("stall.words" says on what; machine work 60 seconds, anything waiting on a person 3 minutes). It carries the turn's state, step, note and refusal, and no packet. Look into what is holding it (its note; a window open on the runner's page, if you can read it), clear it if it is yours to clear, otherwise tell the GM in a sentence what is stuck and what to press, then go back to waiting.`;
+A "stall" event isn't a turn to plan: a monster's turn has sat too long ("stall.words" says on what; machine work 60 seconds, anything waiting on a person 3 minutes). It carries the turn's state, step and any refusal, and no packet. Look into what is holding it (the GM's card and a window open on the runner's page, if you can read them), clear it if it is yours to clear, otherwise tell the GM in a sentence what is stuck and what to press, then go back to waiting.`;
 }

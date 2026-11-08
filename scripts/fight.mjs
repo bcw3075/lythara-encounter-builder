@@ -112,16 +112,24 @@ export async function ammoOf(actor, strike) {
   const item = strike.item; if (!item?.isRanged) return null;
   if (actor.type === "npc" && rangedOn()) {
     const W = await rangedWeapons(); let w = null; try { w = W?.transformWeapon(actor, item); } catch (e) { console.warn(`${ID} | Ranged Combat weapon`, e); }
-    if (!w || w.expend == null || w.expend <= 0) return null;
-    if (w.isRepeating || w.capacity > 0) return null;   /* loaded weapons: Ranged Combat's own loading rules, not counted here */
-    const usable = (w.compatibleAmmunition ?? []).filter(a => a.quantity > 0), pick = w.selectedInventoryAmmunition && usable.find(a => a.id === w.selectedInventoryAmmunition.id) ? w.selectedInventoryAmmunition : usable.length === 1 ? usable[0] : null;
-    const from = pick ? [pick] : usable, uses = from.reduce((n, a) => n + (a.calculateTotalRemainingUses?.() ?? a.quantity), 0);
-    return { shotsLeft: Math.floor(uses / w.expend), ammo: (pick ?? usable[0] ?? (w.compatibleAmmunition ?? [])[0])?.name ?? "ammunition", stack: pick?.id ?? null, expend: w.expend };
+    if (!W || !w) return { shotsLeft: null, unreadable: true };   /* Ranged Combat changed: it counts this shot itself, and the GM is told */
+    if (w.expend == null || w.expend <= 0) return null;
+    if (w.isRepeating || w.capacity > 0 || w.reloadActions > 0) return null;   /* weapons it loads: its own loading rules, not counted here */
+    /* the stack its check will take from: the selected one (even when it reads it as empty), or the only usable one; several with none chosen,
+       Ranged Combat would ask which, where nobody can answer, so no shot until the GM picks one */
+    const all = w.compatibleAmmunition ?? [], usable = all.filter(a => a.quantity > 0), sel = w.selectedInventoryAmmunition;
+    const pick = sel ? all.find(a => a.id === sel.id) ?? sel : usable.length === 1 ? usable[0] : null;
+    if (!pick) return { shotsLeft: 0, ammo: usable.length ? "several kinds, none chosen in Ranged Combat" : (all[0]?.name ?? "ammunition"), stack: null, expend: w.expend };
+    const uses = pick.quantity > 0 ? (pick.calculateTotalRemainingUses?.() ?? pick.quantity) : 0;
+    return { shotsLeft: Math.floor(uses / w.expend), ammo: pick.name ?? "ammunition", stack: pick.id, expend: w.expend };
   }
   const expend = item.system?.expend ?? 0, a = item.ammo; if (!(expend > 0) || !a) return null;
   const left = a.isOfType?.("ammo") && a.system.uses?.max > 1 ? a.system.uses.value + (a.quantity - 1) * a.system.uses.max : a.quantity;
   return { shotsLeft: Math.floor(left / expend), ammo: a.name, stack: null, expend };
 }
+/** A Strike Ranged Combat refused this turn counts as having no shots for the rest of it, so a re-plan can't try it again (turns.noShot). */
+const shotsFor = (combat, tok, id, m) => { const b = combat ? turns(combat).noShot?.[tok.id] : null; return b?.round === combat.round && b.items?.includes(id) ? 0 : m?.shotsLeft; };
+const ammoFields = (m, left) => m && !m.unreadable ? { shotsLeft: left, ammo: m.ammo, ...(m.stack ? { stack: m.stack } : {}) } : {};
 /** Take a monster's shot's ammunition from the stack (uses first, then the stack), as Ranged Combat would for one shot. */
 async function takeAmmo(actor, ammo) {
   const it = ammo?.stack ? actor.items.get(ammo.stack) : null; if (!it) return null;
@@ -130,10 +138,10 @@ async function takeAmmo(actor, ammo) {
   await it.update({ "system.quantity": Math.max(0, q), ...(max > 1 ? { "system.uses.value": u } : {}) });
   return Math.max(0, q);
 }
-async function strikesOf(actor) {
+async function strikesOf(actor, combat = null, tok = null) {
   const out = []; for (const { id, strike: a } of strikesWithIds(actor)) {
     let damage = null; try { damage = await a.damage({ getFormula: true }); } catch (e) { console.warn(`${ID} | damage formula`, e); }
-    out.push({ id, name: a.label, mod: strikeMods(a.variants.map(v => v.label)), reach: actor.getReach({ action: "attack", weapon: a.item }), ...(a.item?.isRanged ? { range: a.item.range?.increment ?? null, maxRange: a.item.range?.max ?? null } : {}), damage: typeof damage === "string" ? damage : null, traits: (a.traits ?? []).map(t => t.name).filter(t => t !== "attack"), effects: a.item?.system?.attackEffects?.value ?? [], ...(await ammoOf(actor, a).then(m => m ? { shotsLeft: m.shotsLeft, ammo: m.ammo } : {}).catch(() => ({}))) });
+    out.push({ id, name: a.label, mod: strikeMods(a.variants.map(v => v.label)), reach: actor.getReach({ action: "attack", weapon: a.item }), ...(a.item?.isRanged ? { range: a.item.range?.increment ?? null, maxRange: a.item.range?.max ?? null } : {}), damage: typeof damage === "string" ? damage : null, traits: (a.traits ?? []).map(t => t.name).filter(t => t !== "attack"), effects: a.item?.system?.attackEffects?.value ?? [], ...(await ammoOf(actor, a).then(m => ammoFields(m, shotsFor(combat, tok, id, m))).catch(() => ({}))) });
   } return out;
 }
 const localize = k => game.i18n.localize(k);
@@ -229,17 +237,17 @@ async function buildPacket(combat, tok, turn = {}) {
   const fresh = { ...assignLabels(labels, known.map(o => o.id), "E"), ...assignLabels(labels, [tok.id, ...allies.map(a => a.id)], "M") }; Object.assign(labels, fresh);
   const { model } = await readMap(scene), a = tok.actor, h = a.hitPoints, square = squareOf(tok, scene);
   const speeds = a.system.movement?.speeds ?? {}, extra = Object.fromEntries(["fly", "swim", "climb", "burrow"].filter(k => speeds[k]?.value).map(k => [k, speeds[k].value]));
-  const you = { label: labels[tok.id], name: tok.name, square, size: a.size, nextDiagonal: nextDiagonalFt(tok, scene), actionsLeft: Math.max(0, actionsOf(a, combat) - (turn.spent ?? 0)), attacksMade: turn.attacks ?? 0, hp: `${h.value}/${h.max}`, speed: speeds.land?.value ?? 0, ...(Object.keys(extra).length ? { speeds: extra } : {}), conditions: (a.conditions?.active ?? []).map(c => c.value ? `${c.slug} ${c.value}` : c.slug), strikes: await strikesOf(a), abilities: abilitiesOf(a), tactics: tacticsOf(scene, tok) };
+  const you = { label: labels[tok.id], name: tok.name, square, size: a.size, nextDiagonal: nextDiagonalFt(tok, scene), actionsLeft: Math.max(0, actionsOf(a, combat) - (turn.spent ?? 0)), attacksMade: turn.attacks ?? 0, hp: `${h.value}/${h.max}`, speed: speeds.land?.value ?? 0, ...(Object.keys(extra).length ? { speeds: extra } : {}), conditions: (a.conditions?.active ?? []).map(c => c.value ? `${c.slug} ${c.value}` : c.slug), strikes: await strikesOf(a, combat, tok), abilities: abilitiesOf(a), tactics: tacticsOf(scene, tok) };
   const book = await spellBook(a); if (book.length) you.spells = spellsOf(book);
   const cover = visionerApi();
   if (offGrid(tok, scene)) you.offGrid = true;
   /* already Taking Cover: the cover it has now comes from that, so it isn't listed as cover to Take Cover from (it can't take it again until it moves or attacks) */
-  const taking = takingCover(tok);
-  you.takeCover = { taking, ...(taking ? { why: "It is Taking Cover now: the cover it has comes from that. It ends when it moves off its square or attacks." } : {}), nextToCover: nearCoverFor(scene)(square, sizeOf(tok)), standardCoverFrom: cover && !taking ? others.filter(o => SEES.includes(o.state) && labels[o.id] && STANDARD.includes(coverOf(cover, o.token, tok))).map(o => labels[o.id]) : [] };
+  const taking = takingCover(tok), coverList = cover ? others.filter(o => SEES.includes(o.state) && labels[o.id] && STANDARD.includes(coverOf(cover, o.token, tok))).map(o => labels[o.id]) : [];
+  you.takeCover = { taking, ...(taking ? { why: "It is Taking Cover now: the cover it has comes from that. It ends when it moves off its square or attacks." } : {}), nextToCover: nearCoverFor(scene)(square, sizeOf(tok)), standardCoverFrom: taking ? [] : coverList };
   /* what it knows of its own stealth (Rhea, 2026-11-07, B): what it last tried and whether it is still hiding, the light where it stands, its own
      concealment and who it has standard cover from; never whether a secret roll worked */
   const tried = t.stealth?.[tok.id] ?? null;
-  you.stealth = { lastTried: tried ? `${tried.did === "sneak" ? "Sneaked" : "Hid"} in round ${tried.round}, and has only Hidden, Sneaked or Stepped since` : null, light: lightOn(tok.object.center, scene), concealed: !!a.hasCondition?.("concealed"), standardCoverFrom: you.takeCover.standardCoverFrom };
+  you.stealth = { lastTried: tried ? `${tried.did === "sneak" ? "Sneaked" : "Hid"} in round ${tried.round}, and has only Hidden, Sneaked or Stepped since` : null, light: lightOn(tok.object.center, scene), concealed: !!a.hasCondition?.("concealed"), standardCoverFrom: coverList };   /* the real list: Taking Cover itself allows a Hide */
   const packet = packetOf({ you, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], ground: groundAround(model, square, GROUND_RADIUS, undefined, takeCoverSquares(scene)),
     allies: allies.map(x => ({ label: labels[x.id], name: x.name, square: squareOf(x, scene), healthWord: wordsFor(x.actor), conditions: visibleConditions(conditionsOn(x.actor)) })),
     others: others.map(o => ({ id: o.id, state: o.state, label: labels[o.id], square: o.square, offGrid: offGrid(o.token, scene), size: o.token.actor.size, distance: o.distance, gear: gearOf(o.token.actor), conditions: visibleConditions(conditionsOn(o.token.actor)), healthWord: wordsFor(o.token.actor), cover: cover?.getAutoCoverState?.(tok.object, o.token.object) ?? "none" })) });
@@ -343,7 +351,7 @@ export async function onRunnerReady() {
     are labels, because a refusal's reason goes back to the thinker; the card puts names in. */
 async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = true, before = null, spells = false } = {}) {
   const scene = combat.scene, tok = scene.tokens.get(req.tokenId), actor = tok.actor;
-  const strikes = await Promise.all(strikesWithIds(actor).map(async ({ id, strike: a }) => { const m = await ammoOf(actor, a).catch(() => null); return { id, name: a.label, reach: actor.getReach({ action: "attack", weapon: a.item }), ranged: !!a.item?.isRanged, maxRange: a.item?.range?.max ?? null, effects: [...(a.item?.system?.attackEffects?.value ?? [])], ...(m ? { shotsLeft: m.shotsLeft, ammo: m.ammo } : {}) }; }));
+  const strikes = await Promise.all(strikesWithIds(actor).map(async ({ id, strike: a }) => { const m = await ammoOf(actor, a).catch(() => null); return { id, name: a.label, reach: actor.getReach({ action: "attack", weapon: a.item }), ranged: !!a.item?.isRanged, maxRange: a.item?.range?.max ?? null, effects: [...(a.item?.system?.attackEffects?.value ?? [])], ...ammoFields(m, shotsFor(combat, tok, id, m)) }; }));
   /* only what it perceived when asked, and still does: a plan can't name anything else */
   const now = new Map(sense(combat, tok, turns(combat).memory?.[tok.id] ?? {}).map(o => [o.id, o])), targets = {};
   for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && canTarget(o.state)) targets[label] = { name: label, square: o.square, ...(o.state === "hidden" ? {} : placeOf(o.token, scene)), size: sizeOf(o.token), ...heightOf(o.token), flat: flatDC(o.state), cat: o.token.actor?.size ?? null, held: !!turns(combat).grips?.[tok.id]?.[tokenId] && isHeld(o.token.actor) }; }
@@ -498,7 +506,7 @@ async function checkStalls() {
   for (const combat of fights()) {
     const r = currentRequest(combat); if (!r) continue;
     if (!Number.isFinite(r.since)) { await saveTurns(combat, { [`requests.${r.id}.since`]: clock() }); continue; }   /* a request from before 0.9.0 */
-    const tok = combat.scene?.tokens.get(r.tokenId), s = stallOf(r, { now: clock(), auto: !!tok?.getFlag(ID, "auto") });
+    const tok = combat.scene?.tokens.get(r.tokenId), s = stallOf(r, { now: clock(), auto: !!tok?.getFlag(ID, "auto"), machineMs: Math.max(60000, autoPause() * 1000 + 30000) });   /* a long Auto pause isn't a stall */
     if (!s || r.stall?.since === s.since) continue;
     await saveTurns(combat, { [`requests.${r.id}.stall`]: whole(s), ...eventChange("stall", r.id, r.tries ?? 0, { since: s.since }) });
   }
@@ -565,9 +573,10 @@ export function onPreCreateMessage(message) { if (pending && message.speaker?.to
 /* PF2e gives a spell's cast card the context type "spell-cast" only when the spell has a check, damage or save; one without (Mist, found live 2026-11-07)
    has PF2e's casting flag and no context, so that counts as the cast card too */
 export function onCreateMessage(message) { if (!pending || message.author?.id !== game.user.id || message.speaker?.token !== pending.tokenId) return; const type = message.flags?.pf2e?.context?.type ?? (message.flags?.pf2e?.casting ? "spell-cast" : undefined); (pending.waiters.get(type) ?? pending.waiters.get("*"))?.(message, type); }
-const waitFor = type => { const p = new Promise((res, rej) => { const t = setTimeout(() => { pending?.waiters.delete(type); rej(new Error(`No ${type} card came.`)); }, STEP_MS); pending.waiters.set(type, m => { clearTimeout(t); pending.waiters.delete(type); res(m); }); }); p.catch(() => {}); return p; };
+/* a waiter's timer removes only its own waiter: a stage that ended early (no roll) mustn't take the next stage's (found by the 0.9.0 review) */
+const waitFor = type => { const box = pending; let own; const p = new Promise((res, rej) => { const t = setTimeout(() => { if (box?.waiters.get(type) === own) box.waiters.delete(type); rej(new Error(`No ${type} card came.`)); }, STEP_MS); own = m => { clearTimeout(t); if (box.waiters.get(type) === own) box.waiters.delete(type); res(m); }; box.waiters.set(type, own); }); p.catch(() => {}); return p; };
 /* the first of several card types: a spell attack's card type isn't pinned down, so take the first attack card that comes */
-const waitForAny = types => { const p = new Promise((res, rej) => { const t = setTimeout(() => { pending?.waiters.delete("*"); rej(new Error(`No ${types.join(" or ")} card came.`)); }, STEP_MS); pending.waiters.set("*", (m, type) => { if (!types.includes(type)) return; clearTimeout(t); pending.waiters.delete("*"); res(m); }); }); p.catch(() => {}); return p; };
+const waitForAny = types => { const box = pending; let own; const p = new Promise((res, rej) => { const t = setTimeout(() => { if (box?.waiters.get("*") === own) box.waiters.delete("*"); rej(new Error(`No ${types.join(" or ")} card came.`)); }, STEP_MS); own = (m, type) => { if (!types.includes(type)) return; clearTimeout(t); if (box.waiters.get("*") === own) box.waiters.delete("*"); res(m); }; box.waiters.set("*", own); }); p.catch(() => {}); return p; };
 const clickWith = key => new MouseEvent("click", { shiftKey: !!game.user.settings?.[key] });   /* PF2e flips the dialog on Shift */
 /* Nobody can click a window on the runner's page, and a roll waits for its dialog for ever. So a stage gets a time limit, and a dialog ends it at once:
    closing it lets the roll give up, and the record says the stage may not have finished, so it goes to Rhea and nothing is repeated. */
@@ -600,6 +609,9 @@ const stopAiming = () => { if (game.user.targets.size) canvas.tokens?.setTargets
 async function runStrike(combat, id, i, step, tok, target) {
   const record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {};
   const strike = strikesWithIds(tok.actor).find(x => x.id === step.item)?.strike; if (!strike) throw new Error(`${tok.name} has no ${step.itemName} now.`);
+  /* no shot left: before anything is rolled (a flat check first would be a free reroll on the re-plan; found by the 0.9.0 review) */
+  const ammo = await ammoOf(tok.actor, strike).catch(() => null), own = !!ammo?.stack;
+  if (ammo && !Object.keys(get()).length && shotsFor(combat, tok, step.item, ammo) < 1) return "noShot";
   for (let guard = 0; guard < 8; guard++) {
     const now = nextAction(get(), { apply: applySetting(), flat: step.flat ?? 0 });
     if (now === "next") return "next";
@@ -614,14 +626,15 @@ async function runStrike(combat, id, i, step, tok, target) {
         await record({ flat: { dc: step.flat, total: roll.total, ok: roll.total >= step.flat } });
         if (roll.total < step.flat) await save(combat, id, { note: `${step.itemName} at ${step.targetName} failed its DC ${step.flat} flat check (${roll.total}). The action is spent.` });
       } else if (now === "attack") {
-        const ammo = await ammoOf(tok.actor, strike).catch(() => null), own = !!ammo?.stack;   /* a monster's shot under Ranged Combat: the module takes the ammunition */
-        if (ammo && ammo.shotsLeft < 1) return "noShot";
         aimAt(target); await record({ started: true });
+        /* its "no valid ammunition" window, or no roll: nothing was rolled. After a flat check the action is spent (no free reroll), otherwise asked again with it unspent */
+        const refused = async () => { await record({ started: false }); return get().flat ? "noShotSpent" : "noShot"; };
         let shot;
         try { shot = await watched(async () => { const card = waitFor("attack-roll"), roll = await strike.variants[step.variant].roll({ event: clickWith("showCheckDialogs"), target: target.object, ...(own ? { options: ["skip-post-processing"] } : {}) }); if (!roll) return { roll: null }; return { message: await card, roll }; }); }
-        catch (e) { if (ammo && /ranged combat/i.test(e.message)) { await record({ started: false }); return "noShot"; } throw e; }   /* its "no valid ammunition" window: nothing was rolled */
-        if (!shot.roll) { if (ammo) { await record({ started: false }); return "noShot"; } throw new Error(`${step.itemName} didn't roll.`); }
+        catch (e) { if (ammo && /ranged combat/i.test(e.message)) return refused(); throw e; }
+        if (!shot.roll) { if (ammo) return refused(); throw new Error(`${step.itemName} didn't roll.`); }
         const { message, roll } = shot, left = own ? await takeAmmo(tok.actor, ammo) : null;
+        if (ammo?.unreadable) await addNote(combat, id, `I couldn't read Ranged Combat's ammunition for ${tok.name}, so Ranged Combat took this shot's ammunition itself (on version 8.0.7 that is 2 for a monster).`);
         await record({ attack: { message: message.id, degree: roll?.degreeOfSuccess ?? message.rolls?.[0]?.degreeOfSuccess ?? 0, ...(left != null ? { ammoLeft: left } : {}) } });
       } else if (now === "damage") {
         const degree = get().attack.degree; aimAt(target); await record({ damageStarted: true });
@@ -745,11 +758,11 @@ function nearCoverFor(scene) {
   return (square, size = 1) => { segs ??= coverSegs(scene); return !!square && featureNear(square, size, segs); };
 }
 /** For the packet's ground map: the squares holding a wall Take Cover can use (a thick trunk, a solid wall), as takeCoverAt(x, y). A segment counts for a
-    square it passes through the inside of (sampled every tenth of a square, edges left out), so a trunk ring marks the square it stands in. */
+    square it passes through the inside of (sampled every tenth of a square, within its middle 70%, the same margin as the map's own blocking), so a trunk ring marks the square it stands in. */
 function takeCoverSquares(scene) {
   const at = new Set();
   for (const [x1, y1, x2, y2] of coverSegs(scene)) { const n = Math.max(1, Math.ceil(Math.hypot(x2 - x1, y2 - y1) * 10));
-    for (let k = 0; k <= n; k++) { const x = x1 + (x2 - x1) * k / n, y = y1 + (y2 - y1) * k / n, fx = x - Math.floor(x), fy = y - Math.floor(y); if (fx > 0.02 && fx < 0.98 && fy > 0.02 && fy < 0.98) at.add(`${Math.floor(x)},${Math.floor(y)}`); } }
+    for (let k = 0; k <= n; k++) { const x = x1 + (x2 - x1) * k / n, y = y1 + (y2 - y1) * k / n, fx = x - Math.floor(x), fy = y - Math.floor(y); if (fx > 0.15 && fx < 0.85 && fy > 0.15 && fy < 0.85) at.add(`${Math.floor(x)},${Math.floor(y)}`); } }
   return (x, y) => at.has(`${x},${y}`);
 }
 /** PF2e's own "Effect: Cover" with its level already chosen, so its prompt doesn't open where nobody can click it (a rule's `selection` skips it). */
@@ -1353,7 +1366,7 @@ function endAfter(combat, requestId) {
   setTimeout(async () => {
     try {
       const n = request(combat, requestId);
-      if (n?.state !== "done" || !combat.started || combat.round !== r.round || combat.combatant?.id !== r.combatantId || currentRequest(combat)) return;
+      if (n?.state !== "done" || !combat.started || combat.round !== r.round || combat.combatant?.id !== r.combatantId || currentRequest(combat) || !tok.getFlag(ID, "auto")) return;   /* Auto read again: unticked in the 2 s, the GM ends it */
       await combat.nextTurn();
     } catch (e) { console.error(`${ID} | ending the turn`, e); } finally { ending.delete(key); }
   }, END_MS);
@@ -1410,10 +1423,15 @@ async function runTurn(combat, requestId) {
       let result; try { result = await work(); } catch (e) { console.error(e); result = "ask"; await save(combat, requestId, { note: e.message }); }
       if (result === "stopped") return save(combat, requestId, { state: "stopped" });
       /* a shot it couldn't make (no ammunition left, or Ranged Combat refused): nothing was rolled, so ask again with the action unspent */
-      if (result === "noShot") return replan(combat, { ...request(combat, requestId), id: requestId }, i, [{ who: "me", what: "noShot", item: step.itemName, why: "no ammunition it can use" }], tok);
+      if (result === "noShot" || result === "noShotSpent") {
+        const b = turns(combat).noShot?.[tok.id], items = b?.round === combat.round ? [...new Set([...(b.items ?? []), step.item])] : [step.item];
+        await saveTurns(combat, { [`noShot.${tok.id}`]: whole({ round: combat.round, items }) });   /* no shots with it for the rest of this turn */
+        const spent = result === "noShotSpent";   /* after a flat check the action is spent: no free reroll */
+        return replan(combat, { ...request(combat, requestId), id: requestId }, spent ? i + 1 : i, [{ who: "me", what: "noShot", item: step.itemName, why: "no ammunition it can use", spent }], tok);
+      }
       /* a save the player rolls: the turn waits, with no timer, until their row on the spell's card has it (or the GM presses Roll it for them) */
       if (result === "wait") return save(combat, requestId, { state: request(combat, requestId).state === "manual" ? "manual" : "saves" });
-      if (result === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} may not have finished. ${isMove(step) ? "Put the monster where it should be" : step.do in POSTURES ? "Check whether it is prone" : step.do === "take-cover" ? "Check whether it is Taking Cover" : step.do === "ability" ? "Check the chat, HP and conditions" : step.do === "spell" ? "Check the chat, the spell's slot or use, HP and conditions" : step.do in STEALTH_WORD ? `Check its ${STEALTH_WORD[step.do]} card and apply Visioner's results if they aren't${step.do === "sneak" ? ", and where it stands" : ""}` : "Check the chat and HP"}, then play the rest yourself.`.trim() });
+      if (result === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} may not have finished. ${isMove(step) ? "Put the monster where it should be" : step.do in POSTURES ? "Check whether it is prone" : step.do === "take-cover" ? "Check whether it is Taking Cover" : step.do === "ability" ? "Check the chat, HP and conditions" : step.do === "spell" ? "Check the chat, the spell's slot or use, HP and conditions" : step.do in STEALTH_WORD ? `Check its ${STEALTH_WORD[step.do]} card and apply Visioner's results if they aren't${step.do === "sneak" ? ", and where it stands" : ""}` : step.do === "strike" && tok.actor?.type === "npc" && rangedOn() && strikesWithIds(tok.actor).find(x => x.id === step.item)?.strike?.item?.isRanged ? "Check the chat, HP and its ammunition (the module takes a monster's ammunition after the roll)" : "Check the chat and HP"}, then play the rest yourself.`.trim() });
       /* an attack from hiding: the target was off-guard to it, and now it is observed (Visioner's Attack Consequences on its card, or the module) */
       if (revealsAfter(step)) await comeOut(combat, requestId, tok, actWords(step), request(combat, requestId).log?.[i]?.attack?.message ?? null).catch(e => console.warn(`${ID} | out of hiding`, e));
       await settleCover(combat, requestId, i + 1, tok, i);   /* its own attack or move ends a Take Cover */
