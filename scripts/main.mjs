@@ -14,6 +14,9 @@ Hooks.once("init", () => {
   game.settings.register(ID, "runner", { name: "Account that runs monster turns", hint: "The GM account whose page carries out monster turns: its name, exactly. It targets for real on its own account, so yours are never touched. If it's offline, turns wait and the card says so.", scope: "world", config: true, type: String, default: "Claude Bridge" });
   /* who is thinking for the monsters: the chat's generation and when it last asked for an event. A newer chat retires an older one. */
   game.settings.register(ID, "brain", { scope: "world", config: false, type: Object, default: { generation: 0, at: 0 }, onChange: () => { redrawTurns(); } });
+  /* when the thinker last asked, on the server clock: its own setting, so a wait renewing it never writes the generation back (a page's copy of
+     "brain" can be a moment old, and an old chat renewing it just after a new chat's hello would undo the takeover) */
+  game.settings.register(ID, "brainAt", { scope: "world", config: false, type: Number, default: 0, onChange: () => { redrawTurns(); } });
   game.settings.register(ID, "treasure", { scope: "world", config: false, type: Object, default: { manual: {}, builds: {} } });
 });
 function openBuild() { const scene = canvas.scene; if (!scene) return; apps.get(scene.id)?.close?.(); const app = new BuildApp(scene); apps.set(scene.id, app); app.render(true); }

@@ -432,8 +432,9 @@ async function reject(combat, requestId, reason) {
 /* a plan replaces the last one whole: a merge would keep keys the new one doesn't have */
 const whole = v => v && typeof v === "object" ? foundry.data.operators.ForcedReplacement.create(v) : v;
 const PLAN_BYTES = 8000, SUPERSEDED = "A newer chat is thinking for the monsters now, so this was ignored.";
-const brainNow = () => game.settings.get(ID, "brain") ?? {};
-const setBrain = value => game.settings.set(ID, "brain", value);
+/* the generation lives in "brain" and is written only by a hello; when the thinker last asked lives in "brainAt", which every wait renews */
+const brainNow = () => ({ generation: game.settings.get(ID, "brain")?.generation ?? 0, at: game.settings.get(ID, "brainAt") ?? 0 });
+const renewBrain = () => game.settings.set(ID, "brainAt", clock());
 const fights = () => game.combats.filter(c => c.started);
 const eventsOf = combat => Object.values(turns(combat).events ?? {}).map(e => ({ ...e, combatId: combat.id }));
 function eventChange(kind, requestId, tries) {
@@ -451,9 +452,9 @@ function firstEvent(cursor) {
 export async function waitForEvent(cursor = 0, maxSeconds = 90, { generation = null } = {}) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
   cursor = Number.isFinite(cursor) ? cursor : 0;
-  if (generation == null) { const g = (brainNow().generation ?? 0) + 1; await setBrain({ generation: g, at: clock() }); return { cursor, hello: hello(g) }; }
+  if (generation == null) { const g = (brainNow().generation ?? 0) + 1; await game.settings.set(ID, "brain", { generation: g, at: 0 }); await renewBrain(); return { cursor, hello: hello(g) }; }
   if (stale(brainNow(), generation)) return { cursor, superseded: true, reason: SUPERSEDED };
-  await setBrain({ generation, at: clock() });
+  await renewBrain();
   let got = firstEvent(cursor);
   if (!got) got = await new Promise(res => {
     let hook = null, timer = null;
