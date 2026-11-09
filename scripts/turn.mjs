@@ -336,6 +336,8 @@ export function checkPlan(plan, ctx) {
       const limit = step.do === "sneak" ? sneakSpeed(ctx.speed) : ctx.speed;
       if (!(limit > 0)) return { ok: false, reason: `${at}: a Sneak moves at half Speed, and half of ${ctx.speed} ft is less than a square.` };
       if (small && ctx.speed < 2 * STEP_FT) return { ok: false, reason: `${at}: a ${word} needs a Speed of at least ${2 * STEP_FT} ft, and its Speed is ${ctx.speed} ft.` };
+      /* the party's side never flees in a plan (0.18.0): said first, so the refusal names the real reason, not the distance */
+      if (step.do === "flee" && ctx.party) return { ok: false, reason: `${at}: it fights on the party's side, and leaving the fight off the map is for the GM to decide, not a plan step.` };
       if (!Array.isArray(step.to)) return { ok: false, reason: `${at}: a ${word} needs "to", the square to end on.` };
       if (!here || !ctx.route) return { ok: false, reason: `${at}: I can't work out moves here.` };
       if (same(here, step.to)) return { ok: false, reason: `${at}: it is already at [${step.to[0]}, ${step.to[1]}].` };
@@ -345,7 +347,6 @@ export function checkPlan(plan, ctx) {
       if (way.cost > limit) return { ok: false, reason: step.do === "sneak" ? `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, and a Sneak moves at most half its Speed (${limit} ft).` : `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, more than its Speed of ${ctx.speed} ft.` };
       let sides = null;
       if (step.do === "flee") {
-        if (ctx.party) return { ok: false, reason: `${at}: it fights on the party's side, and leaving the fight off the map is for the GM to decide, not a plan step.` };
         if (!ctx.edgeAt) return { ok: false, reason: `${at}: I can't tell where this map ends, so it can't flee off it here.` };
         sides = ctx.edgeAt(step.to, ctx.me?.size ?? 1);
         if (!sides.length) return { ok: false, reason: `${at}: a flee has to end on the outermost ring of squares, at the map's edge; [${step.to[0]}, ${step.to[1]}] isn't on it. Stride toward the edge instead and flee once it is within reach.` };

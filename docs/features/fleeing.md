@@ -8,7 +8,7 @@ since: 0.11.0
 Monsters fleeing off the map edge: the `flee` step, the GM's choice at the edge (Extend map or Let it get away), escaped tokens and Bring back.
 
 ## Decisions
-- **Only monsters flee in a plan (0.18.0):** a party member the GM plays, or an NPC on the party's side, is refused a flee step (`checkPlan`'s `party`); hiding it and "XP not earned" are for monsters. Its retreat is the GM's call.
+- **Only monsters flee in a plan (0.18.0):** a party member the GM plays, or an NPC on the party's side, is refused a flee step (`checkPlan`'s `party`, checked before the route, so the refusal names this reason and not the distance: seen in the 0.18.0 live test); hiding it and "XP not earned" are for monsters. Its retreat is the GM's call.
 Designed with Rhea one question at a time on 2026-11-08; she chose the recommended option every time. Ten decisions:
 1. **Who decides at the edge: the GM, every time.** The turn stops (on Auto too, the same way it stops for an ability's card) and the Monster Turns card shows **Extend map** and **Let it get away**.
 2. **What counts as reaching the edge: a plan step `flee`, planned by the thinker.** It is checked like a Stride: the monster must be able to reach a square on the outermost ring of the map with the actions it has left. Once it stands there the turn stops and the buttons appear. Ending an ordinary Stride on the ring triggers nothing.

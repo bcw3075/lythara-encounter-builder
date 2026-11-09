@@ -314,6 +314,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("stride then flee", checkPlan({ steps: [{ do: "stride", to: [0, 5] }, { do: "flee", to: [0, 1] }] }, { ...fctx, me: { square: [4, 5], size: 1 } }).ok);
   /* the party's side (0.18.0): a party member the GM plays, or an NPC with the party, doesn't flee off the map in a plan */
   check("party side can't flee", /party's side/.test(checkPlan({ steps: [{ do: "flee", to: [0, 1] }] }, { ...fctx, party: true }).reason ?? ""));
+  check("party side refused before the distance", /party's side/.test(checkPlan({ steps: [{ do: "flee", to: [0, 19] }] }, { ...fctx, party: true }).reason ?? ""));
   check("party side still strides", checkPlan({ steps: [{ do: "stride", to: [0, 5] }] }, { ...fctx, party: true, me: { square: [4, 5], size: 1 } }).ok);
   check("flee needs the map's bounds", /where this map ends/.test(checkPlan({ steps: [{ do: "flee", to: [0, 1] }] }, mctx).reason ?? ""));
   check("a Stride onto the ring is just a Stride", checkPlan({ steps: [{ do: "stride", to: [0, 1] }] }, fctx).steps[0].sides === undefined);
