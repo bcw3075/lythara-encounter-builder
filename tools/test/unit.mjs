@@ -15,7 +15,9 @@ import { aimText, areaHurt, forThinker, listWords, nextArea } from "../../script
 import { COSTS, SEEK, SIDES, edgeSides, isAttack, nextInteract, nextStealth, revealsAfter, revealsBefore, sneakSpeed } from "../../scripts/turn.mjs";
 import { promptText } from "../../scripts/prompt.mjs";
 import { historyHTML, historyOf, journalHTML, stepResult } from "../../scripts/history.mjs";
-import { cutShort, diagonalsIn, distanceBetween, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, headingOf, heightCost, routeWords } from "../../scripts/move.mjs";
+import { cutShort, diagonalsIn, distanceBetween, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, headingOf, heightCost, heightWhenCut, routeWords } from "../../scripts/move.mjs";
+import { movedOn, shouldFall } from "../../scripts/turn.mjs";
+import { verticalGap } from "../../scripts/area.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
 
@@ -931,6 +933,22 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("fly: plan keeps height", cleanPlan({ steps: [{ do: "fly", to: [1, 1], height: 15 }] }).plan?.steps[0].height === 15 && !cleanPlan({ steps: [{ do: "fly", to: [1, 1], height: -5 }] }).ok && STEP_KINDS.includes("fly") && COSTS.fly === 1);
   const pk = packetOf({ you: {}, others: [{ id: "a", state: "observed", label: "E1", square: [1, 1], height: 15 }, { id: "b", state: "hidden", label: "E2", square: [2, 2], height: 10 }, { id: "c", state: "observed", label: "E3", square: [3, 3], height: 0 }] });
   check("fly: packet heights", pk.perceived[0].height === 15 && pk.perceived[1].height === 10 && !("height" in pk.perceived[2]));
+  /* the review's findings (0.13.0) */
+  const done = (steps, log = {}, extra = {}) => ({ state: "done", steps, log, ...extra });
+  check("fall: in the air, no Fly, module's turn", shouldFall({ requests: [done([{ do: "strike" }], { 0: { applied: true } })], height: 10, flies: true }) === "fall");
+  check("fall: a Fly cut by a reload still counts", shouldFall({ requests: [done([{ do: "fly" }], { 0: { started: true } })], height: 10, flies: true }) === null);
+  check("fall: a hover counts", shouldFall({ requests: [done([{ do: "fly" }], { 0: { started: true, moved: { to: [1, 1] } } })], height: 10, flies: true }) === null);
+  check("fall: not after a Delay, even before 'delayed' is saved", shouldFall({ requests: [{ state: "running", steps: [{ do: "delay" }], log: { 0: { ended: true } } }], height: 10, flies: true }) === null && shouldFall({ requests: [done([{ do: "delay" }], {}, { delayed: true })], height: 10, flies: true }) === null);
+  check("fall: not after the GM's own turn (manual, stopped, ready, held)", ["manual", "stopped", "ready", "held", "requested"].every(st => shouldFall({ requests: [{ state: st, steps: [] }], height: 10, flies: true }) === null));
+  check("fall: once", shouldFall({ requests: [done([], {}, { fell: { from: 10 } })], height: 10, flies: true }) === null);
+  check("fall: not on the ground, not without a fly Speed, not backwards, not with no request", shouldFall({ requests: [done([])], height: 0, flies: true }) === null && shouldFall({ requests: [done([])], height: 10, flies: false }) === null && shouldFall({ requests: [done([])], height: 10, flies: true, forward: false }) === null && shouldFall({ requests: [], height: 10, flies: true }) === null);
+  check("fall: a dead flier's body drops", shouldFall({ requests: [{ state: "manual", steps: [] }], height: 10, flies: true, dead: true }) === "drop");
+  check("fall: moved on, not back", movedOn({ round: 1, turn: 0 }, { round: 1, turn: 1 }) && movedOn({ round: 1, turn: 3 }, { round: 2, turn: 0 }) && !movedOn({ round: 2, turn: 1 }, { round: 2, turn: 0 }));
+  check("fly: height when cut short", heightWhenCut(0, 20, 2, true) === 10 && heightWhenCut(0, 20, 9, true) === 20 && heightWhenCut(20, 0, 1, true) === 15 && heightWhenCut(0, 20, 1, false) === 20);
+  p = checkPlan({ steps: [{ do: "fly", to: [0, 0] }] }, { ...fctx, me: { ...fctx.me, elev: 7 } }); check("fly: a hover at an odd GM height is fine", p.ok && p.steps[0].height === 7, p.reason);
+  p = checkPlan({ steps: [{ do: "stride", to: [1, 0] }] }, { ...fctx, flySpeed: 0, me: { ...fctx.me, elev: 10 } }); check("fly: no fly Speed up high stands on something: Stride allowed", p.ok, p.reason);
+  check("area: vertical gap", verticalGap(0, { elev: 40, top: 45 }) === 40 && verticalGap(0, { elev: 0, top: 5 }) === 0 && verticalGap(30, { elev: 0, top: 5 }) === 25 && verticalGap({ elev: 20, top: 25 }, { elev: 0, top: 5 }) === 15);
+  check("area: a 20-ft burst on the ground misses a flier 40 ft up", (() => { const aim = { type: "burst", corner: [5, 5], origin: [5, 5], size: 20 }, cov = new Set(["4,4", "5,5"]); return caughtBy(aim, cov, [{ id: "a", square: [4, 4], size: 1, elev: 40, top: 45 }, { id: "b", square: [5, 5], size: 1, elev: 0, top: 5 }], [], null, null, 0).join() === "b"; })());
   check("fly: prompt explains Fly", /"do": "fly"/.test(promptText()) && /falls/.test(promptText()));
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */

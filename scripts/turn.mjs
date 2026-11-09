@@ -96,7 +96,7 @@ export function checkPlan(plan, ctx) {
       if (ctx.cantAct) return { ok: false, reason: `${at}: ${ctx.cantAct}` };
       const sp = (ctx.spells ?? []).find(s => s.id === step.item);
       if (!sp) return { ok: false, reason: `${at}: it has no spell called "${step.item}" it can cast now${(ctx.abilities ?? []).some(a => a.id === step.item) ? ` (${step.item} is an ability: use an "ability" step)` : ""}.` };
-      const r = checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here });
+      const r = checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here, elev: hereElev });
       if (!r.ok) return r;
       if (r.step.actions > left) return { ok: false, reason: `${at}: no actions left${r.step.actions > 1 ? ` (${sp.name} takes ${r.step.actions})` : ""}.` };
       left -= r.step.actions; if (r.pool) pools[r.pool] = (r.pool in pools ? pools[r.pool] : r.poolLeft) - (r.poolCost ?? 1);
@@ -201,19 +201,20 @@ export function checkPlan(plan, ctx) {
       if (!(ctx.flySpeed > 0)) return { ok: false, reason: `${at}: it has no fly Speed.` };
       const to = step.to ?? here, height = step.height ?? hereElev;
       if (!Array.isArray(to)) return { ok: false, reason: `${at}: a Fly needs "to", the square to end on (its own square to hover or change height there).` };
-      if (!Number.isInteger(height) || height < 0 || height % FT) return { ok: false, reason: `${at}: "height" is how high it ends, in feet above the ground: 0 or more, in steps of ${FT}.` };
+      /* the height it has is always fine, even one the GM set off the 5-ft steps (7 ft): a hover there keeps it up */
+      if (height !== hereElev && (!Number.isInteger(height) || height < 0 || height % FT)) return { ok: false, reason: `${at}: "height" is how high it ends, in feet above the ground: 0 or more, in steps of ${FT}.` };
       if (!here || !ctx.route) return { ok: false, reason: `${at}: I can't work out moves here.` };
       let route = [[...here]], cost = 0;
       if (!same(here, to)) { const way = ctx.route(here, to, routes, { kind: "fly" }); if (!way.ok) return { ok: false, reason: `${at}: ${way.reason}` }; route = way.route; cost = way.cost; }
       const up = heightCost(route.length - 1, height - hereElev), total = cost + up;
       if (total > ctx.flySpeed) return { ok: false, reason: `${at}: flying to [${to[0]}, ${to[1]}] at ${height} ft up takes ${total} ft (${cost} ft across${up ? `, ${up} ft for the height` : ""}), more than its fly Speed of ${ctx.flySpeed} ft. Rising costs double; dropping straight down costs half.` };
       steps.push({ do: "fly", from: [...here], to: [...to], fromHeight: hereElev, height, route, cost: total }); if (route.length > 1) routes.push(route);
-      const across = route.length > 1; here = [...to]; herePos = here; hereElev = height; moved = moved || across || height !== steps.at(-1).fromHeight; if (across) took = tookProne = false; last = { do: "fly" }; continue;   /* Take Cover ends on leaving its square, not on a hover */
+      const shifted = route.length > 1 || height !== hereElev; here = [...to]; herePos = here; hereElev = height; moved = moved || shifted; if (shifted) took = tookProne = false; last = { do: "fly" }; continue;   /* Take Cover ends on leaving its space, up or down too, not on a hover */
     }
     if (MOVES.includes(step.do)) {
       const word = WORD[step.do], small = ONE_SQUARE.includes(step.do);
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
-      if (hereElev > 0) return { ok: false, reason: `${at}: it is ${Math.round(hereElev)} ft up in the air, so it moves by Fly (a "fly" step); a Fly with "height": 0 lands it.` };
+      if (hereElev > 0 && ctx.flySpeed > 0) return { ok: false, reason: `${at}: it is ${Math.round(hereElev)} ft up in the air, so it moves by Fly (a "fly" step); a Fly with "height": 0 lands it.` };
       if (step.do === "crawl" && !prone) return { ok: false, reason: `${at}: it isn't prone; Crawl is how a prone creature moves, so Stride or Step instead.` };
       if (step.do !== "crawl" && prone) return { ok: false, reason: `${at}: it is prone, so it has to Stand first (a "stand" step, 1 action) before it can ${word}, or Crawl 5 ft.` };
       if (!(ctx.speed > 0)) return { ok: false, reason: `${at}: it has no land Speed.` };
@@ -254,7 +255,7 @@ export function checkPlan(plan, ctx) {
     attack or waits for the save, and applies the damage); anything else (an area, a spell with no attack or save, more than damage) is "card": the
     module casts it, its card goes to chat and the GM applies it. Rules: Cast a Spell (https://2e.aonprd.com/Actions.aspx?ID=2287), spell attacks and
     the multiple attack penalty (Player Core: a spell with the attack trait counts toward it), Restrained (no attack or manipulate actions). */
-function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here }) {
+function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here, elev = 0 }) {
   const no = reason => ({ ok: false, reason: `${at}: ${reason}` }), traits = sp.traits ?? [];
   if (ctx.cantAttack && traits.includes("attack")) return no(ctx.cantAttack);
   if (ctx.cantAttack && traits.includes("manipulate")) return no(`it is restrained, so it can't cast ${sp.name} (it has the manipulate trait).`);
@@ -286,7 +287,7 @@ function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here }) {
      not catch an ally or the monster itself unless the plan says "deliberate" */
   let area = null;
   if (sp.area && placeable(sp.area) && ctx.areaOf && here) {
-    const r = ctx.areaOf(sp, { at: step.at, toward: step.toward }, { square: here, size: ctx.me?.size ?? 1 }, t ? { square: t.square, size: t.size ?? 1 } : null);
+    const r = ctx.areaOf(sp, { at: step.at, toward: step.toward }, { square: here, size: ctx.me?.size ?? 1, elev }, t ? { square: t.square, size: t.size ?? 1 } : null);
     if (!r.ok) return no(`${sp.name}: ${r.reason}`);
     if (r.aim.type === "burst") {   /* a corner of a square within range: the nearest of the four squares round it; touch by its reach; no range: a corner of its own space */
       const c = r.aim.corner, n = ctx.me?.size ?? 1, range = sp.touch ? Math.max(5, ctx.reach ?? 5) : sp.range;
@@ -438,6 +439,22 @@ export function lastAction({ step = null, rec = {}, done = null, strikes = [] } 
   if (done) return done.do !== "strike" ? { do: done.do } : strike(done.item, done.target, ["hit", "critical hit"].includes(done.result) ? true : ["miss", "critical miss", "flat check failed"].includes(done.result) ? false : null);
   return null;
 }
+/** Whether a ticked monster falls when its turn has ended (Rules ID 2344: airborne at the end of its turn with no Fly action this round). Only after a
+    turn the module ran to the end itself ("done"): one the GM played, stopped, held or ended by hand is hers, since she may have flown it by hand.
+    Never after a Delay (its turn hasn't ended), a fall already made, or a turn change backwards. A dead flier's body drops with no roll. Pure.
+    requests: this creature's requests this round; height: its elevation; flies: it has a fly Speed (anything else up high stands on something);
+    forward: the turn moved on, not back. Returns "fall", "drop" (dead) or null. */
+export function shouldFall({ requests = [], height = 0, flies = false, dead = false, forward = true } = {}) {
+  if (!(height > 0) || !flies || !forward || !requests.length) return null;
+  if (requests.some(r => r.fell)) return null;
+  if (requests.some(r => (r.steps ?? []).some((s, k) => s?.do === "delay" && (r.log?.[k]?.ended || r.log?.[k]?.moved)) || r.delayed)) return null;
+  if (dead) return "drop";
+  if (!requests.every(r => r.state === "done")) return null;
+  if (requests.some(r => (r.steps ?? []).some((s, k) => s?.do === "fly" && (r.log?.[k]?.started || r.log?.[k]?.moved)))) return null;
+  return "fall";
+}
+/** Whether the turn moved on from `prev` to `now` ({ round, turn }), rather than back (the GM stepping the tracker backwards). */
+export const movedOn = (prev = {}, now = {}) => (now.round ?? 0) > (prev.round ?? 0) || ((now.round ?? 0) === (prev.round ?? 0) && (now.turn ?? 0) > (prev.turn ?? 0));
 /** Whether a step moves the monster across the map (a Stride, Step or Crawl). */
 export const isMove = s => MOVES.includes(s?.do);
 /** One id per Strike. A thrown dagger shares its slug with the melee one, and a plan has to be able to say which. strikes: [{ slug, ranged }]. */

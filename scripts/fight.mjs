@@ -1,8 +1,8 @@
 /* A fight's turns. One named account does the work (the runner: the Claude Bridge unless the setting says otherwise), on its own page with the
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. For now it runs Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek and fleeing off the map; see claude/encounter-builder-plan.md for the rest of step 2. */
-import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES, SIDES, WORD, absorbOwn, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract } from "./turn.mjs";
-import { cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, routeWords } from "./move.mjs";
+import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract } from "./turn.mjs";
+import { cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, heightWhenCut, routeWords } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap, partySize, suggestedLevel } from "./builder.mjs";
 import { aimArea, aimWords, alliesCaught, burstReachable, caughtBy, shapeOf, squaresNear } from "./area.mjs";
@@ -329,32 +329,32 @@ export function onCombatUpdate(combat, change) {
     herself, or one ended by a Delay, is left alone: the GM may have flown it by hand, and a Delay hasn't ended its turn. prev: Combat#previous. */
 async function fallIfAloft(combat, prev) {
   if (!prev?.combatantId || prev.round == null) return;
-  const c = combat.combatants.get(prev.combatantId), tok = c?.token; if (!tok?.getFlag(ID, "run") || !hostile(tok) || tok.actor?.isDead) return;
-  const fall = heightUp(tok); if (fall <= 0) return;
-  const mine = Object.entries(turns(combat).requests ?? {}).filter(([, r]) => r.combatantId === c.id && r.round === prev.round);
-  if (!mine.length || mine.some(([, r]) => r.state === "manual" || r.fell)) return;
-  const last = mine.sort((a, b) => (a[1].at ?? 0) - (b[1].at ?? 0)).at(-1);
-  if (last[1].delayed) return;
-  if (mine.some(([, r]) => (r.steps ?? []).some((st, k) => st?.do === "fly" && r.log?.[k]?.moved))) return;
-  await save(combat, last[0], { fell: { from: fall } });   /* first, so a second turn change can't make it fall twice */
+  const c = combat.combatants.get(prev.combatantId), tok = c?.token; if (!tok?.getFlag(ID, "run") || !hostile(tok)) return;
+  const fall = heightUp(tok), mine = Object.entries(turns(combat).requests ?? {}).filter(([, r]) => r.combatantId === c.id && r.round === prev.round).sort((a, b) => (a[1].at ?? 0) - (b[1].at ?? 0));
+  const what = shouldFall({ requests: mine.map(([, r]) => r), height: fall, flies: flySpeedOf(tok.actor) > 0, dead: !!tok.actor?.isDead, forward: movedOn(prev, { round: combat.round, turn: combat.turn }) });
+  if (!what) return;
+  const lastId = mine.at(-1)[0];
+  /* first, so a second turn change can't make it fall twice; the note says what is under way in case a reload cuts it short */
+  await save(combat, lastId, { fell: { from: fall }, note: `${tok.name} didn't Fly this round and is falling ${fall} ft. If it still shows in the air, move it to the ground and check its HP.` });
+  if (!(await ensureScene(combat) && tok.object)) { await save(combat, lastId, { note: `${tok.name} didn't Fly this round and falls ${fall} ft. I couldn't open the map, so move it down yourself${what === "fall" ? `; it may Arrest the Fall (DC 15), or else it takes ${Math.floor(fall / 2)} bludgeoning damage and lands prone` : ""}.` }); return; }
+  if (what === "drop") { await watched(() => tok.update({ elevation: 0 })); await save(combat, lastId, { fell: { from: fall, dead: true }, note: `${tok.name}'s body fell ${fall} ft to the ground.` }); return; }
   const actor = tok.actor, stats = [actor.skills?.acrobatics, actor.saves?.reflex].filter(Boolean).sort((a, b) => (b.mod ?? 0) - (a.mod ?? 0));
   let saved = false;
-  if (flySpeedOf(actor) > 0 && stats[0] && !cantAct(actor)) {   /* a reaction: not while it can't act */
-    const roll = await watched(() => stats[0].roll({ dc: { value: 15 }, skipDialog: true, label: "Arrest a Fall", extraRollOptions: ["action:arrest-a-fall"], token: tok }));
+  if (stats[0] && !cantAct(actor)) {   /* Arrest a Fall is a reaction: not while it can't act. Reactions used earlier aren't tracked yet. */
+    const roll = await watched(() => stats[0].roll({ dc: { value: 15 }, skipDialog: true, label: "Arrest a Fall", extraRollOptions: ["action:arrest-a-fall"], token: tok, rollMode: "publicroll" }));
     saved = (roll?.degreeOfSuccess ?? 0) >= 2;
   }
-  if (!(await ensureScene(combat) && tok.object)) { await save(combat, last[0], { note: `${tok.name} didn't Fly this round and falls ${fall} ft; ${saved ? "it Arrested the Fall, so no damage" : `it takes ${Math.floor(fall / 2)} bludgeoning damage and lands prone`}. I couldn't open the map, so move it down yourself.` }); return; }
   await watched(() => tok.update({ elevation: 0 }));
   let words = `${tok.name} didn't Fly this round, so it fell ${fall} ft`;
   const dmg = Math.floor(fall / 2);
-  if (!saved && dmg > 0) {
+  if (!saved && dmg > 0) {   /* falling damage is the monster's own, so it is applied whatever the monster-damage setting says */
     const DamageRoll = CONFIG.Dice.rolls.find(r => r.name === "DamageRoll"), roll = await new DamageRoll(`${dmg}[bludgeoning]`).evaluate();
-    await watched(() => roll.toMessage({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), flavor: `Falling ${fall} ft` }));
+    await watched(() => roll.toMessage({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), flavor: `Falling ${fall} ft` }, { rollMode: "publicroll" }));
     await watched(() => actor.applyDamage({ damage: roll, token: tok, item: null, shieldBlockRequest: false }));
     if (!actor.isDead) await watched(() => actor.increaseCondition?.("prone"));
     words += `, took ${dmg} bludgeoning damage and landed prone.`;
   } else words += saved ? `; it Arrested the Fall and took no damage.` : `.`;
-  await save(combat, last[0], { fell: { from: fall, saved, damage: saved ? 0 : dmg }, note: words });
+  await save(combat, lastId, { fell: { from: fall, saved, damage: saved ? 0 : dmg }, note: words });
 }
 /** The turn moved on while a monster's spell waited for a save: that request ends, and the note tells the GM what's left on the card. */
 async function leaveWaiting(combat) {
@@ -447,6 +447,8 @@ const targetHelperOn = () => { try { return !!game.modules.get(TOOLBELT)?.active
 /** Height for distances: PF2e counts the vertical gap when two creatures stand at different elevations. */
 /** How far above the ground a token is, in feet, for the packet (0 on the ground). */
 const heightUp = tok => Math.max(0, Math.round(Number(tok?.elevation) || 0));
+/** A token's height span in feet, for an area's vertical test: from its elevation up by its depth (squares of 5 ft). at: an elevation to use instead. */
+const spanOf = (tok, at = null) => { const elev = at != null ? Number(at) || 0 : Number(tok.elevation) || 0; return { elev, top: elev + (Number(tok.depth) || sizeOf(tok)) * 5 }; };
 const heightOf = tok => ({ elev: Number(tok.elevation) || 0, depth: Number(tok.depth) || sizeOf(tok) });
 const hasMove = steps => (steps ?? []).some(isMove);
 const hasSpell = steps => (steps ?? []).some(s => s?.do === "spell");
@@ -753,7 +755,7 @@ async function runStride(combat, id, i, step, tok) {
   for (const t of scene.tokens) if (t.id !== tok.id && t.actor?.isOfType?.("creature") && !known.has(t.id) && !t.getFlag(ID, "escaped")) for (const [a, b] of footprintAt(squareOf(t, scene), sizeOf(t))) taken.add(`${a},${b}`);   /* an escaped token is gone, not an unknown creature */
   const route = cutShort(step.route, sizeOf(tok), (a, b) => taken.has(`${a},${b}`));
   /* a Fly that stops short ends at the height it had reached there; a hover (Fly 0 ft) moves nothing and is recorded as flown */
-  const height = fly ? (route.length === step.route.length ? step.height : Math.max(0, up() + Math.sign(step.height - up()) * Math.min(Math.abs(step.height - up()), (route.length - 1) * 5))) : null;
+  const height = fly ? heightWhenCut(up(), step.height, route.length - 1, route.length !== step.route.length) : null;
   if (route.length < 2 && !(fly && height !== up())) { await finish({ started: true, moved: { to: squareOf(tok, scene), cost: 0 } }); return "next"; }
   const px = scene.grid.size, d = scene.dimensions, action = moveAction(tok, step.do), at = ([x, y]) => ({ x: d.sceneX + x * px, y: d.sceneY + y * px });
   const waypoints = fly ? flyWaypoints(route, up(), height).map(w => ({ ...at(w.square), elevation: w.elev, action })) : route.slice(1).map(sq => ({ ...at(sq), action }));
@@ -1324,9 +1326,11 @@ function coverage(scene, tok, aim, from) {
   /* a creature off the grid is tested where it really is, as Foundry tests a token against a placed Region (its containment test points), so the check
      and the area on the map agree; one on the grid by its squares, as before */
   const points = t => t.getContainmentTestPoints({ x: t.x, y: t.y, elevation: t.elevation, width: t.width, height: t.height, depth: t.depth, shape: t.shape }).map(p => [(p.x - X) / g, (p.y - Y) / g]);
-  const creatures = scene.tokens.contents.filter(t => t.actor?.isOfType?.("creature") && !t.actor.isDead).map(t => ({ id: t.id, square: t.id === tok.id ? from.square : squareOf(t, scene), size: sizeOf(t), ...(t.id !== tok.id && offGrid(t, scene) ? { points: points(t) } : {}) }));
+  const creatures = scene.tokens.contents.filter(t => t.actor?.isOfType?.("creature") && !t.actor.isDead).map(t => ({ id: t.id, square: t.id === tok.id ? from.square : squareOf(t, scene), size: sizeOf(t), ...spanOf(t, t.id === tok.id ? from.elev : null), ...(t.id !== tok.id && offGrid(t, scene) ? { points: points(t) } : {}) }));
   const walls = solidWalls(scene), insideAt = ([x, y]) => doc.polygonTree.testPoint({ x: X + x * g, y: Y + y * g }, 0.75);
-  return { shape, covered, reachable: burstReachable(aim, walls), ids: caughtBy(aim, covered, creatures, walls, tok.id, insideAt) };
+  /* height (0.13.0): a burst starts on the ground at its corner; a cone, line or emanation at the caster's height */
+  const casterElev = Number(from.elev ?? tok.elevation) || 0, originElev = aim.type === "burst" ? 0 : aim.type === "emanation" ? spanOf(tok, casterElev) : casterElev;
+  return { shape, covered, reachable: burstReachable(aim, walls), ids: caughtBy(aim, covered, creatures, walls, tok.id, insideAt, originElev) };
 }
 /** The plan check's view of an area: who it catches, as labels the monster may know. Allies the GM hid, and creatures it doesn't perceive, are caught but
     never named to the thinker; their token ids go on the step for the GM's card only. now: what `sense` gave. */
@@ -1418,7 +1422,7 @@ async function runArea(combat, id, i, step, tok) {
     try {
       if (now === "cast") {
         /* who it catches from where it stands now; GM-hidden creatures get no row on a public card, so the GM resolves them */
-        const { ids } = coverage(scene, tok, step.area.aim, { square: squareOf(tok, scene), size: sizeOf(tok) });
+        const { ids } = coverage(scene, tok, step.area.aim, { square: squareOf(tok, scene), size: sizeOf(tok), elev: Number(tok.elevation) || 0 });
         const rows = ids.filter(t => !scene.tokens.get(t)?.hidden), hidden = ids.filter(t => scene.tokens.get(t)?.hidden);
         aimAll(rows.map(t => scene.tokens.get(t)));
         await record({ castStarted: true, caught: ids, rows, ...(rows.length ? {} : { results: "" }) });

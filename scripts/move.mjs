@@ -135,6 +135,12 @@ export function flyWaypoints(route = [], from = 0, to = 0) {
   if (e !== to || !out.length) out.push({ square: [...(route.at(-1) ?? [0, 0])], elev: to });
   return out;
 }
+/** Where a Fly cut short ends in height: it changes 5 ft a square as it goes (flyWaypoints), so after `squares` squares of a route meant to go from
+    `from` to `to` it has changed by at most 5 ft a square. A Fly not cut short ends at `to`. */
+export function heightWhenCut(from = 0, to = 0, squares = 0, cut = true) {
+  if (!cut) return to;
+  return Math.max(0, from + Math.sign(to - from) * Math.min(Math.abs(to - from), Math.max(0, squares) * FT));
+}
 /** The world as a flier crosses it: ground terrain costs nothing and deep water is no bar, while trunks, rocks, walls and creatures stay as they are
     (trees are taller than it flies over, and walls stop Foundry's moves at any height). */
 export const flyWorld = w => ({ ...w, terrain: () => 0 });

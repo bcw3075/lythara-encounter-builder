@@ -101,16 +101,26 @@ export const burstReachable = (aim, walls = []) => aim.type !== "burst" || !cros
     squares (line of effect: only walls that block both movement and sight, never trunks: Rhea, 2026-11-07). A creature off the grid carries `points`
     (Foundry's containment test points, in squares) and is caught if insideAt says one is in the shape, as a placed Region tests it. Otherwise it is caught if any square of its space
     is covered and has line of effect to that square's centre from aim.from (a burst's corner, nudged to the caster's side; the caster's centre for the rest). The caster isn't caught by its own emanation. */
-export function caughtBy(aim, covered, creatures = [], walls = [], selfId = null, insideAt = null) {
+export function caughtBy(aim, covered, creatures = [], walls = [], selfId = null, insideAt = null, originElev = 0) {
   const out = [];
   for (const c of creatures) {
     if (aim.type === "emanation" && c.id === selfId) continue;
+    if (verticalGap(originElev, c) > (aim.size ?? 0)) continue;   /* height (0.13.0): a flier above the area, or a creature below a flier's area */
     /* off the grid (points, in squares): where it really is, as Foundry tests a token against a Region (insideAt), with line of effect to that point */
     const hit = c.points && insideAt ? c.points.some(p => insideAt(p) && !crossesWall(aim.from ?? aim.origin, p, walls))
       : squaresOf(c.square, c.size ?? 1).some(([x, y]) => covered.has(`${x},${y}`) && !crossesWall(aim.from ?? aim.origin, [x + 0.5, y + 0.5], walls));
     if (hit) out.push(c.id);
   }
   return out;
+}
+/** How far a creature is above or below an area's starting height, in feet: 0 when its height span (elev up to top) includes it. A creature with no
+    height given stands on the ground. Areas are measured from their origin in every direction (a burst spreads out from its point, a cone or line
+    from the caster's height), so one whose size is less than the gap misses it; the horizontal part is the map's own test. origin: a height, or an emanation's caster span
+    { elev, top }. */
+export function verticalGap(origin = 0, c = {}) {
+  const o = typeof origin === "number" ? { elev: origin, top: origin } : { elev: Number(origin?.elev) || 0, top: origin?.top != null ? Number(origin.top) : Number(origin?.elev) || 0 };
+  const bottom = Number(c.elev) || 0, top = c.top != null ? Number(c.top) : bottom;
+  return Math.max(0, bottom - o.top, o.elev - top);
 }
 /** The allies (and the monster itself) an area would catch, as labels, so a plan can be refused naming them. labelOf(id) gives a label for a creature
     the monster knows is on its side, or null; only those can be named, so a creature the GM hid never shows up in the words. */
