@@ -7,7 +7,7 @@ import { PROMPT_VERSION, promptText } from "./prompt.mjs";
 
 export const PLAN_SCHEMA = 1;
 /** Every kind a plan may name. The module carries out only those in turn.mjs's COSTS so far; checkPlan turns down the rest by name. */
-export const STEP_KINDS = ["stride", "step", "crawl", "fly", "swim", "climb", "release", "strike", "ability", "spell", "stand", "drop-prone", "seek", "hide", "sneak", "take-cover", "flee", "interact", "delay", "none"];
+export const STEP_KINDS = ["stride", "step", "crawl", "fly", "swim", "climb", "burrow", "release", "strike", "ability", "spell", "stand", "drop-prone", "seek", "hide", "sneak", "take-cover", "flee", "interact", "delay", "none"];
 export const MAX_STEPS = 8, MAX_TRIES = 2, LISTEN_MS = 120000, MAX_WAIT_S = 100;   /* run_script stops at 120 s */
 const LABEL = /^[EM]\d{1,3}$/, ITEM = /^[\w-]{1,80}$/, BY = ["chat", "api", "gm"];
 
@@ -45,11 +45,29 @@ export function cleanPlan(raw) {
     /* an Interact's words for the GM's card, and the creature a Delay waits for (0.12.0) */
     if (s.what != null) { if (typeof s.what !== "string") return bad(`${at}: "what" is a few words of text.`); const w = text(s.what, 120); if (w) out.what = w; }
     if (s.after != null) { if (typeof s.after !== "string" || !LABEL.test(s.after)) return bad(`${at}: "after" isn't a label like E1.`); out.after = s.after; }
+    /* a Burrow that comes up to the surface at its end (0.16.0) */
+    if (s.up != null) { if (typeof s.up !== "boolean") return bad(`${at}: "up" is true or false.`); if (s.up) out.up = true; }
     /* its own short reason, for the GM's history window (Rhea, 2026-11-08); never read by the check */
     if (s.why != null) { const w = text(String(s.why), 160); if (w) out.why = w; }
     steps.push(out);
   }
-  return { ok: true, plan: { schema: PLAN_SCHEMA, reason: text(p.reason, 300), steps, ifBlocked: text(p.ifBlocked, 100) || null, suggestOpus: p.suggestOpus === true } };
+  /* the ground the thinker judged, on a map the module can't read, when its packet asked (0.16.0) */
+  let ground = null; if (p.ground != null) { const g = cleanGround(p.ground); if (!g.ok) return g; ground = g.ground; }
+  return { ok: true, plan: { schema: PLAN_SCHEMA, reason: text(p.reason, 300), steps, ifBlocked: text(p.ifBlocked, 100) || null, suggestOpus: p.suggestOpus === true, ...(ground ? { ground } : {}) } };
+}
+export const MAX_SOIL_AREAS = 24;
+/** The ground judgment a plan may carry (0.16.0; Rhea, 2026-11-08: on a map the module can't read, Angel judges the soil in play): { soil: "all" } (the
+    whole floor is soil), { soil: "none" } (all rock), or { soil: [[x0, y0, x1, y1], ...] }, rectangles of squares, both corners included, at most
+    MAX_SOIL_AREAS. Returns { ok, ground } or a refusal in words. */
+export function cleanGround(g) {
+  if (!g || typeof g !== "object" || Array.isArray(g)) return bad(`"ground" is { "soil": "all" }, { "soil": "none" } or { "soil": [[x0, y0, x1, y1], ...] }.`);
+  if (g.soil === "all" || g.soil === "none") return { ok: true, ground: { soil: g.soil } };
+  if (!Array.isArray(g.soil) || !g.soil.length) return bad(`"ground.soil" is "all", "none" or a list of rectangles [x0, y0, x1, y1].`);
+  if (g.soil.length > MAX_SOIL_AREAS) return bad(`"ground.soil" has at most ${MAX_SOIL_AREAS} rectangles.`);
+  const out = [];
+  for (const r of g.soil) { if (!Array.isArray(r) || r.length !== 4 || !r.every(v => Number.isInteger(v) && v >= 0 && v < 1000)) return bad(`each soil rectangle is [x0, y0, x1, y1], four whole numbers (squares).`);
+    out.push([Math.min(r[0], r[2]), Math.min(r[1], r[3]), Math.max(r[0], r[2]), Math.max(r[1], r[3])]); }
+  return { ok: true, ground: { soil: out } };
 }
 /** Who made a plan, kept with it: the route, the model, the chat's generation, and usage (filled by the API route later). */
 export function cleanMeta(m = {}) {

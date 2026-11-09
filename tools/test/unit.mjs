@@ -21,6 +21,8 @@ import { CLIMB_DC, climbResult, nextClimb } from "../../scripts/turn.mjs";
 import { endsCover as endsCover2 } from "../../scripts/turn.mjs";
 import { climbDistance, treeTop, treesBeside } from "../../scripts/move.mjs";
 import { verticalGap } from "../../scripts/area.mjs";
+import { BURROW_DEPTH, burrowVertical, burrowWorld, rockSquares } from "../../scripts/move.mjs";
+import { cleanGround } from "../../scripts/brain.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
 
@@ -101,13 +103,15 @@ check("hidden next to", hiddenNextTo([[5, 5]], [{ i: 6, j: 6, n: 1, hidden: true
 const { planEncounter, readPlan } = await import(pathToFileURL(path.join(REPO, "scripts/encounter.mjs")).href);
 const spots = JSON.parse(fs.readFileSync(path.join(DATA, "spots.json"))), out = [];
 const creatures = [{ key: "a-0", group: 0, n: 1, role: "ambusher", state: "hidden", label: "A1" }, { key: "a-1", group: 0, n: 1, role: "ambusher", state: "hidden", label: "A2" }, { key: "b-0", group: 1, n: 2, role: "brute", state: "hidden", label: "B" }, { key: "c-0", group: 2, n: 1, role: "ranged", state: "hidden", label: "R" }, { key: "d-0", group: 3, n: 1, role: "caster", state: "hidden", label: "C" }, { key: "e-0", group: 4, n: 1, role: "beast", state: "alert", label: "W1" }, { key: "e-1", group: 4, n: 1, role: "beast", state: "alert", label: "W2" }, { key: "e-2", group: 4, n: 1, role: "beast", state: "alert", label: "W3" }];
-const T0 = Date.now();
+const T0 = Date.now(), rocksSeen = {};
 for (const [name, [file, cx, cy]] of Object.entries(spots)) {
   const d = JSON.parse(fs.readFileSync(path.join(DATA, file))), plan = planEncounter(d, { cx, cy, cols: 40, rows: 40, yearFrac: .55, features: [{ kind: "camp", x: cx, y: cy, size: 1 }] }), rd = { ...readPlan(plan), terrainCodes: { fields: 0 } };
   const walls = [];
   for (const t of plan.feats.trees) { if (t.trunk < .75 || t.u < 0 || t.v < 0 || t.u > plan.Wft || t.v > plan.Hft) continue; walls.push(...ring(t.u / 5, t.v / 5, t.trunk / 5, t.trunk >= 1.6 && !t.dead ? 2 : 1)); }
   const model = buildModel({ cols: 40, rows: 40, walls, costs: rd.grids.cost, occupied: new Array(1600).fill(false), entrySquares: [[20, 37]], entrySource: "read", read: rd });
   check(`${name}: summary`, summarise(model, rd).cols === 40);
+  { const rock = rockSquares(rd, 40, 40), n = rock.reduce((x, v) => x + v, 0), crag = rd.grids.terrain.filter(t => t === 8).length;   /* Burrow (0.16.0): rock on real maps */
+    rocksSeen[name] = n; check(`${name}: rock covers the crag at least`, n >= crag && n <= 1600, `${n} rock, ${crag} crag`); }
   for (const mood of ["ambush", "lair", "patrol", "chase", "standoff"]) {
     const a = layout(model, creatures, { seed: 7, mood }), b = layout(model, creatures, { seed: 7, mood }), c = layout(model, creatures, { seed: 8, mood });
     check(`${name} ${mood}: same seed same layout`, JSON.stringify(a) === JSON.stringify(b)); check(`${name} ${mood}: another seed can differ`, c.seed === 8);
@@ -121,6 +125,7 @@ for (const [name, [file, cx, cy]] of Object.entries(spots)) {
   }
 }
 console.log(`real maps: ${Date.now() - T0} ms`);
+check("burrow: crag maps are mostly rock, woods and fields mostly soil", rocksSeen.crag > 800 && rocksSeen.fields < 200 && rocksSeen.woods < 200, JSON.stringify(rocksSeen));
 /* a brute with nothing nearby still placed, a map too tight says so */
 const tight = buildModel({ cols: 10, rows: 10, walls: [], costs: new Array(100).fill(0), occupied: new Array(100).fill(true), entrySquares: [[5, 5]] });
 const none = layout(tight, [{ key: "a-0", group: 0, n: 1, role: "brute", state: "hidden", label: "X" }]); check("no room says so", none.placed.length === 0 && none.warnings[0].includes("no room"));
@@ -206,7 +211,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   /* the campaign words live in the git-ignored .private-words at the repo root (master copy in a private project doc), never here */
   const wordsFile = path.resolve(HERE, "../../.private-words"), words = fs.existsSync(wordsFile) ? fs.readFileSync(wordsFile, "utf8").split("\n").map(l => l.split("#")[0].trim()).filter(Boolean) : null;
   check("prompt names no campaign", words ? !words.some(w => new RegExp(`(?<![A-Za-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9])`, "i").test(h.prompt)) : (console.log("  (no .private-words: campaign-word check skipped)"), true));
-  check("prompt explains asking again", h.promptVersion === 17 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 18 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -1099,6 +1104,74 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   const q = checkPlan({ steps: [{ do: "climb", height: 5 }] }, { actions: 3, strikes: [], targets: {}, me: { square: [1, 1], size: 1, elev: 0 }, speed: 25, holding: [], treesAt: null });
   check("climb review: no tree info says why", !q.ok && /can't work out moves here/.test(q.reason), q.reason);
   check("climb review: the prompt's distance at 60", /15 at 60/.test(promptText()));
+}
+
+/* Burrow (0.16.0): Rhea, 2026-11-08: soil, not rock (crag and solid features are rock); unseen while below; Angel judges maps the module can't read.
+   Player Core Burrow (Actions ID 2310), burrow Speed (Rules ID 2348), tremorsense (Rules ID 2413), line of effect (Rules ID 2382) */
+{
+  /* the rock map */
+  const terrain = new Array(100).fill(0); terrain[0] = 8; terrain[99] = 9;
+  const rock = rockSquares({ grids: { terrain }, things: { outcrops: [{ at: [5, 5], r: 7 }], rocks: [{ at: [2, 8], r: 4, climb: true }, { at: [8, 2], r: 3, climb: false }], stones: [{ at: [0, 9] }], ruins: [{ from: [7, 7], to: [9, 7] }], caves: [{ at: [9, 0] }] } }, 10, 10);
+  const R = (i, j) => !!rock[j * 10 + i];
+  check("burrow: crag is rock, snow isn't", R(0, 0) && !R(9, 9));
+  check("burrow: an outcrop's squares within its radius", R(5, 5) && R(6, 5) && R(5, 4) && !R(7, 5) && R(6, 6) === (Math.hypot(1, 1) <= 1.4));
+  check("burrow: a big boulder is rock, a small one isn't", R(2, 8) && !R(8, 2) && !R(3, 9));
+  check("burrow: standing stones and ruin walls", R(0, 9) && R(7, 7) && R(8, 7) && R(9, 7) && !R(8, 8));
+  check("burrow: a cave mouth and its face", R(9, 0) && R(8, 1) && R(7, 0) && !R(6, 0));
+  check("burrow: no read, no rock", rockSquares(null, 4, 4).every(v => v === 0));
+  /* the world below ground */
+  const soil = (i, j) => !(i === 4 && j <= 3);   /* a rock wall at column 4, rows 0-3 */
+  const BW = () => burrowWorld({ cols: 10, rows: 10, terrain: (i, j) => (i === 6 && j === 6 ? null : 1), blocked: (i, j) => i === 2 && j === 2, creature: () => "enemy", wall: () => false }, soil);
+  let r = findRoute({ from: [3, 1], to: [5, 1], budget: 60 }, BW()); check("burrow: around a rock wall, under its foot", r.ok && r.route.every(([i, j]) => !(i === 4 && j <= 3)), JSON.stringify(r));
+  r = findRoute({ from: [0, 0], to: [3, 0], budget: 30 }, BW()); check("burrow: under creatures and difficult ground at plain cost", r.ok && r.cost === 15, JSON.stringify(r));
+  r = findRoute({ from: [3, 1], to: [4, 1], budget: 30 }, BW()); check("burrow: never into rock", !r.ok && r.why === "terrain" && /rock or deep water/.test(routeWords(r, [4, 1], 20, "burrow")), JSON.stringify(r));
+  r = findRoute({ from: [1, 1], to: [3, 3], budget: 30 }, BW()); check("burrow: trunks still stop it", r.ok && r.route.every(([i, j]) => !(i === 2 && j === 2)));
+  check("burrow: depth costs", BURROW_DEPTH === 5 && burrowVertical(false, true, false) === 5 && burrowVertical(true, false, true) === 5 && burrowVertical(true, true, true) === 0 && burrowVertical(false, false, true) === 10);
+  /* the plan check */
+  const broute = (f, t, before, o) => { if (o?.kind !== "burrow") return { ok: false, reason: "wrong kind" }; if (o.surface && t[0] === 9 && t[1] === 9) return { ok: false, reason: `another creature is at [9, 9], so it can't come up there.` }; const x = findRoute({ from: f, to: t, budget: 60 }, BW()); return x.ok ? { ok: true, route: x.route, cost: x.cost } : { ok: false, reason: routeWords(x, t, 20, "burrow") }; };
+  const bctx = { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 5 }], targets: { E1: { name: "E1", square: [7, 1], size: 1, elev: 0 } }, me: { square: [5, 1], size: 1, elev: 0 }, speed: 25, burrowSpeed: 20, below: false, route: broute, soilAt: sq => soil(sq[0], sq[1]), occupiedAt: sq => sq[0] === 9 && sq[1] === 9, abilities: [], spells: [] };
+  let q = checkPlan({ steps: [{ do: "burrow", to: [5, 1] }] }, bctx); check("burrow: down where it stands, 5 ft", q.ok && q.steps[0].cost === 5 && q.steps[0].below && /down under the ground where it stands/.test(describeStep(q.steps[0])), q.reason);
+  q = checkPlan({ steps: [{ do: "burrow", to: [5, 1] }, { do: "strike", item: "jaws", target: "E1" }] }, bctx); check("burrow: no Strike from below", !q.ok && /burrowed under the ground/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "burrow", to: [6, 1], up: true }, { do: "strike", item: "jaws", target: "E1" }] }, bctx); check("burrow: dip under, come up next to it, bite", q.ok && q.steps[0].cost === 15 && !q.steps[0].below && /dipping under/.test(describeStep(q.steps[0])), q.reason ?? JSON.stringify(q.steps));
+  q = checkPlan({ steps: [{ do: "burrow", to: [9, 1] }] }, bctx); check("burrow: beyond its burrow Speed", !q.ok && /more than its burrow Speed of 20 ft/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "burrow", to: [5, 1] }] }, { ...bctx, burrowSpeed: 0 }); check("burrow: no burrow Speed", !q.ok && /no burrow Speed/.test(q.reason));
+  q = checkPlan({ steps: [{ do: "burrow", to: [4, 1] }] }, { ...bctx, me: { ...bctx.me, square: [3, 1] } }); check("burrow: never into rock (the check)", !q.ok && /rock or deep water/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "burrow", to: [4, 1] }] }, { ...bctx, me: { ...bctx.me, square: [4, 1] } }); check("burrow: not down from rock", !q.ok && /is rock/.test(q.reason), q.reason);
+  const below = { ...bctx, below: true, me: { ...bctx.me, elev: -5 } };
+  q = checkPlan({ steps: [{ do: "burrow", to: [7, 1] }, { do: "burrow", to: [7, 1], up: true }] }, below); check("burrow: below, on and up in two actions", q.ok && q.steps[0].cost === 10 && q.steps[1].cost === 5 && /coming up/.test(describeStep(q.steps[1])), q.reason);
+  q = checkPlan({ steps: [{ do: "burrow", to: [6, 1], up: true }, { do: "strike", item: "jaws", target: "E1" }] }, below); check("burrow: up then bite, measured from the surface", q.ok && q.steps.length === 2, q.reason);
+  q = checkPlan({ steps: [{ do: "burrow", to: [5, 1] }] }, below); check("burrow: already below, nowhere to go", !q.ok && /already below ground/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "stride", to: [6, 1] }] }, below); check("burrow: no Stride below", !q.ok && /burrowed/.test(q.reason));
+  q = checkPlan({ steps: [{ do: "delay", after: "E1" }] }, { ...below, fresh: true, order: { E1: "later" } }); check("burrow: Delay still allowed below", q.ok, q.reason);
+  q = checkPlan({ steps: [{ do: "none" }] }, below); check("burrow: nothing allowed below", q.ok);
+  q = checkPlan({ steps: [{ do: "burrow", to: [9, 9], up: true }] }, { ...below, burrowSpeed: 100 }); check("burrow: can't come up on a creature it knows of", !q.ok && /another creature is at \[9, 9\]/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "burrow", to: [9, 9], up: true }] }, { ...below, me: { ...below.me, square: [9, 9] } }); check("burrow: nor straight up into one", !q.ok && /another creature/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "burrow", to: [5, 1] }] }, { ...bctx, prone: true }); check("burrow: not while prone", !q.ok && /prone/.test(q.reason));
+  q = checkPlan({ steps: [{ do: "burrow", to: [5, 1] }] }, { ...bctx, me: { ...bctx.me, elev: 10 } }); check("burrow: not from up high", !q.ok && /10 ft up/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "burrow", to: [5, 1] }] }, { ...bctx, cantMove: "it is grabbed." }); check("burrow: grabbed can't", /grabbed/.test(q.reason));
+  q = checkPlan({ steps: [{ do: "burrow", to: [5, 1], up: "yes" }] }, bctx); check("burrow: up is a boolean", !q.ok);
+  check("burrow: cleanPlan keeps up", cleanPlan({ steps: [{ do: "burrow", to: [1, 1], up: true }] }).plan.steps[0].up === true && !("up" in cleanPlan({ steps: [{ do: "burrow", to: [1, 1], up: false }] }).plan.steps[0]) && !cleanPlan({ steps: [{ do: "burrow", up: 1 }] }).ok);
+  check("burrow: is a move and a step kind", isMove({ do: "burrow" }) && STEP_KINDS.includes("burrow") && COSTS.burrow === 1);
+  check("burrow: done words", doneStep({ do: "burrow", to: [5, 1], below: true }, { moved: { to: [5, 1], below: true } }).result === "arrived, below ground" && doneStep({ do: "burrow", to: [6, 1], below: false }, { moved: { to: [6, 1], below: false } }).up === true && /stopped at \[5, 1\], below ground/.test(doneStep({ do: "burrow", to: [6, 1], below: false }, { moved: { to: [5, 1], below: true } }).result));
+  check("burrow: going down or up ends Take Cover", endsCover([{ do: "take-cover" }, { do: "burrow", from: [1, 1], to: [1, 1], fromBelow: false, below: true }], { 1: { moved: { to: [1, 1], below: true } } }) === true);
+  check("burrow: history line", /below ground/.test(stepResult({ do: "burrow", from: [1, 1], to: [2, 1], below: true }, { moved: { to: [2, 1], cost: 5, below: true } }).text));
+  /* perception underground: only tremorsense, only of creatures on the ground */
+  const tremor = sensesOf([{ type: "darkvision", acuity: "precise" }, { type: "tremorsense", acuity: "imprecise", range: 30 }]);
+  check("burrow: below, tremorsense finds one on the ground", perceiveOne({ senses: tremor, sees: true, heard: true, light: "bright", distance: 20, below: true }).state === "hidden");
+  check("burrow: below, nothing out of tremorsense range", perceiveOne({ senses: tremor, sees: true, heard: true, light: "bright", distance: 40, below: true }).state === "unnoticed");
+  check("burrow: below, nothing up in the air", perceiveOne({ senses: tremor, sees: true, heard: true, light: "bright", distance: 10, below: true, aloft: true }).state === "unnoticed");
+  check("burrow: below without tremorsense, only memory", perceiveOne({ senses: sensesOf([{ type: "darkvision" }]), sees: true, heard: true, light: "bright", distance: 5, below: true, known: true }).state === "undetected");
+  check("burrow: below, Visioner's stored state doesn't reach it", perceiveOne({ senses: tremor, sees: true, distance: 50, below: true, avs: true, stored: "observed" }).state === "unnoticed");
+  /* the ground map marks rock for a burrower */
+  const gm = buildModel({ cols: 4, rows: 2, costs: new Array(8).fill(0), occupied: new Array(8).fill(false), entrySquares: [[0, 0]] });
+  const g = groundAround(gm, [0, 0], 5, undefined, null, null, (x, y) => x === 2);
+  check("burrow: r on the ground map", g.rows[0] === "..r." && /r rock/.test(g.key) && !/r rock/.test(groundAround(gm, [0, 0], 5).key), JSON.stringify(g));
+  /* Angel's ground judgment */
+  check("burrow: ground all and none", cleanGround({ soil: "all" }).ground.soil === "all" && cleanGround({ soil: "none" }).ground.soil === "none");
+  check("burrow: ground rectangles ordered", JSON.stringify(cleanGround({ soil: [[5, 6, 1, 2]] }).ground.soil) === "[[1,2,5,6]]");
+  check("burrow: bad ground refused", !cleanGround({ soil: [[1, 2, 3]] }).ok && !cleanGround({ soil: "some" }).ok && !cleanGround([]).ok && !cleanGround({ soil: Array(25).fill([0, 0, 1, 1]) }).ok);
+  check("burrow: cleanPlan keeps ground", cleanPlan({ steps: [{ do: "none" }], ground: { soil: [[0, 0, 3, 3]] } }).plan.ground.soil.length === 1 && !cleanPlan({ steps: [{ do: "none" }], ground: { soil: 3 } }).ok);
+  check("burrow: the prompt", /"do": "burrow"/.test(promptText()) && /judgeGround/.test(promptText()) && /"soil": "none"/.test(promptText()));
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
 for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs", "ui/history.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);

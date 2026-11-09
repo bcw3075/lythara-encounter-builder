@@ -2,7 +2,7 @@
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. It runs Strikes, Strides, Steps, Crawls, Fly, Swim, Climb, Release, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek, Interact, Delay and fleeing off the map; what is still to come is in the repo's docs/features and the project's plan doc. */
 import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, shouldSink, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract, nextClimb, climbResult } from "./turn.mjs";
-import { FT, cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, heightWhenCut, routeWords, swimWorld, treeTop, treesBeside, waterKinds, waterUnder } from "./move.mjs";
+import { BURROW_DEPTH, FT, burrowWorld, cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, heightWhenCut, rockSquares, routeWords, swimWorld, treeTop, treesBeside, waterKinds, waterUnder } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap, partySize, suggestedLevel } from "./builder.mjs";
 import { aimArea, aimWords, alliesCaught, burstReachable, caughtBy, shapeOf, squaresNear } from "./area.mjs";
@@ -81,10 +81,10 @@ function enemiesOf(scene, tok) { return scene.tokens.contents.filter(t => t.id !
 function sense(combat, tok, memory = {}) {
   const scene = combat.scene, me = tok.actor, conds = conditionsOn(me), blocked = (type, a, b) => !!CONFIG.Canvas.polygonBackends[type].testCollision(a, b, { mode: "any", type });
   const vis = game.modules.get(VISIONER)?.active ? game.modules.get(VISIONER).api : null, avs = !!vis && !!game.settings.get(VISIONER, "autoVisibilityEnabled");
-  const senses = sensesOf([...(me.perception?.senses ?? [])], { deafened: conds.includes("deafened") });
+  const senses = sensesOf([...(me.perception?.senses ?? [])], { deafened: conds.includes("deafened") }), below = isBelow(tok);   /* burrowed: only tremorsense reaches it (0.16.0) */
   return enemiesOf(scene, tok).map(t => {
     const from = tok.object.center, to = t.object.center, distance = tok.object.distanceTo(t.object), theirs = conditionsOn(t.actor);
-    const { state, by } = perceiveOne({ senses, blinded: conds.includes("blinded"), dazzled: conds.includes("dazzled"), sees: !blocked("sight", from, to), heard: !blocked("sound", from, to), light: lightOn(to, scene), distance, invisible: theirs.includes("invisible"), concealed: theirs.includes("concealed"), stored: vis?.getVisibility(tok.id, t.id) ?? null, avs, known: !!memory[t.id] });
+    const { state, by } = perceiveOne({ senses, blinded: conds.includes("blinded"), dazzled: conds.includes("dazzled"), sees: !blocked("sight", from, to), heard: !blocked("sound", from, to), light: lightOn(to, scene), distance, invisible: theirs.includes("invisible"), concealed: theirs.includes("concealed"), stored: vis?.getVisibility(tok.id, t.id) ?? null, avs, known: !!memory[t.id], below, aloft: heightUp(t) > 0 });
     return { id: t.id, token: t, state, by, distance, square: squareOf(t, scene) };
   });
 }
@@ -235,7 +235,7 @@ function alliesOf(scene, tok) { return scene.tokens.contents.filter(t => t.id !=
 function nextDiagonalFt(tok, scene) { const px = scene.grid.size, d = scene.dimensions; return diagonalsIn((tok.movementHistory ?? []).map(w => [Math.round((w.x - d.sceneX) / px), Math.round((w.y - d.sceneY) / px)])) % 2 ? 10 : 5; }
 /** A monster's packet as things stand, plus the labels it needs. Writes nothing. turn: what this turn already used ({ spent, attacks, done, note }), on a re-plan. */
 async function buildPacket(combat, tok, turn = {}) {
-  const scene = combat.scene, t = turns(combat), memory = t.memory?.[tok.id] ?? {}, others = sense(combat, tok, memory), allies = alliesOf(scene, tok).filter(a => !a.hidden);   /* a GM-hidden or escaped ally isn't there for the thinker */
+  const scene = combat.scene, t = turns(combat), memory = t.memory?.[tok.id] ?? {}, others = sense(combat, tok, memory), allies = alliesOf(scene, tok).filter(a => !a.hidden || isBelow(a));   /* a GM-hidden or escaped ally isn't there for the thinker; a burrowed one is (it knows where its own are) */
   const known = others.filter(o => canTarget(o.state) || (o.state === "undetected" && memory[o.id])), labels = { ...(t.labels ?? {}) };
   const fresh = { ...assignLabels(labels, known.map(o => o.id), "E"), ...assignLabels(labels, [tok.id, ...allies.map(a => a.id)], "M") }; Object.assign(labels, fresh);
   const { model, read } = await readMap(scene), a = tok.actor, h = a.hitPoints, square = squareOf(tok, scene);
@@ -249,6 +249,15 @@ async function buildPacket(combat, tok, turn = {}) {
   const up = treeUp(tok, scene), far = t => Math.max(Math.abs(t.at[0] - square[0]), Math.abs(t.at[1] - square[1]));
   const near = treesOf(read).filter(t => far(t) <= GROUND_RADIUS).sort((x, y) => far(x) - far(y)).slice(0, 12);
   if (up || near.length) you.climb = { trees: near, ...(up ? { up: { tree: up.at, top: up.top } } : {}) };
+  /* Burrow (0.16.0): whether it is under the ground now, whether the ground it stands on is soil, and on a map the module can't read whose ground isn't
+     judged yet, the request to judge it from a picture (Rhea, 2026-11-08: Angel judges each map in play) */
+  const burrows = burrowSpeedOf(a) > 0, isDeep = burrows ? deepWater(scene, model) : null, soil = burrows ? soilOf(scene, model, read, isDeep) : null;
+  if (burrows) {
+    const below = isBelow(tok), judge = !read && !groundJudged(scene), shown = judge ? await showGroundPicture(scene).catch(e => { console.warn(`${ID} | ground picture`, e); return false; }) : false;
+    you.burrow = { below, soilHere: footprintAt(square, sizeOf(tok)).every(([i, j]) => soil(i, j)),
+      ground: read ? "known: the module read this map (\"r\" on the ground map is rock)" : judge ? "not judged yet: everywhere counts as rock" : "judged: soil is where the GM's soil areas are (\"r\" on the ground map is rock)",
+      ...(judge ? { judgeGround: { size: mapSquares(scene), picture: shown ? `a picture of the whole map with numbered squares is on the runner's page, element #${GROUND_EL}` : "no picture could be drawn: judge from the scene's name and the ground map, or answer \"none\"", sceneName: scene.name } } : {}) };
+  }
   const cover = visionerApi();
   if (offGrid(tok, scene)) you.offGrid = true;
   /* already Taking Cover: the cover it has now comes from that, so it isn't listed as cover to Take Cover from (it can't take it again until it moves or attacks) */
@@ -258,8 +267,8 @@ async function buildPacket(combat, tok, turn = {}) {
      concealment and who it has standard cover from; never whether a secret roll worked */
   const tried = t.stealth?.[tok.id] ?? null;
   you.stealth = { lastTried: tried ? `${tried.did === "sneak" ? "Sneaked" : "Hid"} in round ${tried.round}, and has only Hidden, Sneaked or Stepped since` : null, light: lightOn(tok.object.center, scene), concealed: !!a.hasCondition?.("concealed"), standardCoverFrom: coverList };   /* the real list: Taking Cover itself allows a Hide */
-  const packet = packetOf({ you, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], ground: groundAround(model, square, GROUND_RADIUS, undefined, takeCoverSquares(scene), water),
-    allies: allies.map(x => ({ label: labels[x.id], name: x.name, square: squareOf(x, scene), ...(heightUp(x) ? { height: heightUp(x) } : {}), healthWord: wordsFor(x.actor), conditions: visibleConditions(conditionsOn(x.actor)) })),
+  const packet = packetOf({ you, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], ground: groundAround(model, square, GROUND_RADIUS, undefined, takeCoverSquares(scene), water, soil ? (x, y) => !soil(x, y) && !model.blocked[model.idx(x, y)] && !water(x, y) : null),
+    allies: allies.map(x => ({ label: labels[x.id], name: x.name, square: squareOf(x, scene), ...(heightUp(x) ? { height: heightUp(x) } : {}), ...(isBelow(x) ? { below: true } : {}), healthWord: wordsFor(x.actor), conditions: visibleConditions(conditionsOn(x.actor)) })),
     others: others.map(o => ({ id: o.id, state: o.state, label: labels[o.id], square: o.square, height: heightUp(o.token), offGrid: offGrid(o.token, scene), size: o.token.actor.size, distance: o.distance, gear: gearOf(o.token.actor), conditions: visibleConditions(conditionsOn(o.token.actor)), healthWord: wordsFor(o.token.actor), cover: cover?.getAutoCoverState?.(tok.object, o.token.object) ?? "none" })) });
   return { packet, labels: labelsOf(others.map(o => ({ id: o.id, state: o.state, label: labels[o.id] }))), fresh, others };
 }
@@ -327,7 +336,7 @@ export function onCombatUpdate(combat, change) {
   if (!isRunner()) return;
   if ("turn" in change || "round" in change) leaveWaiting(combat).catch(e => console.warn(`${ID} | waiting`, e)).then(() => dropInstantAreas(combat, currentRequest(combat) ? { id: currentRequest(combat).id, pos: 0 } : null)).catch(e => console.warn(`${ID} | areas`, e));
   if ("turn" in change || "round" in change) { const prev = { ...(combat.previous ?? {}) };   /* the turn that just ended, read before anything awaits */
-    fallIfAloft(combat, prev).catch(e => console.warn(`${ID} | fall`, e)).then(() => sinkNote(combat, prev)).catch(e => console.warn(`${ID} | sink`, e)).then(() => settleClimbers(combat)).catch(e => console.warn(`${ID} | climbing`, e)).then(() => noteWhatTheySense(combat)).catch(e => console.warn(`${ID} | memory`, e)).then(() => onTurnChange(combat)).catch(e => console.error(`${ID} | turn`, e)); }
+    fallIfAloft(combat, prev).catch(e => console.warn(`${ID} | fall`, e)).then(() => sinkNote(combat, prev)).catch(e => console.warn(`${ID} | sink`, e)).then(() => settleClimbers(combat)).catch(e => console.warn(`${ID} | climbing`, e)).then(() => settleBurrowers(combat)).catch(e => console.warn(`${ID} | burrowing`, e)).then(() => noteWhatTheySense(combat)).catch(e => console.warn(`${ID} | memory`, e)).then(() => onTurnChange(combat)).catch(e => console.error(`${ID} | turn`, e)); }
   act(combat);
 }
 /* ---------- falling ---------- */
@@ -434,14 +443,16 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
   const now = new Map(sense(combat, tok, turns(combat).memory?.[tok.id] ?? {}).map(o => [o.id, o])), targets = {};
   for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && canTarget(o.state)) targets[label] = { name: label, square: o.square, ...(o.state === "hidden" ? {} : placeOf(o.token, scene)), size: sizeOf(o.token), ...heightOf(o.token), flat: flatDC(o.state), cat: o.token.actor?.size ?? null, held: !!turns(combat).grips?.[tok.id]?.[tokenId] && isHeld(o.token.actor) }; }
   /* moves are worked out only for a plan that has a Stride, Step or Crawl, so trouble there can't stop a plan of Strikes */
-  const speed = landSpeed(actor), flySpeed = flySpeedOf(actor), swimSpeed = swimSpeedOf(actor); let route = null;
-  if (moves) { try { route = await mover(combat, tok, speed, knownTo(combat, tok, [...now.values()]), flySpeed, swimSpeed); } catch (e) { console.error(`${ID} | moves`, e); const why = `I couldn't work out moves here (${e.message}).`; route = () => ({ ok: false, reason: why }); } }
+  const speed = landSpeed(actor), flySpeed = flySpeedOf(actor), swimSpeed = swimSpeedOf(actor), burrowSpeed = burrowSpeedOf(actor); let route = null;
+  if (moves) { try { route = await mover(combat, tok, speed, knownTo(combat, tok, [...now.values()]), flySpeed, swimSpeed, burrowSpeed); } catch (e) { console.error(`${ID} | moves`, e); const why = `I couldn't work out moves here (${e.message}).`; route = () => ({ ok: false, reason: why }); } }
   /* Take Cover: the cover Visioner gives it now against each creature it sees and could name, and the walls and trunks next to a square */
   const vis = visionerApi(), coverFrom = {};
   if (vis) for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && SEES.includes(o.state)) { const l = coverOf(vis, o.token, tok); if (STANDARD.includes(l)) coverFrom[label] = l; } }
   return { actions: Math.max(0, actionsOf(actor, combat) - (req.spent ?? 0) - used.actions), attacksBefore: (req.attacks ?? 0) + used.attacks, strikes, targets,
     me: { square: squareOf(tok, scene), ...placeOf(tok, scene), size: sizeOf(tok), ...heightOf(tok), cat: actor.size ?? null }, speed, flySpeed, swimSpeed, waterAt: route?.waterAt, waterIn: route?.waterIn,
     /* Climb and Release (0.15.0): its climb Speed, the trees beside a square, the tree it is up now, what it holds */
+    /* Burrow (0.16.0): its burrow Speed, whether it is under the ground now, soil under a footprint, a creature it knows of where it would come up */
+    burrowSpeed, below: isBelow(tok), soilAt: route?.soilAt ?? null, occupiedAt: route?.occupiedAt ?? null,
     climbSpeed: climbSpeedOf(actor), treesAt: route?.trees ? sq => treesBeside(sq, sizeOf(tok), route.trees) : null, onTree: treeUp(tok, scene), holding: holding.map(({ id, name }) => ({ id, name })),
     cantAct: cantAct(actor), cantMove: cantMove(actor), cantAttack: cantAttack(actor), prone: !!actor.hasCondition?.("prone"), route,
     tookCover: takingCover(tok), coverFrom, nearCover: nearCoverFor(scene),
@@ -484,7 +495,7 @@ const heightUp = tok => Math.max(0, Math.round(Number(tok?.elevation) || 0));
 /** A token's height span in feet, for an area's vertical test: from its elevation up by its depth (squares of 5 ft). at: an elevation to use instead. */
 const spanOf = (tok, at = null) => { const elev = at != null ? Number(at) || 0 : Number(tok.elevation) || 0; return { elev, top: elev + (Number(tok.depth) || sizeOf(tok)) * 5 }; };
 const heightOf = tok => ({ elev: Number(tok.elevation) || 0, depth: Number(tok.depth) || sizeOf(tok) });
-const hasMove = steps => (steps ?? []).some(s => isMove(s) || s?.do === "climb");   /* a Climb needs the map's trees, which come with the routes */
+const hasMove = steps => (steps ?? []).some(s => isMove(s) || s?.do === "climb");   /* a Burrow is a move (0.16.0), so it gets the routes and the soil */   /* a Climb needs the map's trees, which come with the routes */
 const hasSpell = steps => (steps ?? []).some(s => s?.do === "spell");
 /** The creatures a monster knows are there: allies (not hidden by the GM), and those it perceives well enough to know their square. Only these shape
     the routes it's told about, so a refusal never gives away a creature it can't perceive. others: what `sense` gave. */
@@ -499,6 +510,73 @@ const landSpeed = actor => Number(actor.system.movement?.speeds?.land?.value) ||
 const flySpeedOf = actor => Number(actor.system.movement?.speeds?.fly?.value) || 0;
 const swimSpeedOf = actor => Number(actor.system.movement?.speeds?.swim?.value) || 0;
 const climbSpeedOf = actor => Number(actor.system.movement?.speeds?.climb?.value) || 0;
+/* ---------- burrowing (0.16.0) ---------- */
+const burrowSpeedOf = actor => Number(actor?.system?.movement?.speeds?.burrow?.value) || 0;
+/** Is this token burrowed under the ground: the module's flag and its token below 0. A token the GM lifted back to 0 or above isn't, whatever its flag. */
+const isBelow = tok => !!tok?.getFlag?.(ID, "burrowed") && (Number(tok.elevation) || 0) < 0;
+/** Soil regions on a scene: Angel's judgment (flag `soil`) or any region the GM names "Soil..." (Rhea, 2026-11-08: Angel judges maps the module can't read; she
+    can change the result). */
+const SOIL_NAME = /^soil\b/i;
+const soilRegions = scene => scene.regions.filter(r => r.getFlag(ID, "soil") || SOIL_NAME.test(r.name ?? ""));
+/** Whether the ground of a scene the module can't read has been judged (the scene's flag, or soil regions the GM drew herself). */
+const groundJudged = scene => !!scene.getFlag(ID, "ground") || soilRegions(scene).length > 0;
+/** Which squares a burrower can dig through, as (i, j) → boolean. A Survey Sheet encounter map: everything but rock (`rockSquares`: crag, outcrops, big
+    boulders, standing stones, ruin walls, caves), solid things (trunks, walls through the square) and deep water. Any other scene: only inside soil
+    regions; everywhere else counts as rock (and so does all of it until its ground is judged). */
+function soilOf(scene, model, read, isDeep) {
+  const px = scene.grid.size, d = scene.dimensions, memo = new Map();
+  if (read) { const rock = rockSquares(read, model.cols, model.rows); return (i, j) => model.inMap(i, j) && !rock[model.idx(i, j)] && !model.blocked[model.idx(i, j)] && !isDeep(i, j); }
+  const regs = soilRegions(scene);
+  return (i, j) => { if (!model.inMap(i, j)) return false; const k = model.idx(i, j);
+    if (!memo.has(k)) memo.set(k, !model.blocked[k] && !isDeep(i, j) && regs.some(r => r.testPoint({ x: d.sceneX + (i + .5) * px, y: d.sceneY + (j + .5) * px, elevation: 0 }))); return memo.get(k); };
+}
+/** Into the ground or out of it: the token's flag and its visibility. Underground it is hidden from everyone (Rhea: "unseen while below"), as the GM's own
+    hidden toggle does it; coming up it shows again, unless the GM had hidden it before it went down. */
+async function setBelow(tok, down) {
+  const f = tok.getFlag(ID, "burrowed");
+  if (down) { if (!f) await watched(() => tok.update({ hidden: true, [`flags.${ID}.burrowed`]: { wasHidden: !!tok.hidden } })); else if (!tok.hidden) await watched(() => tok.update({ hidden: true })); return; }
+  if (f) await watched(() => tok.update({ hidden: !!f.wasHidden, [`flags.${ID}.-=burrowed`]: null }));
+}
+/** At each turn change: a token flagged as burrowed that the GM brought up to the surface (or above) by hand is above ground again: shown, flag gone. */
+async function settleBurrowers(combat) {
+  for (const tok of combat.scene?.tokens ?? []) if (tok.getFlag(ID, "burrowed") && !isBelow(tok)) await setBelow(tok, false).catch(e => console.warn(`${ID} | burrowing`, e));
+}
+/* The picture Angel judges a map's ground from (0.16.0): the scene's own background with the grid and every square numbered, in a small panel on this page
+   (the runner's), which the thinker looks at (on the chat route, the bridge's ui_look on the runner with selector #lythara-encounter-builder-ground). */
+const GROUND_EL = `${ID}-ground`;
+async function showGroundPicture(scene) {
+  if (typeof document === "undefined") return false;
+  const src = scene.levels?.contents?.[0]?.background?.src ?? scene.background?.src ?? null, d = scene.dimensions, px = scene.grid.size;
+  const cols = Math.round(d.sceneWidth / px), rows = Math.round(d.sceneHeight / px), cell = Math.max(12, Math.min(32, Math.floor(1100 / Math.max(cols, rows)))), pad = 22;
+  let el = document.getElementById(GROUND_EL);
+  if (el && el.dataset.scene === scene.id && el.dataset.src === String(src)) return true;
+  el?.remove(); el = document.createElement("div"); el.id = GROUND_EL; el.dataset.scene = scene.id; el.dataset.src = String(src);
+  el.style.cssText = "position:fixed;left:8px;top:8px;z-index:100000;background:#fff;color:#000;padding:6px;border:2px solid #333;font:12px sans-serif;box-shadow:0 2px 12px #0008";
+  const c = document.createElement("canvas"); c.width = pad + cols * cell; c.height = pad + rows * cell; const g = c.getContext("2d");
+  g.fillStyle = "#ddd"; g.fillRect(0, 0, c.width, c.height);
+  if (src) { const img = new Image(); img.src = src; await new Promise(res => { img.onload = res; img.onerror = res; setTimeout(res, 15000); }); if (img.naturalWidth) g.drawImage(img, pad, pad, cols * cell, rows * cell); }
+  /* walls, so a corridor's edges read even on a plain picture */
+  g.strokeStyle = "#c00"; g.lineWidth = 2; for (const w of scene.walls) { g.beginPath(); g.moveTo(pad + (w.c[0] - d.sceneX) / px * cell, pad + (w.c[1] - d.sceneY) / px * cell); g.lineTo(pad + (w.c[2] - d.sceneX) / px * cell, pad + (w.c[3] - d.sceneY) / px * cell); g.stroke(); }
+  g.strokeStyle = "#0006"; g.lineWidth = 1; for (let i = 0; i <= cols; i++) { g.beginPath(); g.moveTo(pad + i * cell, pad); g.lineTo(pad + i * cell, pad + rows * cell); g.stroke(); } for (let j = 0; j <= rows; j++) { g.beginPath(); g.moveTo(pad, pad + j * cell); g.lineTo(pad + cols * cell, pad + j * cell); g.stroke(); }
+  g.fillStyle = "#000"; g.font = `${Math.min(11, cell - 2)}px sans-serif`; g.textAlign = "center"; g.textBaseline = "middle";
+  const every = cell >= 18 ? 1 : 2; for (let i = 0; i < cols; i += every) g.fillText(String(i), pad + (i + .5) * cell, pad / 2); for (let j = 0; j < rows; j += every) g.fillText(String(j), pad / 2, pad + (j + .5) * cell);
+  const head = document.createElement("div"); head.textContent = `Angel is judging the ground of "${scene.name}": squares x across, y down. Red lines are walls.`; head.style.marginBottom = "4px";
+  el.append(head, c); document.body.append(el);
+  setTimeout(() => { if (document.getElementById(GROUND_EL) === el) el.remove(); }, 10 * 60000);   /* gone after 10 minutes, or as soon as the judgment is in */
+  return true;
+}
+const hideGroundPicture = () => { if (typeof document !== "undefined") document.getElementById(GROUND_EL)?.remove(); };
+/** Angel's judgment of a scene's ground, made real: GM-only soil regions (flag `soil`, named "Soil (Angel)"), and the scene's flag so it is asked once.
+    ground: brain.mjs's cleanGround ({ soil: "all" | "none" | [[x0, y0, x1, y1]] }). The GM can reshape or delete the regions with the region tools. */
+async function applyGround(scene, ground, by = "Angel") {
+  const d = scene.dimensions, px = scene.grid.size, cols = Math.round(d.sceneWidth / px), rows = Math.round(d.sceneHeight / px);
+  const rects = ground.soil === "all" ? [[0, 0, cols - 1, rows - 1]] : ground.soil === "none" ? [] : ground.soil.map(([a, b, c, e]) => [Math.max(0, a), Math.max(0, b), Math.min(cols - 1, c), Math.min(rows - 1, e)]).filter(([a, b, c, e]) => a <= c && b <= e);
+  if (rects.length) await watched(() => scene.createEmbeddedDocuments("Region", [{ name: `Soil (${by})`, color: "#8b5a2b", visibility: CONST.REGION_VISIBILITY.GAMEMASTER, levels: [],
+    shapes: rects.map(([a, b, c, e]) => ({ type: "rectangle", x: d.sceneX + a * px, y: d.sceneY + b * px, width: (c - a + 1) * px, height: (e - b + 1) * px, rotation: 0 })), flags: { [ID]: { soil: true } } }]));
+  await watched(() => scene.setFlag(ID, "ground", { by, at: Date.now(), soil: ground.soil === "all" || ground.soil === "none" ? ground.soil : rects.length }));
+  hideGroundPicture();
+  return rects.length;
+}
 /** The trees on a map, for climbing (0.15.0): Survey Sheet's read gives each tree's square and trunk radius, and `treeTop` guesses its height from the
     trunk (Rhea, 2026-11-08: "height by size"). A map with no read has no trees to climb. */
 const treesOf = read => (read?.things?.trees ?? []).filter(t => Array.isArray(t?.at)).map(t => ({ at: [...t.at], top: treeTop(t.trunk) }));
@@ -537,11 +615,11 @@ function cantMove(actor) {
 }
 /** The movement action a move is sent and priced with: crawl for a Crawl (a prone token can't walk); otherwise the token's own, except never crawl for a
     Stride or Step (one after a Crawl and a Stand in the same plan). */
-const moveAction = (tok, kind) => kind === "crawl" ? "crawl" : kind === "fly" ? "fly" : kind === "swim" ? "swim" : ["crawl", "fly", "swim", "climb"].includes(tok.movementAction) ? "walk" : tok.movementAction;   /* a Stride after a landing or a swim walks */
+const moveAction = (tok, kind) => kind === "crawl" ? "crawl" : kind === "fly" ? "fly" : kind === "swim" ? "swim" : kind === "burrow" ? "burrow" : ["crawl", "fly", "swim", "climb", "burrow"].includes(tok.movementAction) ? "walk" : tok.movementAction;   /* a Stride after a landing or a swim walks */
 const DEEP = /deep water/i;   /* Survey Sheet's name for its greater-difficult water. Other greater difficult terrain is just 10 ft more a square. */
 /** route(from, to, before, { step, kind }) for checkPlan, for this monster on this scene as it stands now: a Stride's route, or with step a single 5-ft
     square (a Step or a Crawl, which kind names for the words). */
-async function mover(combat, tok, speed, known = null, flySpeed = 0, swimSpeed = 0) {
+async function mover(combat, tok, speed, known = null, flySpeed = 0, swimSpeed = 0, burrowSpeed = 0) {
   const scene = combat.scene, px = scene.grid.size, d = scene.dimensions, ox = d.sceneX, oy = d.sceneY, size = sizeOf(tok);
   const { model, read } = await readMap(scene, { except: new Set(scene.tokens.map(t => t.id)) });   /* creatures are counted below, ally or enemy */
   const isDeep = deepWater(scene, model), terrain = (i, j) => { const c = model.costs[model.idx(i, j)] ?? 0; return c < 2 ? c : isDeep(i, j) ? null : 2; };
@@ -558,11 +636,13 @@ async function mover(combat, tok, speed, known = null, flySpeed = 0, swimSpeed =
   /* What it has already moved this turn: Foundry keeps the token's movement history for the turn (cleared when the turn changes) and charges a new move
      as the rest of that path, so diagonals carry on from it, as the rules say. */
   const history = (tok.movementHistory ?? []).map(w => [Math.round((w.x - ox) / px), Math.round((w.y - oy) / px)]);
-  const route = (from, to, before = [], { step = false, kind = "stride" } = {}) => {
+  const soil = soilOf(scene, model, read, isDeep), occupied = sq => footprintAt(sq, size).some(([i, j]) => !!who.get(`${i},${j}`));
+  const route = (from, to, before = [], { step = false, kind = "stride", surface = false } = {}) => {
     const prefix = [...history]; for (const r of before) prefix.push(...(prefix.length && same(prefix.at(-1), r[0]) ? r.slice(1) : r));
     if (!prefix.length || !same(prefix.at(-1), from)) prefix.push(from);
-    const fly = kind === "fly", swim = kind === "swim", odd = diagonalsIn(prefix) % 2 === 1, budget = fly ? flySpeed : swim ? Math.max(swimSpeed, 20) : speed;
-    const r = step ? findStep({ from, to, size, odd }, world) : findRoute({ from, to, size, budget, odd }, fly ? flyWorld(world) : swim ? swimWorld(world, isDeep) : world);
+    const fly = kind === "fly", swim = kind === "swim", dig = kind === "burrow", odd = diagonalsIn(prefix) % 2 === 1, budget = fly ? flySpeed : swim ? Math.max(swimSpeed, 20) : dig ? burrowSpeed : speed;
+    if (dig && surface && occupied(to)) return { ok: false, reason: `another creature is at [${to[0]}, ${to[1]}], so it can't come up there.` };   /* below ground no one is in its way; where it comes up, anyone it knows of is */
+    const r = step ? findStep({ from, to, size, odd }, world) : findRoute({ from, to, size, budget, odd }, fly ? flyWorld(world) : swim ? swimWorld(world, isDeep) : dig ? burrowWorld(world, soil) : world);
     if (!r.ok && (r.why !== "far" || !r.route)) return { ok: false, reason: routeWords(r, to, budget, kind) };   /* "far" with no route: past where the search looked */
     /* a Swim is priced by Foundry with its swim action, which Survey Sheet's regions don't slow; a bank square it climbs out onto keeps its own terrain cost */
     const bank = swim ? Math.max(0, ...footprintAt(to, size).filter(([i, j]) => !isDeep(i, j)).map(([i, j]) => model.costs[model.idx(i, j)] ?? 0)) * FT : 0;
@@ -571,6 +651,7 @@ async function mover(combat, tok, speed, known = null, flySpeed = 0, swimSpeed =
   /* the deep water under its footprint at a square, for checkPlan: "calm", "flowing" or null */
   route.waterAt = sq => waterUnder(sq, size, kind); route.waterIn = sq => waterUnder(sq, size, kind, true);
   route.trees = treesOf(read);   /* for a Climb: the trees beside a square */
+  route.soilAt = sq => footprintAt(sq, size).every(([i, j]) => soil(i, j)); route.occupiedAt = occupied;   /* for a Burrow (0.16.0) */
   return route;
 }
 /** Whether a square of this scene is deep water: Survey Sheet's greater-difficult region named "Deep water" (other greater difficult terrain isn't).
@@ -605,6 +686,12 @@ async function judgeNow(combat, requestId) {
   if (!await ensureScene(combat)) { await save(combat, requestId, { state: "requested", verdict: cantOpen() }); return { state: "requested", reason: cantOpen() }; }
   const r = request(combat, requestId), clean = cleanPlan(r.plan);
   if (!clean.ok) return reject(combat, requestId, clean.reason);
+  /* the ground Angel judged, when its packet asked for it (0.16.0): made real before the check, so this plan's Burrow is judged on it. Once only: a later
+     plan's ground is ignored, and the GM changes the regions herself. */
+  if (clean.plan.ground && r.packet?.you?.burrow?.judgeGround && !groundJudged(combat.scene)) {
+    try { const n = await applyGround(combat.scene, clean.plan.ground); await addNote(combat, requestId, `Angel judged this map's ground: ${clean.plan.ground.soil === "all" ? "all soil" : n ? `soil in ${n} area${n === 1 ? "" : "s"}` : "all rock"} (GM-only "Soil (Angel)" regions: reshape or delete them with the region tools).`); }
+    catch (e) { console.error(`${ID} | ground`, e); await addNote(combat, requestId, `I couldn't mark the ground Angel judged (${e.message}); everything counts as rock until you draw soil regions (name them "Soil").`); }
+  }
   const c = checkPlan(clean.plan, await gather(combat, r, undefined, { moves: hasMove(clean.plan.steps), spells: hasSpell(clean.plan.steps) }));
   if (!c.ok) return reject(combat, requestId, c.reason);
   await save(combat, requestId, { state: "ready", plan: whole(clean.plan), steps: c.steps, verdict: null });
@@ -809,13 +896,17 @@ async function runStride(combat, id, i, step, tok) {
   const scene = combat.scene, record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {};
   /* the step's record, the baseline's square and any note go in one save: a reload between two saves would leave the step done with the old square,
      and the look before the next action would re-plan for its own move */
-  const fly = step.do === "fly", up = () => heightUp(tok);
-  const finish = async rec => { const at = squareOf(tok, scene), change = { log: { [i]: fly ? { ...rec, ...(rec.moved ? { moved: { ...rec.moved, elev: up() } } : {}) } : rec } };
+  const fly = step.do === "fly", dig = step.do === "burrow", up = () => heightUp(tok);
+  const finish = async rec => { const at = squareOf(tok, scene), change = { log: { [i]: fly ? { ...rec, ...(rec.moved ? { moved: { ...rec.moved, elev: up() } } : {}) } : dig && rec.moved ? { ...rec, moved: { ...rec.moved, below: isBelow(tok) } } : rec } };
     if (request(combat, id).seen) change.seen = { me: { square: at } };   /* no baseline, nothing to move */
+    /* gone under the ground: everyone vanishing from its senses is its own doing, so the baseline starts again from there (no re-plan for it). Coming up,
+       what it perceives anew is news, and the look before the next action asks again if it changed (0.16.0). */
+    if (dig && isBelow(tok) && !step.fromBelow && request(combat, id).seen) change.seen = whole(situationNow(combat, tok, request(combat, id).labels ?? {}));
+    if (dig && isBelow(tok) !== !!step.below) change.note = `${tok.name} is ${isBelow(tok) ? "still below ground" : "at the surface"} instead of ${step.below ? "below ground" : "at the surface"}.`;
     if (!same(at, step.to)) change.note = `${tok.name} stopped at square ${at[0]}, ${at[1]} instead of ${step.to[0]}, ${step.to[1]}.`;
     else if (fly && up() !== step.height) change.note = `${tok.name} is ${up()} ft up instead of ${step.height} ft.`;
     await save(combat, id, change); };
-  const now = nextMove(get(), squareOf(tok, scene), step.to, fly ? up() : null, fly ? step.height : null);
+  const now = nextMove(get(), squareOf(tok, scene), step.to, fly ? up() : dig ? isBelow(tok) : null, fly ? step.height : dig ? !!step.below : null);
   if (now === "next") return "next";
   if (now === "arrived") { await finish({ moved: { to: squareOf(tok, scene), cost: null } }); return "next"; }
   if (now === "ask") { await save(combat, id, { note: `${tok.name} started a ${WORD[step.do] ?? "Stride"} and isn't where it was going.` }); return "ask"; }
@@ -838,14 +929,24 @@ async function runStride(combat, id, i, step, tok) {
   const swum = step.do === "swim" ? { swum: true } : {};   /* an automatic success (a swim Speed, calm water) or a rolled one */
   /* someone it didn't know was there, on the way: the move ends before their space, as the rules say. The thinker is asked again without being told why. */
   const known = knownTo(combat, tok, sense(combat, tok, turns(combat).memory?.[tok.id] ?? {})), taken = new Set();
-  for (const t of scene.tokens) if (t.id !== tok.id && t.actor?.isOfType?.("creature") && !known.has(t.id) && !t.getFlag(ID, "escaped")) for (const [a, b] of footprintAt(squareOf(t, scene), sizeOf(t))) taken.add(`${a},${b}`);   /* an escaped token is gone, not an unknown creature */
-  const route = cutShort(step.route, sizeOf(tok), (a, b) => taken.has(`${a},${b}`));
+  for (const t of scene.tokens) if (t.id !== tok.id && t.actor?.isOfType?.("creature") && !known.has(t.id) && !t.getFlag(ID, "escaped") && !isBelow(t)) for (const [a, b] of footprintAt(squareOf(t, scene), sizeOf(t))) taken.add(`${a},${b}`);   /* an escaped token is gone, not an unknown creature; a burrowed one is under the ground */
+  /* a Burrow passes under everyone: only the square it comes up on can be taken (then it stays below, one square short) */
+  const endKeys = dig && !step.below ? new Set(footprintAt(step.to, sizeOf(tok)).map(([a, b]) => `${a},${b}`)) : null;
+  let route = cutShort(step.route, sizeOf(tok), (a, b) => taken.has(`${a},${b}`) && (!dig || endKeys?.has(`${a},${b}`)));
+  const surfaceTaken = dig && !step.below && footprintAt(step.to, sizeOf(tok)).some(([a, b]) => taken.has(`${a},${b}`));
+  if (dig && step.route.length === 1 && surfaceTaken) route = [];   /* coming up where it is, into an unseen creature's space: it can't, and stays below */
+  const below = dig ? (surfaceTaken ? true : !!step.below) : null;
   /* a Fly that stops short ends at the height it had reached there; a hover (Fly 0 ft) moves nothing and is recorded as flown */
   const height = fly ? heightWhenCut(up(), step.height, route.length - 1, route.length !== step.route.length) : null;
-  if (route.length < 2 && !(fly && height !== up())) { await finish({ started: true, ...swum, moved: { to: squareOf(tok, scene), cost: 0 } }); return "next"; }   /* a hover, treading water, or cut short at once */
+  if (route.length < 2 && !(fly && height !== up()) && !(dig && below !== isBelow(tok))) { await finish({ started: true, ...swum, moved: { to: squareOf(tok, scene), cost: 0 } }); return "next"; }   /* a hover, treading water, or cut short at once */
   const px = scene.grid.size, d = scene.dimensions, action = moveAction(tok, step.do), at = ([x, y]) => ({ x: d.sceneX + x * px, y: d.sceneY + y * px });
-  const waypoints = fly ? flyWaypoints(route, up(), height).map(w => ({ ...at(w.square), elevation: w.elev, action })) : route.slice(1).map(sq => ({ ...at(sq), action }));
+  /* a Burrow: down on its own square first, along the route at -5 ft, and up at the end; hidden before it goes down, shown again once it is up */
+  const deep = -BURROW_DEPTH, here0 = route[0] ?? squareOf(tok, scene);
+  const waypoints = fly ? flyWaypoints(route, up(), height).map(w => ({ ...at(w.square), elevation: w.elev, action }))
+    : dig ? [...(isBelow(tok) ? [] : [{ ...at(here0), elevation: deep, action }]), ...route.slice(1).map(sq => ({ ...at(sq), elevation: deep, action })), ...(below ? [] : [{ ...at(route.at(-1)), elevation: 0, action }])]
+    : route.slice(1).map(sq => ({ ...at(sq), action }));
   await record({ started: true, ...swum });
+  if (dig && !isBelow(tok)) await setBelow(tok, true);
   const charged = await watched(async () => {
     let got = null; const hook = Hooks.on("moveToken", (doc, mv) => { if (doc.id === tok.id) got = { cost: mv.passed?.cost ?? null, x: mv.destination?.x, y: mv.destination?.y, elevation: mv.destination?.elevation }; });
     try {
@@ -855,7 +956,9 @@ async function runStride(combat, id, i, step, tok) {
       return got;
     } finally { Hooks.off("moveToken", hook); }
   });
+  if (dig && !isBelow(tok)) await setBelow(tok, false);   /* up: seen again */
   await finish({ moved: { to: squareOf(tok, scene), cost: charged?.cost ?? null } });
+  if (dig && surfaceTaken) await addNote(combat, id, `${tok.name} couldn't come up at square ${step.to[0]}, ${step.to[1]}: something is there. It stays below ground.`);
   if (fly && tok.getFlag(ID, "climbing")) await setClimbing(tok, null).catch(e => console.warn(`${ID} | climbing`, e));   /* it flew off its tree: not holding on any more */
   return "next";
 }
@@ -1383,7 +1486,7 @@ async function comeOut(combat, id, tok, why, cardId = null) {
   const vis = visionerApi(); for (const t of left) await vis.setVisibility(t.id, tok.id, "observed");
   await addNote(combat, id, `${tok.name} was hidden from ${listWords(who.map(t => t.name))}, and ${why} makes it observed by them (hide it again in Visioner's manager to allow a quiet action).`);
 }
-const actWords = step => step.do === "stride" ? "its Stride" : step.do === "crawl" ? "its Crawl" : step.do === "stand" ? "standing up" : step.do === "drop-prone" ? "dropping prone" : step.do === "take-cover" ? "Taking Cover" : step.do === "interact" ? "its Interact" : step.do === "climb" ? "its Climb" : step.do === "release" ? "letting go of what it holds" : step.do === "seek" ? "its Seek" : step.do === "spell" ? `casting ${step.itemName}` : step.do === "ability" ? `using ${step.itemName}` : step.do === "strike" ? `its ${step.itemName}` : "acting";
+const actWords = step => step.do === "stride" ? "its Stride" : step.do === "crawl" ? "its Crawl" : step.do === "stand" ? "standing up" : step.do === "drop-prone" ? "dropping prone" : step.do === "take-cover" ? "Taking Cover" : step.do === "interact" ? "its Interact" : step.do === "climb" ? "its Climb" : step.do === "burrow" ? "burrowing" : step.do === "release" ? "letting go of what it holds" : step.do === "seek" ? "its Seek" : step.do === "spell" ? `casting ${step.itemName}` : step.do === "ability" ? `using ${step.itemName}` : step.do === "strike" ? `its ${step.itemName}` : "acting";
 function savedDegree(message, tokenId) {
   for (const v of Object.values(message?.flags?.[TOOLBELT]?.targetHelper?.saveVariants ?? {})) { const s = v?.saves?.[tokenId]; if (s?.success in DEGREE) return DEGREE[s.success]; }
   return null;
@@ -1517,7 +1620,7 @@ function coverage(scene, tok, aim, from) {
   /* a creature off the grid is tested where it really is, as Foundry tests a token against a placed Region (its containment test points), so the check
      and the area on the map agree; one on the grid by its squares, as before */
   const points = t => t.getContainmentTestPoints({ x: t.x, y: t.y, elevation: t.elevation, width: t.width, height: t.height, depth: t.depth, shape: t.shape }).map(p => [(p.x - X) / g, (p.y - Y) / g]);
-  const creatures = scene.tokens.contents.filter(t => t.actor?.isOfType?.("creature") && !t.actor.isDead).map(t => ({ id: t.id, square: t.id === tok.id ? from.square : squareOf(t, scene), size: sizeOf(t), ...spanOf(t, t.id === tok.id ? from.elev : null), ...(t.id !== tok.id && offGrid(t, scene) ? { points: points(t) } : {}) }));
+  const creatures = scene.tokens.contents.filter(t => t.actor?.isOfType?.("creature") && !t.actor.isDead && !isBelow(t)).map(t => ({ id: t.id, square: t.id === tok.id ? from.square : squareOf(t, scene), size: sizeOf(t), ...spanOf(t, t.id === tok.id ? from.elev : null), ...(t.id !== tok.id && offGrid(t, scene) ? { points: points(t) } : {}) }));
   const walls = solidWalls(scene), insideAt = ([x, y]) => doc.polygonTree.testPoint({ x: X + x * g, y: Y + y * g }, 0.75);
   /* height (0.13.0): a burst starts on the ground at its corner; a cone, line or emanation at the caster's height */
   const casterElev = Number(from.elev ?? tok.elevation) || 0, originElev = aim.type === "burst" ? 0 : aim.type === "emanation" ? spanOf(tok, casterElev) : casterElev;

@@ -214,19 +214,56 @@ export function treesBeside(at, size = 1, trees = []) {
     .sort((a, b) => (b.top - a.top) || (Math.abs(a.at[0] - x) + Math.abs(a.at[1] - y)) - (Math.abs(b.at[0] - x) + Math.abs(b.at[1] - y)));
 }
 
+/* ---------- burrowing (0.16.0) ---------- */
+/** How far below the surface a burrowing creature is, in feet: one depth only (Angel's reading; Player Core gives none). Its token sits at -BURROW_DEPTH. */
+export const BURROW_DEPTH = 5;
+/** Survey Sheet's ground class for crag (land.mjs's T.crag): bare rock. */
+const CRAG = 8;
+/** Which squares of a Survey Sheet encounter map are rock a burrower can't dig through (Rhea, 2026-11-08: "Crag and solid features"): crag ground,
+    outcrops, big boulders, standing stones, ruin walls and caves. Everything else, snow, mud and scree included, is soil. Burrow (Player Core, Actions
+    ID 2310): dirt, sand or similar loose material, never rock. read: the map read ({ grids: { terrain }, things: { outcrops: [{ at, r (ft) }],
+    rocks: [{ at, r, climb (big) }], stones: [{ at }], ruins: [{ from, to }], caves: [{ at }] } }). Returns a Uint8Array, 1 for rock, row by row. */
+export function rockSquares(read, cols, rows) {
+  const out = new Uint8Array(Math.max(0, cols * rows)), put = (i, j) => { if (i >= 0 && j >= 0 && i < cols && j < rows) out[j * cols + i] = 1; };
+  if (!read) return out;
+  const t = read.grids?.terrain ?? []; for (let k = 0; k < out.length; k++) if (t[k] === CRAG) out[k] = 1;
+  /* round things: every square whose centre lies within the radius (in feet) of the thing's centre, the square holding it always */
+  const round = (at, rft) => { if (!Array.isArray(at)) return; const r = Math.max(0, Number(rft) || 0) / FT, n = Math.ceil(r);
+    for (let b = -n; b <= n; b++) for (let a = -n; a <= n; a++) if ((!a && !b) || Math.hypot(a, b) <= r) put(at[0] + a, at[1] + b); };
+  const th = read.things ?? {};
+  for (const o of th.outcrops ?? []) round(o.at, o.r);
+  for (const r of th.rocks ?? []) if (r.climb) round(r.at, r.r);
+  for (const s of th.stones ?? []) round(s.at, 0);
+  for (const c of th.caves ?? []) round(c.at, 2 * FT);   /* a cave mouth sits in a rock face: the face around it is rock too */
+  for (const w of th.ruins ?? []) { if (!Array.isArray(w.from) || !Array.isArray(w.to)) continue;
+    const n = Math.max(1, Math.max(Math.abs(w.to[0] - w.from[0]), Math.abs(w.to[1] - w.from[1])) * 2);
+    for (let q = 0; q <= n; q++) put(Math.round(w.from[0] + (w.to[0] - w.from[0]) * q / n), Math.round(w.from[1] + (w.to[1] - w.from[1]) * q / n)); }
+  return out;
+}
+/** The world as a Burrow crosses it (Player Core Burrow, Actions ID 2310; burrow Speed, Rules ID 2348): only through soil (soil(i, j)), where surface
+    terrain costs nothing more (it digs under it); trunks, walls and rock stop it; no creature's space blocks it below ground. The square it comes up on
+    is checked for creatures by the glue. */
+export const burrowWorld = (w, soil) => ({ ...w, terrain: (i, j) => soil(i, j) ? 0 : null, creature: () => null, rock: true });
+/** What going down or coming up adds to a Burrow, in feet: 5 ft each way (Angel's reading: one depth, 5 ft below). from, to: below at the start and
+    the end; across: whether it moves across squares at all (a Burrow that starts and ends at the surface dips down and comes up). */
+export function burrowVertical(from, to, across) {
+  if (from !== to) return BURROW_DEPTH;
+  return !from && across ? 2 * BURROW_DEPTH : 0;
+}
+
 /** A route's failure in words, for the thinker and the card. Squares stay squares, which is what the thinker plans with. */
 export function routeWords(r, to, speed, kind = "stride") {
-  const sq = `[${to[0]}, ${to[1]}]`, word = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak", flee: "Flee", fly: "Fly", swim: "Swim", climb: "Climb" }[kind] ?? "Stride";
+  const sq = `[${to[0]}, ${to[1]}]`, word = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak", flee: "Flee", fly: "Fly", swim: "Swim", climb: "Climb", burrow: "Burrow" }[kind] ?? "Stride";
   switch (r.why) {
     case "same": return `it is already at ${sq}.`;
     case "off": return `${sq} is off the map.`;
     case "blocked": return `it can't stand at ${sq}: something solid is there.`;
-    case "terrain": return `${sq} is deep water: it would have to Swim (a "swim" step), which a ${word} isn't.`;
+    case "terrain": return kind === "burrow" ? `${sq}, or ground on the way there, is rock or deep water, and a Burrow goes only through soil.` : `${sq} is deep water: it would have to Swim (a "swim" step), which a ${word} isn't.`;
     case "occupied": return `another creature is at ${sq}.`;
     case "notNext": return `[${to[0]}, ${to[1]}] isn't next to it: a ${word} moves one square (5 ft).`;
     case "difficult": return kind === "crawl" ? `[${to[0]}, ${to[1]}] is difficult terrain, which would take 10 ft, and a Crawl moves only 5 ft.` : `[${to[0]}, ${to[1]}] is difficult terrain, and a Step can't go into difficult terrain.`;
     case "wall": return `a wall is between it and [${to[0]}, ${to[1]}].`;
-    case "far": { const what = kind === "fly" ? "fly Speed" : kind === "swim" ? "swimming distance" : "Speed"; if (kind === "swim" && r.cost == null) return `${sq} is farther than one Swim can go.`; return r.cost == null ? `${sq} is far beyond its ${what} of ${speed} ft.` : `getting to ${sq} takes ${r.cost} ft, more than its ${what} of ${speed} ft.`; }
+    case "far": { const what = kind === "fly" ? "fly Speed" : kind === "swim" ? "swimming distance" : kind === "burrow" ? "burrow Speed" : "Speed"; if (kind === "swim" && r.cost == null) return `${sq} is farther than one Swim can go.`; return r.cost == null ? `${sq} is far beyond its ${what} of ${speed} ft.` : `getting to ${sq} takes ${r.cost} ft, more than its ${what} of ${speed} ft.`; }
     default: return `there's no way to ${sq} from where it is.`;
   }
 }

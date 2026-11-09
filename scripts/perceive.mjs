@@ -25,8 +25,11 @@ export function lightAt({ sceneLevel = 1, sources = [] } = {}) {
   return sources.some(s => s.reach === "dim") || sceneLevel > .25 ? "dim" : "dark";
 }
 /** How one creature perceives another. o: { senses, blinded, dazzled, sees (no wall stops sight), heard (no wall stops sound), light, distance, invisible,
-    concealed (an effect on the target), stored (Visioner's state for this pair), avs (Visioner's automatic system is on), known (it has perceived this one before) }. */
+    concealed (an effect on the target), stored (Visioner's state for this pair), avs (Visioner's automatic system is on), known (it has perceived this one before),
+    below (0.16.0: the perceiver is burrowed under the ground: earth stands between it and everything, so no sight, hearing or Visioner state reaches it; only
+    tremorsense, and only of a creature on the same surface, not one up in the air: Rules ID 2413), aloft (the other creature is off the ground) }. */
 export function perceiveOne(o) {
+  if (o.below) o = { ...o, avs: false, stored: null, sees: false, heard: false, senses: o.aloft ? [] : (o.senses ?? []).filter(s => s.type === "tremorsense") };
   if (o.avs && o.stored) return { state: o.stored, by: "visioner" };
   const senses = o.senses ?? [], inRange = s => s.range == null || (o.distance ?? 0) <= s.range, has = t => senses.some(s => s.type === t);
   let state = o.known ? "undetected" : "unnoticed", by = o.known ? "memory" : "nothing";
@@ -102,12 +105,14 @@ export const strikeMods = labels => labels.map(l => Number(String(l).match(/[+-]
 /** The ground around a square, one string per row. # no footing, D greater difficult, d difficult, c cover worth having, . open. Tokens aren't marked, or an
     unseen one would show as a gap. */
 export const GROUND_KEY = "T blocked, by something it could Take Cover behind (a thick trunk), # blocked by anything else (a thin trunk is too thin to Take Cover behind), W deep calm water (a pond or lake: Swim, not Stride), R deep flowing water (a river or creek channel: Swim, with an Athletics check without a swim Speed), D other greater difficult terrain, d difficult, c some cover, . open. First row is [from], y grows downwards.";
-export function groundAround(model, [i, j], radius = 10, coverAt = .3, takeCoverAt = null, waterAt = null) {
+/** Added to the key for a creature with a burrow Speed (0.16.0): rock it can't burrow through. */
+export const ROCK_KEY = " r rock it can't burrow through (it can still walk there, and some of it is difficult: a Stride's check counts it).";
+export function groundAround(model, [i, j], radius = 10, coverAt = .3, takeCoverAt = null, waterAt = null, rockAt = null) {
   const x0 = Math.max(0, i - radius), y0 = Math.max(0, j - radius), x1 = Math.min(model.cols - 1, i + radius), y1 = Math.min(model.rows - 1, j + radius), rows = [];
   /* takeCoverAt(x, y): a wall or trunk in that square Take Cover can use (Rhea's rule B: thick trunks yes, thin ones no), marked T instead of #;
      waterAt(x, y): "calm" or "flowing" for a deep-water square (W, R), anything else greater difficult stays D */
-  for (let y = y0; y <= y1; y++) { let row = ""; for (let x = x0; x <= x1; x++) { const k = model.idx(x, y); row += model.blocked[k] ? (takeCoverAt?.(x, y) ? "T" : "#") : model.costs[k] === 2 ? ({ calm: "W", flowing: "R" }[waterAt?.(x, y)] ?? "D") : model.costs[k] === 1 ? "d" : model.cover[k] >= coverAt ? "c" : "."; } rows.push(row); }
-  return { from: [x0, y0], rows, key: GROUND_KEY };
+  for (let y = y0; y <= y1; y++) { let row = ""; for (let x = x0; x <= x1; x++) { const k = model.idx(x, y); row += model.blocked[k] ? (takeCoverAt?.(x, y) ? "T" : "#") : model.costs[k] === 2 ? ({ calm: "W", flowing: "R" }[waterAt?.(x, y)] ?? "D") : rockAt?.(x, y) ? "r" : model.costs[k] === 1 ? "d" : model.cover[k] >= coverAt ? "c" : "."; } rows.push(row); }
+  return { from: [x0, y0], rows, key: rockAt ? GROUND_KEY + ROCK_KEY : GROUND_KEY };
 }
 /** What a monster gets told. Everything about others goes through here, and only these fields: never a player's HP, AC, saves, level, slots or anything else off
     a sheet, GM secrets, hidden loot or chat. Text in it is data, never instruction. */

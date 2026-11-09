@@ -1,9 +1,9 @@
 /* A monster's turn as plain data: what a plan means, whether it's legal, and where a step stands. Pure: no Foundry globals.
    The glue gathers live values first. Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek, fleeing, Interact and Delay; other speeds come as step 2 goes on. */
-import { FT, climbDistance, distanceBetween, headingOf, heightCost, swimDistance } from "./move.mjs";
+import { BURROW_DEPTH, FT, burrowVertical, climbDistance, distanceBetween, headingOf, heightCost, swimDistance } from "./move.mjs";
 import { placeable } from "./area.mjs";
 /** What each step kind costs. An ability's cost is its own (0 for a free action); 1 here is only the fallback. */
-export const COSTS = { strike: 1, stride: 1, fly: 1, swim: 1, climb: 1, release: 0, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, flee: 1, interact: 1, delay: 0, none: 0 };
+export const COSTS = { strike: 1, stride: 1, fly: 1, swim: 1, climb: 1, burrow: 1, release: 0, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, flee: 1, interact: 1, delay: 0, none: 0 };
 /* Interact and Delay (0.12.0). Interact (https://2e.aonprd.com/Actions.aspx?ID=2296): 1 action, manipulate; the module can't know what a monster does
    with its hands, so it posts a card saying what, and the GM applies it, as for any ability the module can't run. Restrained bars manipulate actions;
    Grabbed asks a DC 5 flat check for them, lost on a failure. Delay (ID 2294): a free action when its turn begins, so it must be the plan's only step and
@@ -21,10 +21,10 @@ export const SAVE_MULT = [2, 1, 0.5, 0];
 export const FOLLOW_UPS = { grab: "grapple", "improved-grab": "grapple", knockdown: "trip", "improved-knockdown": "trip", push: "shove", "improved-push": "shove", pull: "reposition", "improved-pull": "reposition" };
 export const CHECK_WORD = { grapple: "Grapple", trip: "Trip", shove: "Shove", reposition: "Reposition" };
 const SIZES = ["tiny", "sm", "med", "lg", "huge", "grg"];
-const MOVES = ["stride", "step", "crawl", "sneak", "flee", "fly", "swim"], ONE_SQUARE = ["step", "crawl"];
+const MOVES = ["stride", "step", "crawl", "sneak", "flee", "fly", "swim", "burrow"], ONE_SQUARE = ["step", "crawl"];
 /** Steps that change only whether the monster is prone, and what they leave it. Rules: Prone (https://2e.aonprd.com/Conditions.aspx?ID=88). */
 export const POSTURES = { stand: false, "drop-prone": true };
-export const WORD = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak", flee: "Flee", fly: "Fly", swim: "Swim", climb: "Climb" };
+export const WORD = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak", flee: "Flee", fly: "Fly", swim: "Swim", climb: "Climb", burrow: "Burrow" };
 /** The Athletics DC to Swim in flowing water (a river or creek channel): Player Core's sample Swim tasks put flowing water at trained, and GM Core's
     simple DC for trained is 15. Calm water (a pond or lake) is an automatic critical success and needs no roll. */
 export const SWIM_DC = 15;
@@ -90,12 +90,14 @@ export const listWords = (xs = []) => xs.length < 2 ? xs.join("") : `${xs.slice(
     this round).
     Climb and Release (0.15.0): climbSpeed, treesAt(square) (the trees it could climb from there, `treesBeside`: [{ at, top }], tallest first), onTree
     ({ at, top }: the tree it is up now, from the token's flag, or null), holding ([{ id, name }]: what it holds in its hands, which a Climb needs free),
-    and each Strike's `dropped` (the weapon it is made with lies on the ground) and `weapon` (that weapon's item id). */
+    and each Strike's `dropped` (the weapon it is made with lies on the ground) and `weapon` (that weapon's item id).
+    Burrow (0.16.0): burrowSpeed, below (it is burrowed under the ground now), soilAt(square) (every square of its footprint there is soil it can dig
+    through), and route's kind "burrow" with { surface } (it comes up at the end, so the end square must be free of creatures it knows of). */
 export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
   let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, herePos = ctx.me?.pos ?? here, hereElev = Number(ctx.me?.elev) || 0, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, fled = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {}, shots = {};
   /* up a tree it climbed (it holds on there: no Stride, Step and the like until it climbs down), and what it holds in its hands */
-  let tree = hereElev > 0 && ctx.onTree ? ctx.onTree : null; const holding = new Map((ctx.holding ?? []).map(h => [h.id, h.name])), released = new Set();
+  let tree = hereElev > 0 && ctx.onTree ? ctx.onTree : null, below = !!ctx.below; if (below) hereElev = 0;   /* its token sits below 0; once up it stands at 0 */ const holding = new Map((ctx.holding ?? []).map(h => [h.id, h.name])), released = new Set();
   const upTree = word => `it is ${Math.round(hereElev)} ft up the tree at [${tree.at[0]}, ${tree.at[1]}], so it can't ${word} there: a Climb (a "climb" step) with "height": 0 gets it down${ctx.flySpeed > 0 ? `, or it can Fly off` : ""}.`;
   /* distances from where each creature really stands (pos, fractional off the grid), as PF2e and the packet measure them; after a move, from the square it moved to */
   const distanceTo = (t, reach) => { const p = t.pos ?? t.square; return herePos && p ? distanceBetween({ x: herePos[0], y: herePos[1], size: ctx.me.span ?? ctx.me.size ?? 1, elev: hereElev, depth: ctx.me.depth }, { x: p[0], y: p[1], size: t.pos ? t.span ?? t.size ?? 1 : t.size ?? 1, elev: t.elev, depth: t.depth }, { reach }) : t.distance; };
@@ -104,6 +106,8 @@ export function checkPlan(plan, ctx) {
     if (!(step.do in COSTS)) return { ok: false, reason: `${at}: I can't do "${step.do}" yet.` };
     if (sought) return { ok: false, reason: `${at}: a Seek has to be the plan's last step. You are asked again after it, with what it found.` };
     if (fled) return { ok: false, reason: `${at}: a flee has to be the plan's last step: at the edge the GM decides, and you are asked again if the map is extended.` };
+    /* burrowed (0.16.0): earth stands between it and everything (no line of effect, Rules ID 2382), so it can only Burrow (on, or up), Delay or do nothing */
+    if (below && !["burrow", "delay", "none"].includes(step.do)) return { ok: false, reason: `${at}: it is burrowed under the ground, where it can't reach, see or affect anything above. A Burrow with "up": true brings it to the surface first (1 action).` };
     if (step.do === "spell") {
       if (ctx.cantAct) return { ok: false, reason: `${at}: ${ctx.cantAct}` };
       const sp = (ctx.spells ?? []).find(s => s.id === step.item);
@@ -288,6 +292,31 @@ export function checkPlan(plan, ctx) {
       steps.push({ do: "swim", from: [...here], to: [...to], route, cost, water: flowing ? "flowing" : "calm", ...(swimmer ? { swimSpeed: ctx.swimSpeed } : {}), ...(!swimmer && flowing ? { dc: SWIM_DC } : {}), ...(endW ? {} : { out: true }) });
       if (route.length > 1) { routes.push(route); moved = true; took = tookProne = false; }
       here = [...to]; herePos = here; last = { do: "swim" }; continue;
+    }
+    if (step.do === "burrow") {
+      /* Burrow (Player Core, Actions ID 2310; burrow Speed, Rules ID 2348): 1 action, move, needs a burrow Speed; through dirt, sand or loose ground,
+         never rock (Rhea, 2026-11-08: crag and solid features are rock; on maps the module can't read, Angel judges the soil). One depth, 5 ft down:
+         going down or coming up adds 5 ft (Angel's reading), and it leaves no tunnel. "up": true ends at the surface on a square free of creatures. */
+      if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
+      if (!(ctx.burrowSpeed > 0)) return { ok: false, reason: `${at}: it has no burrow Speed.` };
+      if (tree) return { ok: false, reason: `${at}: ${upTree("Burrow")}` };
+      if (hereElev > 0) return { ok: false, reason: `${at}: it is ${Math.round(hereElev)} ft up${ctx.flySpeed > 0 ? `, so it has to land first (a "fly" step with "height": 0)` : ""}; it can only burrow from the ground.` };
+      if (prone) return { ok: false, reason: `${at}: it is prone, so it has to Stand first (a "stand" step, 1 action) before it can Burrow.` };
+      if (!here || !ctx.route || !ctx.soilAt) return { ok: false, reason: `${at}: I can't work out moves here.` };
+      if (!below && ctx.waterAt?.(here)) return { ok: false, reason: `${at}: it is in deep water at [${here[0]}, ${here[1]}]; it can only burrow into soil.` };
+      if (step.up != null && typeof step.up !== "boolean") return { ok: false, reason: `${at}: "up" is true (come up to the surface at the end) or left out (stay below).` };
+      const to = step.to ?? here, up = step.up === true, endBelow = !up, across = !same(here, to);
+      if (!Array.isArray(to)) return { ok: false, reason: `${at}: a Burrow needs "to", the square to end on (its own square to go down or come up there).` };
+      if (!across && below === endBelow) return { ok: false, reason: below ? `${at}: it is already below ground at [${here[0]}, ${here[1]}]: give "to" another square, or "up": true to come up.` : `${at}: a Burrow on its own square goes down, so leave out "up" (or name another square).` };
+      if (!below && !ctx.soilAt(here)) return { ok: false, reason: `${at}: the ground at [${here[0]}, ${here[1]}] is rock (or not soil it can dig through), so it can't burrow down there.` };
+      let route = [[...here]], cost = 0;
+      if (across) { const way = ctx.route(here, to, routes, { kind: "burrow", surface: up }); if (!way.ok) return { ok: false, reason: `${at}: ${way.reason}` }; route = way.route; cost = way.cost; }
+      else if (up && ctx.occupiedAt?.(to)) return { ok: false, reason: `${at}: another creature is at [${to[0]}, ${to[1]}], so it can't come up there.` };
+      const total = cost + burrowVertical(below, endBelow, across);
+      if (total > ctx.burrowSpeed) return { ok: false, reason: `${at}: burrowing to [${to[0]}, ${to[1]}]${up ? " and coming up" : ""} takes ${total} ft (${cost} ft across${total > cost ? `, ${total - cost} ft going down or up` : ""}), more than its burrow Speed of ${ctx.burrowSpeed} ft.` };
+      steps.push({ do: "burrow", from: [...here], to: [...to], route, cost: total, fromBelow: below, below: endBelow });
+      if (route.length > 1) routes.push(route);
+      here = [...to]; herePos = here; below = endBelow; moved = true; took = tookProne = false; last = { do: "burrow" }; continue;
     }
     if (MOVES.includes(step.do)) {
       const word = WORD[step.do], small = ONE_SQUARE.includes(step.do);
@@ -575,6 +604,7 @@ export function doneStep(step, rec = {}) {
   if (step.do === "sneak") { const got = rec.moved?.to; return { do: "sneak", to: step.to, result: `${!got ? "unknown" : same(got, step.to) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]`}${rec.applied ? " (whether it stayed unseen is secret)" : rec.gm ? "; card posted for the GM to apply" : ""}` }; }
   if (step.do === "swim") { const got = rec.moved?.to; return { do: "swim", to: step.to, result: rec.swim && rec.swim.degree < 2 ? `no progress (it failed its Athletics check to Swim${rec.swim.degree === 0 ? " badly" : ""})` : !got && !rec.swum ? "unknown" : !got || same(got, step.to) ? (same(step.from ?? step.to, step.to) ? "trod water" : "arrived") : `stopped at [${got[0]}, ${got[1]}]` }; }
   if (step.do === "fly") { const got = rec.moved?.to, at = rec.moved?.elev; return { do: "fly", to: step.to, height: step.height, result: !got ? "unknown" : same(got, step.to) && (at == null || at === step.height) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]${at != null ? `, ${at} ft up` : ""}` }; }
+  if (step.do === "burrow") { const got = rec.moved?.to, b = rec.moved?.below; return { do: "burrow", to: step.to, ...(step.below ? {} : { up: true }), result: !got ? "unknown" : same(got, step.to) && (b == null || b === step.below) ? (step.below ? "arrived, below ground" : "arrived, at the surface") : `stopped at [${got[0]}, ${got[1]}]${b == null ? "" : b ? ", below ground" : ", at the surface"}` }; }
   if (isMove(step)) { const got = rec.moved?.to; return { do: step.do, to: step.to, result: !got ? "unknown" : same(got, step.to) ? (step.do === "flee" ? "reached the map's edge" : "arrived") : `stopped at [${got[0]}, ${got[1]}]` }; }
   if (step.do in POSTURES) return { do: step.do, result: rec.changed || rec.stood ? (step.do === "stand" ? "stood" : "dropped") : "unknown" };
   if (step.do === "take-cover") return { do: "take-cover", result: rec.covered ? "took cover" : "unknown" };
@@ -685,6 +715,8 @@ export function describeStep(s) {
   if (s.do === "fly") return flyWords(s);
   if (s.do === "swim") { const across = s.from && !same(s.from, s.to), way = across ? headingOf(s.from, s.to) : "", how = s.swimSpeed ? "" : s.dc ? ` (flowing water: an Athletics check, DC ${s.dc}; on a failure it makes no progress)` : " (calm water: an automatic critical success)";
     return across ? `Swims ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}${s.out ? ", climbing out onto the bank" : ""}${how}.` : `Treads water where it is (Swim 0 ft, so it doesn't sink)${how}.`; }
+  if (s.do === "burrow") { const across = s.from && !same(s.from, s.to), way = across ? headingOf(s.from, s.to) : "";
+    return `Burrows ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}${across ? `, to square ${s.to[0]}, ${s.to[1]}` : ""}${s.fromBelow && !s.below ? ", coming up to the surface" : !s.fromBelow && s.below ? (across ? ", under the ground (hidden from everyone)" : ", down under the ground where it stands (hidden from everyone)") : s.below ? ", under the ground" : ", dipping under and coming up"}.`; }
   if (isMove(s)) { const way = s.from ? headingOf(s.from, s.to) : ""; return `${WORD[s.do]}s ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}${s.do === "sneak" ? " (a secret Stealth check; Visioner applies the result)" : s.do === "flee" ? ` at the ${listWords(s.sides ?? [])} edge of the map: you decide whether it gets away or the map grows` : ""}.`; }
   if (s.do === "hide") return `Hides (a secret Stealth check against each creature it has cover or concealment from; Visioner applies the result).`;
   if (s.do === "seek") return s.aim?.type === "burst" ? `Seeks in a ${s.aim.size}-foot burst from the corner [${s.aim.corner[0]}, ${s.aim.corner[1]}] (a secret Perception check; Visioner applies the result).` : `Seeks in a ${s.aim?.size ?? SEEK.cone}-foot cone toward square ${s.aim?.toward?.[0]}, ${s.aim?.toward?.[1]} (a secret Perception check; Visioner applies the result).`;
@@ -827,6 +859,7 @@ export function endsCover(steps = [], log = {}, upto = steps.length, from = 0) {
     /* up or down out of its space: a Climb that moved or fell, a Fly that changed height on its own square (0.15.0) */
     if (s?.do === "climb" && ((rec.moved && rec.moved.elev !== s.fromHeight) || rec.fell)) return true;
     if (s?.do === "fly" && rec.moved && rec.moved.elev != null && rec.moved.elev !== s.fromHeight) return true;
+    if (s?.do === "burrow" && rec.moved && rec.moved.below != null && rec.moved.below !== !!s.fromBelow) return true;   /* down into the ground or up out of it (0.16.0) */
   }
   return false;
 }
