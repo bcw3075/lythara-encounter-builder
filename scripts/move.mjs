@@ -258,8 +258,12 @@ export function wallSquares(walls, cols, rows) {
   }
   return out;
 }
-/** Whether the straight line between a creature's centres on two squares (top-left squares, `size` squares across) crosses any of the walls. */
-export const crossesWalls = (walls, a, b, size = 1) => walls.some(w => segsCross(a[0] + size / 2, a[1] + size / 2, b[0] + size / 2, b[1] + size / 2, w));
+/** Whether a creature (`size` squares across) moving between two squares (top-left squares) crosses any of the walls: the line between its centres,
+    nudged off the grid lines (a Large creature's centre sits on one, where a line only touching a wall counted on one side; 0.17.0 review), or a wall
+    through the inside of its footprint where it ends (a big creature straddling a wall that runs between its squares). */
+export const crossesWalls = (walls, a, b, size = 1) => { const e = 1e-3, x0 = b[0] + .1, y0 = b[1] + .1, x1 = b[0] + size - .1, y1 = b[1] + size - .1;
+  return walls.some(w => segsCross(a[0] + size / 2 + e, a[1] + size / 2 + 2 * e, b[0] + size / 2 + e, b[1] + size / 2 + 2 * e, w)
+    || (size > 1 && [[x0, y0, x1, y0], [x1, y0, x1, y1], [x1, y1, x0, y1], [x0, y1, x0, y0]].some(([p, q, r, t]) => segsCross(p, q, r, t, w)) ) || (size > 1 && w.ax > x0 && w.ax < x1 && w.ay > y0 && w.ay < y1)); };
 /** The world as a Burrow crosses it for a creature that glides through rock and earth (Earth Glide, Rock Tunneler, Unstoppable Burrow): every square
     but deep water and squares something that isn't earthen passes through (a trunk, a door, a wall that isn't stone), and only walls that aren't earthen
     stand in its way; creatures don't (it is below them). `hard(i, j)` and `wallBetween(a, b)` come from the glue, which knows what each wall is made of.

@@ -306,7 +306,7 @@ export function checkPlan(plan, ctx) {
       if (hereElev > 0) return { ok: false, reason: `${at}: it is ${Math.round(hereElev)} ft up${ctx.flySpeed > 0 ? `, so it has to land first (a "fly" step with "height": 0)` : ""}; it can only burrow from the ground.` };
       if (prone) return { ok: false, reason: `${at}: it is prone, so it has to Stand first (a "stand" step, 1 action) before it can Burrow.` };
       if (!here || !ctx.route || !ctx.soilAt) return { ok: false, reason: `${at}: I can't work out moves here.` };
-      if (!below && ctx.waterAt?.(here)) return { ok: false, reason: `${at}: it is in deep water at [${here[0]}, ${here[1]}]; it can only burrow into soil.` };
+      if (!below && ctx.waterAt?.(here)) return { ok: false, reason: `${at}: it is in deep water at [${here[0]}, ${here[1]}]; it can only burrow into ${ctx.glides ? "earth or rock" : "soil"}.` };
       if (step.up != null && typeof step.up !== "boolean") return { ok: false, reason: `${at}: "up" is true (come up to the surface at the end) or left out (stay below).` };
       const to = step.to ?? here, up = step.up === true, endBelow = !up, across = !same(here, to);
       if (!Array.isArray(to)) return { ok: false, reason: `${at}: a Burrow needs "to", the square to end on (its own square to go down or come up there).` };

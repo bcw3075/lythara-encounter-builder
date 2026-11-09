@@ -275,7 +275,7 @@ async function buildPacket(combat, tok, turn = {}) {
      concealment and who it has standard cover from; never whether a secret roll worked */
   const tried = t.stealth?.[tok.id] ?? null;
   you.stealth = { lastTried: tried ? `${tried.did === "sneak" ? "Sneaked" : "Hid"} in round ${tried.round}, and has only Hidden, Sneaked or Stepped since` : null, light: lightOn(tok.object.center, scene), concealed: !!a.hasCondition?.("concealed"), standardCoverFrom: coverList };   /* the real list: Taking Cover itself allows a Hide */
-  const packet = packetOf({ you, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], ground: groundAround(model, square, GROUND_RADIUS, undefined, takeCoverSquares(scene), water, soil ? (x, y) => !soil(x, y) && !model.blocked[model.idx(x, y)] && !water(x, y) : null),
+  const packet = packetOf({ you, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], ground: groundAround(model, square, GROUND_RADIUS, undefined, takeCoverSquares(scene), water, soil && !glides ? (x, y) => !soil(x, y) && !model.blocked[model.idx(x, y)] && !water(x, y) : null),
     allies: allies.map(x => ({ label: labels[x.id], name: x.name, square: squareOf(x, scene), ...(heightUp(x) ? { height: heightUp(x) } : {}), ...(isBelow(x) ? { below: true } : {}), healthWord: wordsFor(x.actor), conditions: visibleConditions(conditionsOn(x.actor)) })),
     others: others.map(o => ({ id: o.id, state: o.state, label: labels[o.id], square: o.square, height: heightUp(o.token), offGrid: offGrid(o.token, scene), size: o.token.actor.size, distance: o.distance, gear: gearOf(o.token.actor), conditions: visibleConditions(conditionsOn(o.token.actor)), healthWord: wordsFor(o.token.actor), cover: cover?.getAutoCoverState?.(tok.object, o.token.object) ?? "none" })) });
   return { packet, labels: labelsOf(others.map(o => ({ id: o.id, state: o.state, label: labels[o.id] }))), fresh, others };
@@ -428,8 +428,9 @@ export function onTokenFlag(tok, change) {
   /* Auto ticked while its plan waits on the card (ready: before its first step, or between steps for Next step): it runs as if Auto had been on from the
      start (Rhea, 2026-11-09), waiting out the game's pause like Auto's own start. A held, stopped or running turn is left as it is. */
   if (foundry.utils.getProperty(change, `flags.${ID}.auto`) === true) for (const c of game.combats.filter(c => c.started && c.combatant?.tokenId === tok.id)) {
-    const r = currentRequest(c);
-    if (r?.state === "ready" && !r.hold && r.tokenId === tok.id && !running.has(r.id)) (async () => { if (!(await pausedAuto(c, r.id, tok))) await doIt(c, r.id); })().catch(e => console.error(`${ID} | turn`, e));
+    const r = currentRequest(c), still = n => n?.state === "ready" && !n.hold && !n.gmWait && (n.pos ?? 0) === (r.pos ?? 0) && !!tok.getFlag(ID, "auto");
+    /* a pause the GM has to apply an ability's effects in waits for her Next step, Auto or not; read again after the game's pause (0.17.0 review) */
+    if (still(r) && r.tokenId === tok.id && !running.has(r.id)) (async () => { if (!(await pausedAuto(c, r.id, tok)) && still(request(c, r.id))) await doIt(c, r.id); })().catch(e => console.error(`${ID} | turn`, e));
   }
 }
 /** The runner has just loaded: pick up whatever happened while it was away. A turn left "running" stopped when the page went, so it waits for Do it,
@@ -566,8 +567,10 @@ const wallsJudged = scene => !!scene.getFlag(ID, "walls") || stoneRegions(scene)
 function earthenWall(scene) {
   const regs = stoneRegions(scene), q = scene.grid.size / 4;
   return w => { if (w.door) return false; const enc = w.flags?.[SURVEY]?.enc; if (enc) return enc === "feature"; if (!regs.length) return false;
-    const mx = (w.c[0] + w.c[2]) / 2, my = (w.c[1] + w.c[3]) / 2;
-    return [[0, 0], [q, 0], [-q, 0], [0, q], [0, -q]].some(([dx, dy]) => regs.some(r => r.testPoint({ x: mx + dx, y: my + dy, elevation: 0 }))); };
+    /* points along it (a long wall can run partly through a stone area: stone when most of it is, 0.17.0 review), each with a quarter square either side */
+    const pts = [.1, .3, .5, .7, .9].map(t => [w.c[0] + (w.c[2] - w.c[0]) * t, w.c[1] + (w.c[3] - w.c[1]) * t]);
+    const inside = ([x, y]) => [[0, 0], [q, 0], [-q, 0], [0, q], [0, -q]].some(([dx, dy]) => regs.some(r => r.testPoint({ x: x + dx, y: y + dy, elevation: 0 })));
+    return pts.filter(inside).length >= 3; };
 }
 /** What stops a glider on this scene: every wall that stops movement and isn't earthen (an open door doesn't stop anything), as the squares those walls
     pass through (`hard`) and the test between two squares (`wallBetween`, for a creature `size` squares across). */
@@ -577,6 +580,21 @@ function glideBounds(scene, model) {
     .map(w => ({ ax: (w.c[0] - d.sceneX) / px, ay: (w.c[1] - d.sceneY) / px, bx: (w.c[2] - d.sceneX) / px, by: (w.c[3] - d.sceneY) / px }));
   const hard = wallSquares(walls, model.cols, model.rows);
   return { hard: (i, j) => model.inMap(i, j) && !!hard[model.idx(i, j)], wallBetween: (a, b, size = 1) => crossesWalls(walls, a, b, size) };
+}
+/** The open floor of a scene, for where a glider may come up (0.17.0): every square a creature could walk to from where creatures stand on the surface now
+    (not below, not escaped), round every wall that stops movement except doors (a door is a way through), over nothing solid and no deep water. On a
+    hand-built map the solid rock outside the rooms has no walls through it, so "nothing solid there" alone would let a glider come up inside the rock.
+    Returns (i, j) → boolean. */
+function openFloor(scene, model, isDeep) {
+  const d = scene.dimensions, px = scene.grid.size;
+  const walls = scene.walls.filter(w => w.move !== CONST.WALL_MOVEMENT_TYPES.NONE && !w.door)
+    .map(w => ({ ax: (w.c[0] - d.sceneX) / px, ay: (w.c[1] - d.sceneY) / px, bx: (w.c[2] - d.sceneX) / px, by: (w.c[3] - d.sceneY) / px }));
+  const ok = (i, j) => model.inMap(i, j) && !model.blocked[model.idx(i, j)] && !isDeep(i, j), seen = new Set(), todo = [];
+  for (const t of scene.tokens) { if (isBelow(t) || t.getFlag(ID, "escaped") || !t.actor?.isOfType?.("creature")) continue;
+    for (const [i, j] of footprintAt(squareOf(t, scene), sizeOf(t))) if (ok(i, j) && !seen.has(`${i},${j}`)) { seen.add(`${i},${j}`); todo.push([i, j]); } }
+  while (todo.length) { const [i, j] = todo.pop();
+    for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const x = i + a, y = j + b, k = `${x},${y}`; if (seen.has(k) || !ok(x, y) || crossesWalls(walls, [i, j], [x, y])) continue; seen.add(k); todo.push([x, y]); } }
+  return (i, j) => seen.has(`${i},${j}`);
 }
 /** Into the ground or out of it: the token's flag and its visibility. Underground it is hidden from everyone (Rhea: "unseen while below"), as the GM's own
     hidden toggle does it; coming up it shows again, unless the GM had hidden it before it went down. */
@@ -697,7 +715,7 @@ async function mover(combat, tok, speed, known = null, flySpeed = 0, swimSpeed =
     const fly = kind === "fly", swim = kind === "swim", dig = kind === "burrow", odd = diagonalsIn(prefix) % 2 === 1, budget = fly ? flySpeed : swim ? Math.max(swimSpeed, 20) : dig ? burrowSpeed : speed;
     if (dig && surface && occupied(to)) return { ok: false, reason: `another creature is at [${to[0]}, ${to[1]}], so it can't come up there.` };   /* below ground no one is in its way; where it comes up, anyone it knows of is */
     const r = step ? findStep({ from, to, size, odd }, world) : findRoute({ from, to, size, budget, odd }, fly ? flyWorld(world) : swim ? swimWorld(world, isDeep) : dig ? (glide ? glideWorld(world, isDeep, glide.hard, (a, b) => glide.wallBetween(a, b, size)) : burrowWorld(world, soil)) : world);
-    if (!r.ok && (r.why !== "far" || !r.route)) return { ok: false, reason: routeWords(r, to, budget, kind) };   /* "far" with no route: past where the search looked */
+    if (!r.ok && (r.why !== "far" || !r.route)) return { ok: false, reason: dig && glide && r.why === "terrain" ? `[${to[0]}, ${to[1]}], or a square on the way there, is deep water, which it can't glide through.` : dig && glide && r.why === "blocked" ? `something it can't glide through (a tree, a door or a wall that isn't stone) is at [${to[0]}, ${to[1]}].` : routeWords(r, to, budget, kind) };   /* "far" with no route: past where the search looked */
     /* a Swim is priced by Foundry with its swim action, which Survey Sheet's regions don't slow; a bank square it climbs out onto keeps its own terrain cost */
     const bank = swim ? Math.max(0, ...footprintAt(to, size).filter(([i, j]) => !isDeep(i, j)).map(([i, j]) => model.costs[model.idx(i, j)] ?? 0)) * FT : 0;
     return { ok: true, route: r.route, cost: measure([...prefix, ...r.route.slice(1)], prefix.length, kind) - measure(prefix) + bank };   /* checkPlan compares the cost with Speed */
@@ -707,7 +725,8 @@ async function mover(combat, tok, speed, known = null, flySpeed = 0, swimSpeed =
   route.trees = treesOf(read);   /* for a Climb: the trees beside a square */
   route.soilAt = sq => footprintAt(sq, size).every(([i, j]) => soil(i, j)); route.occupiedAt = occupied;   /* for a Burrow (0.16.0) */
   /* where a Burrow may come up: open floor, nothing solid and no deep water under its footprint (a glider may be below rock, but can't come up in it) */
-  route.surfaceAt = sq => footprintAt(sq, size).every(([i, j]) => model.inMap(i, j) && !model.blocked[model.idx(i, j)] && !isDeep(i, j));
+  const floor = glide ? openFloor(scene, model, isDeep) : null;   /* a glider can be anywhere below, so where it comes up is checked against the open floor */
+  route.surfaceAt = sq => footprintAt(sq, size).every(([i, j]) => model.inMap(i, j) && !model.blocked[model.idx(i, j)] && !isDeep(i, j) && (!floor || floor(i, j)));
   return route;
 }
 /** Whether a square of this scene is deep water: Survey Sheet's greater-difficult region named "Deep water" (other greater difficult terrain isn't).
@@ -757,7 +776,7 @@ async function judgeNow(combat, requestId) {
   if (!c.ok) return reject(combat, requestId, c.reason);
   await save(combat, requestId, { state: "ready", plan: whole(clean.plan), steps: c.steps, verdict: null });
   const tok = combat.scene.tokens.get(r.tokenId);
-  if (tok?.getFlag(ID, "auto")) (async () => { if (!(await pausedAuto(combat, requestId, tok))) await doIt(combat, requestId); })().catch(e => console.error(e));   /* Auto's own start waits out the game's pause */
+  if (tok?.getFlag(ID, "auto")) (async () => { if (!(await pausedAuto(combat, requestId, tok)) && request(combat, requestId)?.state === "ready" && !request(combat, requestId).hold) await doIt(combat, requestId); })().catch(e => console.error(e));   /* Auto's own start waits out the game's pause; read again after it (0.17.0 review) */
   return { state: "ready", steps: c.steps };
 }
 /* The reason goes back to the thinker once, as a retry event. A second refusal goes to the GM. */
@@ -1894,7 +1913,7 @@ async function runTurn(combat, requestId) {
   const r = request(combat, requestId); if (!RESUMABLE.includes(r?.state)) throw new Error("That turn isn't ready.");
   if (!await ensureScene(combat)) return save(combat, requestId, { state: "stopped", go: false, note: cantOpen() });
   /* pressing Do it means go, whatever was held. A note about why it stopped goes; one from an earlier step (a PC at 0 HP) stays with the turn. */
-  await save(combat, requestId, { state: "running", go: false, hold: false, ...(r.state === "held" || r.state === "stopped" ? { note: null } : {}) });
+  await save(combat, requestId, { state: "running", go: false, hold: false, gmWait: false, ...(r.state === "held" || r.state === "stopped" ? { note: null } : {}) });
   const tok = combat.scene.tokens.get(r.tokenId);
   await dropInstantAreas(combat, { id: requestId, pos: r.pos ?? 0 }).catch(e => console.warn(`${ID} | areas`, e));   /* an instant area the GM resolved from its card */
   await settleCover(combat, requestId, r.pos ?? 0, tok);   /* a reload between a step and ending its Take Cover */
@@ -1969,7 +1988,7 @@ async function runTurn(combat, requestId) {
       /* an ability whose effects are the GM's to apply: the turn waits for Next step, Auto or not (the look before the next action then sees what changed) */
       if (result === "gm" && request(combat, requestId).state !== "manual") { const end = i + 1 >= r.steps.length;
         if (!end) await addNote(combat, requestId, "Then press Next step.");
-        return save(combat, requestId, { pos: i + 1, coverSettled: i + 1, state: end ? "done" : "ready", ...(end ? { gmEnded: true } : {}) }); }
+        return save(combat, requestId, { pos: i + 1, coverSettled: i + 1, state: end ? "done" : "ready", ...(end ? { gmEnded: true } : { gmWait: true }) }); }   /* gmWait: ticking Auto doesn't run past it (0.17.0 review) */
     }
     if (request(combat, requestId).state === "manual") return;
     if (i + 1 >= r.steps.length) { await save(combat, requestId, { pos: i + 1, coverSettled: i + 1, state: "done" }); return endAfter(combat, requestId); }
