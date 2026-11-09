@@ -21,8 +21,8 @@ import { CLIMB_DC, climbResult, nextClimb } from "../../scripts/turn.mjs";
 import { endsCover as endsCover2 } from "../../scripts/turn.mjs";
 import { climbDistance, treeTop, treesBeside } from "../../scripts/move.mjs";
 import { verticalGap } from "../../scripts/area.mjs";
-import { BURROW_DEPTH, burrowVertical, burrowWorld, rockSquares } from "../../scripts/move.mjs";
-import { cleanGround } from "../../scripts/brain.mjs";
+import { BURROW_DEPTH, burrowVertical, burrowWorld, crossesWalls, glideWorld, rockSquares, wallSquares } from "../../scripts/move.mjs";
+import { cleanGround, cleanWalls } from "../../scripts/brain.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
 
@@ -211,7 +211,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   /* the campaign words live in the git-ignored .private-words at the repo root (master copy in a private project doc), never here */
   const wordsFile = path.resolve(HERE, "../../.private-words"), words = fs.existsSync(wordsFile) ? fs.readFileSync(wordsFile, "utf8").split("\n").map(l => l.split("#")[0].trim()).filter(Boolean) : null;
   check("prompt names no campaign", words ? !words.some(w => new RegExp(`(?<![A-Za-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9])`, "i").test(h.prompt)) : (console.log("  (no .private-words: campaign-word check skipped)"), true));
-  check("prompt explains asking again", h.promptVersion === 18 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 19 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -1174,6 +1174,24 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("burrow: bad ground refused", !cleanGround({ soil: [[1, 2, 3]] }).ok && !cleanGround({ soil: "some" }).ok && !cleanGround([]).ok && !cleanGround({ soil: Array(25).fill([0, 0, 1, 1]) }).ok);
   check("burrow: cleanPlan keeps ground", cleanPlan({ steps: [{ do: "none" }], ground: { soil: [[0, 0, 3, 3]] } }).plan.ground.soil.length === 1 && !cleanPlan({ steps: [{ do: "none" }], ground: { soil: 3 } }).ok);
   check("burrow: the prompt", /"do": "burrow"/.test(promptText()) && /judgeGround/.test(promptText()) && /"soil": "none"/.test(promptText()));
+  /* Earth Glide (0.17.0): through rock, stopped by walls that aren't earthen and squares they cross, deep water; where it comes up */
+  const ws = wallSquares([{ ax: 4.5, ay: 0, bx: 4.5, by: 3 }], 10, 10); check("glide: a wall's squares", ws[0 * 10 + 4] && ws[2 * 10 + 4] && !ws[4 * 10 + 4] && !ws[0 * 10 + 3] && !ws[0 * 10 + 5]);
+  check("glide: a wall along a square edge marks no square", wallSquares([{ ax: 5, ay: 0, bx: 5, by: 3 }], 10, 10).every(v => !v));
+  check("glide: line across walls", crossesWalls([{ ax: 5, ay: 0, bx: 5, by: 3 }], [4, 1], [5, 1]) && !crossesWalls([{ ax: 5, ay: 0, bx: 5, by: 3 }], [4, 5], [5, 5]) && crossesWalls([{ ax: 5, ay: 0, bx: 5, by: 3 }], [3, 1], [4, 1], 2));
+  const edge = [{ ax: 5, ay: 0, bx: 5, by: 3 }], deepAt = (i, j) => i === 7 && j === 7;
+  const GW = (walls = edge) => glideWorld({ cols: 10, rows: 10, terrain: () => 1, blocked: () => true, creature: () => "enemy", wall: () => true }, deepAt, (i, j) => i === 2 && j === 2, (a, b) => crossesWalls(walls, a, b));
+  r = findRoute({ from: [3, 1], to: [5, 1], budget: 60 }, GW()); check("glide: through rock (a blocked square in the map isn't in its way), round a wall that isn't stone", r.ok && r.route.every(([i, j]) => !(i === 2 && j === 2)) && r.route.some(([, j]) => j >= 3), JSON.stringify(r));
+  r = findRoute({ from: [3, 1], to: [5, 1], budget: 60 }, GW([])); check("glide: straight through when the wall is stone", r.ok && r.cost === 10, JSON.stringify(r));
+  r = findRoute({ from: [6, 6], to: [7, 7], budget: 60 }, GW([])); check("glide: never into deep water", !r.ok && r.why === "terrain");
+  r = findRoute({ from: [1, 1], to: [2, 2], budget: 60 }, GW([])); check("glide: never into a square something wooden crosses", !r.ok && r.why === "blocked");
+  r = findRoute({ from: [0, 5], to: [3, 5], budget: 60 }, GW([])); check("glide: under creatures at plain cost", r.ok && r.cost === 15);
+  const gctx = { ...bctx, glides: true, soilAt: () => true, surfaceAt: sq => !(sq[0] === 6 && sq[1] === 1) };
+  q = checkPlan({ steps: [{ do: "burrow", to: [6, 1], up: true }] }, { ...gctx, below: true }); check("glide: can't come up inside rock", !q.ok && /can't come up at \[6, 1\]: that is solid rock/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "burrow", to: [5, 1], up: true }] }, { ...gctx, below: true, me: { square: [5, 1], size: 1, elev: 0 } }); check("glide: comes up on open floor where it is", q.ok && q.steps[0].below === false, q.reason);
+  q = checkPlan({ steps: [{ do: "burrow", to: [5, 1] }] }, { ...gctx, soilAt: () => false }); check("glide: the refusal to go down says what stops it", !q.ok && /something it can't glide through/.test(q.reason), q.reason);
+  check("glide: walls judgment", cleanWalls({ stone: "all" }).walls.stone === "all" && JSON.stringify(cleanWalls({ stone: [[3, 4, 1, 2]] }).walls.stone) === "[[1,2,3,4]]" && !cleanWalls({ soil: "all" }).ok && /"walls.stone"/.test(cleanWalls({ stone: 3 }).reason));
+  check("glide: cleanPlan keeps walls", cleanPlan({ steps: [{ do: "none" }], walls: { stone: "none" } }).plan.walls.stone === "none" && !cleanPlan({ steps: [{ do: "none" }], walls: { stone: "x" } }).ok);
+  check("glide: the prompt", /you\.burrow\.glides/.test(promptText()) && /judgeWalls/.test(promptText()) && /"stone": "none"/.test(promptText()) && /doors never count/.test(promptText()));
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
 for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs", "ui/history.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);

@@ -37,11 +37,16 @@ The gate counts the open ones; above 8 open at a release's start, that release m
 - (u-29) [0.15.0] open: A Release while grabbed (the flat check) live; a creature holding a shield or a two-handed weapon.
 - (u-30) [0.15.0] open: The player's map picture (the hidden page drew no canvas); a real mouse drag of a climber off its tree (a scripted move stood in).
 - (u-31) [0.15.0] open: A Large climber; an off-grid climber; a climber up a tree when the map is extended.
-- (u-32) [0.15.0] open: A 5-ft fall doing no damage, live (by the rule, in code).
+- (u-32) [0.15.0] verified 2026-11-09 in 0.17.0: A 5-ft fall doing no damage, live (by the rule, in code). Seen: the Earth Scamp put 5 ft up, ticked with Auto and a plan of no actions; at the end of its turn Arrest a Fall was rolled publicly and failed (9 against DC 15, d20 rigged to 5), it landed at 0 ft with HP unchanged (20) and not prone, and the card's note said no damage from 5 ft or less.
 - (u-33) [0.16.0] open: A Survey Sheet encounter map's rock live (unit-tested on ten real reads); a burrower on a Survey Sheet map at all, live.
 - (u-34) [0.16.0] open: An area spell leaving a burrowed creature out, live.
-- (u-35) [0.16.0] open: A region the GM draws and names "Soil" herself.
-- (u-36) [0.16.0] open: A reload mid-Burrow (the review's fixes 1 and 2 are read in the code, not run live).
+- (u-35) [0.16.0] verified 2026-11-09 in 0.17.0: A region the GM draws and names "Soil" herself. Seen: on the dungeon test scene (0.16.0 installed), Ankhrav's Burrow down at [3, 3] was refused as rock; after a region named only "Soil" (no module flag; made by script, standing in for the GM's drawing tool) over squares 1 to 5, the same plan passed, and its Large footprint was refused where it reached past the region's edge.
+- (u-36) [0.16.0] verified 2026-11-09 in 0.17.0: A reload mid-Burrow (the review's fixes 1 and 2 are read in the code, not run live). Seen: the Bridge's page reloaded by a `moveToken` hook just after the Sod Hound's down move was posted; after the reload the hound was at -5, hidden, flagged, the record held `started` only and the card said the page reloaded. Do it took the step as done (no second move: one down move, 5 ft, in its movement history), the next step came up at the planned square (10 ft), shown again and unflagged. Not seen: a reload after it came up and before it was shown again.
 - (u-37) [0.16.0] open: A Large burrower coming up short (the review's fix 6), live.
 - (u-38) [0.16.0] open: Test Player's own screen as a picture (visibility read by script after a render refresh).
-- (u-39) [0.16.0] dropped 2026-11-09: Earth Glide (Sod Hound has it: it may burrow through rock by its own text); the module still treats rock as rock for it, by the Open item. Why: a question for Rhea (plan doc, Open questions), not a test.
+- (u-39) [0.16.0] dropped 2026-11-09: Earth Glide (Sod Hound has it: it may burrow through rock by its own text); the module still treats rock as rock for it, by the Open item. Why: Rhea answered 2026-11-09 ("Absolutely"): Earth Glide is wanted, in the plan doc's Next; built in 0.17.0.
+- (u-40) [0.10.1] dropped 2026-11-09: The gate's unit-test and zip steps on this repo running for the first time. Why: proved by 0.11.0's release, which ran them.
+- (u-41) [0.10.1] dropped 2026-11-09: The pre-push hook on this repo firing for the first time. Why: proved by 0.11.0's push to main.
+- (u-42) [0.10.1] dropped 2026-11-09: The slim skill and the updated foundry-module-dev and foundry-test-process cards saved. Why: confirmed saved in later chats (they load as saved skills).
+- (u-43) [0.10.1] dropped 2026-11-09: A fresh chat following the one-page skill plus `guide` end to end. Why: the fleeing build (0.11.0) and every release since did it.
+- (u-44) [0.17.0] open: Earth Glide on a Large glider, Rock Tunneler and Unstoppable Burrow monsters live (only the Sod Hound's Earth Glide was tried); Unstoppable Burrow's metal walls are treated as any wall.

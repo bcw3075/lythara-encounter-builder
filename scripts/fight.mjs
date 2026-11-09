@@ -2,7 +2,7 @@
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. It runs Strikes, Strides, Steps, Crawls, Fly, Swim, Climb, Release, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek, Interact, Delay and fleeing off the map; what is still to come is in the repo's docs/features and the project's plan doc. */
 import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, shouldSink, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract, nextClimb, climbResult } from "./turn.mjs";
-import { BURROW_DEPTH, FT, burrowWorld, cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, heightWhenCut, rockSquares, routeWords, swimWorld, treeTop, treesBeside, waterKinds, waterUnder } from "./move.mjs";
+import { BURROW_DEPTH, FT, burrowWorld, crossesWalls, cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, heightWhenCut, rockSquares, routeWords, swimWorld, glideWorld, treeTop, treesBeside, wallSquares, waterKinds, waterUnder } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap, partySize, suggestedLevel } from "./builder.mjs";
 import { aimArea, aimWords, alliesCaught, burstReachable, caughtBy, shapeOf, squaresNear } from "./area.mjs";
@@ -254,12 +254,17 @@ async function buildPacket(combat, tok, turn = {}) {
   if (up || near.length) you.climb = { trees: near, ...(up ? { up: { tree: up.at, top: up.top } } : {}) };
   /* Burrow (0.16.0): whether it is under the ground now, whether the ground it stands on is soil, and on a map the module can't read whose ground isn't
      judged yet, the request to judge it from a picture (Rhea, 2026-11-08: Angel judges each map in play) */
-  const burrows = burrowSpeedOf(a) > 0, isDeep = burrows ? deepWater(scene, model) : null, soil = burrows ? soilOf(scene, model, read, isDeep) : null;
+  const burrows = burrowSpeedOf(a) > 0, glides = burrows && glidesThroughRock(a), isDeep = burrows ? deepWater(scene, model) : null, soil = burrows ? soilOf(scene, model, read, isDeep, glides ? glideBounds(scene, model) : null) : null;
   if (burrows) {
-    const below = isBelow(tok), judge = !read && !groundJudged(scene), shown = judge && isRunner() ? await showGroundPicture(scene).catch(e => { console.warn(`${ID} | ground picture`, e); return false; }) : false;
+    /* a glider needs no soil judged (rock is no bar to it), but it needs to know which of the map's own walls are stone (0.17.0) */
+    const below = isBelow(tok), judge = !glides && !read && !groundJudged(scene), judgeWalls = glides && plainWalls(scene).length > 0 && !wallsJudged(scene);
+    const shown = (judge || judgeWalls) && isRunner() ? await showGroundPicture(scene).catch(e => { console.warn(`${ID} | ground picture`, e); return false; }) : false;
+    const picture = { size: mapSquares(scene), picture: shown ? `a picture of the whole map with numbered squares is on the runner's page, element #${GROUND_EL}` : "no picture could be drawn: judge from the scene's name and the ground map, or answer \"none\"", sceneName: scene.name };
     you.burrow = { below, soilHere: footprintAt(square, sizeOf(tok)).every(([i, j]) => soil(i, j)),
-      ground: read ? "known: the module read this map (\"r\" on the ground map is rock)" : judge ? "not judged yet: everywhere counts as rock" : "judged: soil is where the GM's soil areas are (\"r\" on the ground map is rock)",
-      ...(judge ? { judgeGround: { size: mapSquares(scene), picture: shown ? `a picture of the whole map with numbered squares is on the runner's page, element #${GROUND_EL}` : "no picture could be drawn: judge from the scene's name and the ground map, or answer \"none\"", sceneName: scene.name } } : {}) };
+      ground: glides ? "it glides through rock and earth alike (\"r\" on the ground map is no bar to it); only deep water, trees, doors and walls that aren't stone stop it, and it comes up only onto open floor"
+        : read ? "known: the module read this map (\"r\" on the ground map is rock)" : judge ? "not judged yet: everywhere counts as rock" : "judged: soil is where the GM's soil areas are (\"r\" on the ground map is rock)",
+      ...(glides ? { glides: true, walls: !plainWalls(scene).length ? "known: the map's own walls (stone features pass, trunks don't)" : judgeWalls ? "not judged yet: every wall stops it" : "judged: walls inside the GM's stone-walls areas are stone; others stop it" } : {}),
+      ...(judge ? { judgeGround: picture } : {}), ...(judgeWalls ? { judgeWalls: picture } : {}) };
   }
   const cover = visionerApi();
   if (offGrid(tok, scene)) you.offGrid = true;
@@ -418,8 +423,14 @@ function act(combat) {
 }
 /** A monster ticked during its own turn. */
 export function onTokenFlag(tok, change) {
-  if (!isRunner() || !foundry.utils.getProperty(change, `flags.${ID}.run`)) return;
-  for (const c of game.combats.filter(c => c.started && c.combatant?.tokenId === tok.id)) onTurnChange(c).catch(e => console.error(`${ID} | turn`, e));
+  if (!isRunner()) return;
+  if (foundry.utils.getProperty(change, `flags.${ID}.run`)) for (const c of game.combats.filter(c => c.started && c.combatant?.tokenId === tok.id)) onTurnChange(c).catch(e => console.error(`${ID} | turn`, e));
+  /* Auto ticked while its plan waits on the card (ready: before its first step, or between steps for Next step): it runs as if Auto had been on from the
+     start (Rhea, 2026-11-09), waiting out the game's pause like Auto's own start. A held, stopped or running turn is left as it is. */
+  if (foundry.utils.getProperty(change, `flags.${ID}.auto`) === true) for (const c of game.combats.filter(c => c.started && c.combatant?.tokenId === tok.id)) {
+    const r = currentRequest(c);
+    if (r?.state === "ready" && !r.hold && r.tokenId === tok.id && !running.has(r.id)) (async () => { if (!(await pausedAuto(c, r.id, tok))) await doIt(c, r.id); })().catch(e => console.error(`${ID} | turn`, e));
+  }
 }
 /** The runner has just loaded: pick up whatever happened while it was away. A turn left "running" stopped when the page went, so it waits for Do it,
     which carries on from the record and never repeats a step. */
@@ -455,7 +466,7 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
     me: { square: squareOf(tok, scene), ...placeOf(tok, scene), size: sizeOf(tok), ...heightOf(tok), cat: actor.size ?? null }, speed, flySpeed, swimSpeed, waterAt: route?.waterAt, waterIn: route?.waterIn,
     /* Climb and Release (0.15.0): its climb Speed, the trees beside a square, the tree it is up now, what it holds */
     /* Burrow (0.16.0): its burrow Speed, whether it is under the ground now, soil under a footprint, a creature it knows of where it would come up */
-    burrowSpeed, below: isBelow(tok), soilAt: route?.soilAt ?? null, occupiedAt: route?.occupiedAt ?? null,
+    burrowSpeed, below: isBelow(tok), soilAt: route?.soilAt ?? null, occupiedAt: route?.occupiedAt ?? null, glides: glidesThroughRock(actor), surfaceAt: route?.surfaceAt ?? null,
     climbSpeed: climbSpeedOf(actor), treesAt: route?.trees ? sq => treesBeside(sq, sizeOf(tok), route.trees) : null, onTree: treeUp(tok, scene), holding: holding.map(({ id, name }) => ({ id, name })),
     cantAct: cantAct(actor), cantMove: cantMove(actor), cantAttack: cantAttack(actor), prone: !!actor.hasCondition?.("prone"), route,
     tookCover: takingCover(tok), coverFrom, nearCover: nearCoverFor(scene),
@@ -526,12 +537,46 @@ const groundJudged = scene => !!scene.getFlag(ID, "ground") || soilRegions(scene
 /** Which squares a burrower can dig through, as (i, j) → boolean. A Survey Sheet encounter map: everything but rock (`rockSquares`: crag, outcrops, big
     boulders, standing stones, ruin walls, caves), solid things (trunks, walls through the square) and deep water. Any other scene: only inside soil
     regions; everywhere else counts as rock (and so does all of it until its ground is judged). */
-function soilOf(scene, model, read, isDeep) {
+function soilOf(scene, model, read, isDeep, glide = null) {
   const px = scene.grid.size, d = scene.dimensions, memo = new Map();
+  if (glide) return (i, j) => model.inMap(i, j) && !isDeep(i, j) && !glide.hard(i, j);   /* Earth Glide: rock and earth alike (0.17.0) */
   if (read) { const rock = rockSquares(read, model.cols, model.rows); return (i, j) => model.inMap(i, j) && !rock[model.idx(i, j)] && !model.blocked[model.idx(i, j)] && !isDeep(i, j); }
   const regs = soilRegions(scene);
   return (i, j) => { if (!model.inMap(i, j)) return false; const k = model.idx(i, j);
     if (!memo.has(k)) memo.set(k, !model.blocked[k] && !isDeep(i, j) && regs.some(r => r.testPoint({ x: d.sceneX + (i + .5) * px, y: d.sceneY + (j + .5) * px, elevation: 0 }))); return memo.get(k); };
+}
+/* ---------- Earth Glide (0.17.0; Rhea, 2026-11-09: "Absolutely") ---------- */
+/* Monster Core's abilities that let a burrower through rock: Earth Glide ("can Burrow through any earthen matter, including rock"), Rock Tunneler
+   ("can burrow through solid stone") and Unstoppable Burrow. PF2e gives them no slug, so they are read by name. */
+const GLIDE = /^(earth glide|rock tunneler|unstoppable burrow)$/i;
+/** Whether it burrows through rock and earth by its own ability (it needs a burrow Speed too). */
+const glidesThroughRock = actor => burrowSpeedOf(actor) > 0 && !!actor?.items?.some(i => GLIDE.test(String(i.name ?? "").trim()));
+/** Stone-walls regions: Angel's judgment (flag `stoneWalls`) or any region the GM names "Stone walls..." (Rhea, 2026-11-09: what the walls are made of is
+    Angel's choice for each place; she can change it). */
+const STONE_NAME = /^stone walls?\b/i;
+const stoneRegions = scene => scene.regions.filter(r => r.getFlag(ID, "stoneWalls") || STONE_NAME.test(r.name ?? ""));
+/** The walls whose material the map doesn't say: anything that stops movement and isn't a door or one of Survey Sheet's (its trunks are wood, its stones,
+    ruin walls, outcrops and cave rock are stone). */
+const plainWalls = scene => scene.walls.filter(w => w.move !== CONST.WALL_MOVEMENT_TYPES.NONE && !w.door && !w.flags?.[SURVEY]?.enc);
+/** Whether the walls of a scene have been judged (the scene's flag, or stone-walls regions the GM drew herself). */
+const wallsJudged = scene => !!scene.getFlag(ID, "walls") || stoneRegions(scene).length > 0;
+/** wall -> whether a glider passes through it: Survey Sheet's features yes and its trunks no; a door never (a way through, wood or metal); any other
+    wall when it lies in a stone-walls region (its middle, or a quarter square either side of it, so a wall along a region's edge counts), otherwise not:
+    until a scene's walls are judged, they stop it. */
+function earthenWall(scene) {
+  const regs = stoneRegions(scene), q = scene.grid.size / 4;
+  return w => { if (w.door) return false; const enc = w.flags?.[SURVEY]?.enc; if (enc) return enc === "feature"; if (!regs.length) return false;
+    const mx = (w.c[0] + w.c[2]) / 2, my = (w.c[1] + w.c[3]) / 2;
+    return [[0, 0], [q, 0], [-q, 0], [0, q], [0, -q]].some(([dx, dy]) => regs.some(r => r.testPoint({ x: mx + dx, y: my + dy, elevation: 0 }))); };
+}
+/** What stops a glider on this scene: every wall that stops movement and isn't earthen (an open door doesn't stop anything), as the squares those walls
+    pass through (`hard`) and the test between two squares (`wallBetween`, for a creature `size` squares across). */
+function glideBounds(scene, model) {
+  const d = scene.dimensions, px = scene.grid.size, earthen = earthenWall(scene), open = CONST.WALL_DOOR_STATES.OPEN;
+  const walls = scene.walls.filter(w => w.move !== CONST.WALL_MOVEMENT_TYPES.NONE && !(w.door && w.ds === open) && !earthen(w))
+    .map(w => ({ ax: (w.c[0] - d.sceneX) / px, ay: (w.c[1] - d.sceneY) / px, bx: (w.c[2] - d.sceneX) / px, by: (w.c[3] - d.sceneY) / px }));
+  const hard = wallSquares(walls, model.cols, model.rows);
+  return { hard: (i, j) => model.inMap(i, j) && !!hard[model.idx(i, j)], wallBetween: (a, b, size = 1) => crossesWalls(walls, a, b, size) };
 }
 /** Into the ground or out of it: the token's flag and its visibility. Underground it is hidden from everyone (Rhea: "unseen while below"), as the GM's own
     hidden toggle does it; coming up it shows again, unless the GM had hidden it before it went down. */
@@ -563,7 +608,7 @@ async function showGroundPicture(scene) {
   g.strokeStyle = "#0006"; g.lineWidth = 1; for (let i = 0; i <= cols; i++) { g.beginPath(); g.moveTo(pad + i * cell, pad); g.lineTo(pad + i * cell, pad + rows * cell); g.stroke(); } for (let j = 0; j <= rows; j++) { g.beginPath(); g.moveTo(pad, pad + j * cell); g.lineTo(pad + cols * cell, pad + j * cell); g.stroke(); }
   g.fillStyle = "#000"; g.font = `${Math.min(11, cell - 2)}px sans-serif`; g.textAlign = "center"; g.textBaseline = "middle";
   const every = cell >= 18 ? 1 : 2; for (let i = 0; i < cols; i += every) g.fillText(String(i), pad + (i + .5) * cell, pad / 2); for (let j = 0; j < rows; j += every) g.fillText(String(j), pad / 2, pad + (j + .5) * cell);
-  const head = document.createElement("div"); head.textContent = `Angel is judging the ground of "${scene.name}": squares x across, y down. Red lines are walls.`; head.style.marginBottom = "4px";
+  const head = document.createElement("div"); head.textContent = `Angel is judging the ground and walls of "${scene.name}": squares x across, y down. Red lines are walls.`; head.style.marginBottom = "4px";
   el.append(head, c); document.body.append(el);
   setTimeout(() => { if (document.getElementById(GROUND_EL) === el) el.remove(); }, 10 * 60000);   /* gone after 10 minutes, or as soon as the judgment is in */
   return true;
@@ -571,12 +616,17 @@ async function showGroundPicture(scene) {
 const hideGroundPicture = () => { if (typeof document !== "undefined") document.getElementById(GROUND_EL)?.remove(); };
 /** Angel's judgment of a scene's ground, made real: GM-only soil regions (flag `soil`, named "Soil (Angel)"), and the scene's flag so it is asked once.
     ground: brain.mjs's cleanGround ({ soil: "all" | "none" | [[x0, y0, x1, y1]] }). The GM can reshape or delete the regions with the region tools. */
-async function applyGround(scene, ground, by = "Angel") {
+const applyGround = (scene, ground, by = "Angel") => applyAreas(scene, ground.soil, { name: `Soil (${by})`, color: "#8b5a2b", flag: "soil", sceneFlag: "ground", by });
+/** Angel's judgment of which walls are stone, for a monster that glides through rock (0.17.0): a GM-only region "Stone walls (Angel)" (flag `stoneWalls`)
+    over the squares whose walls are stone, and the scene's flag `walls` so it is asked once. walls: brain.mjs's cleanWalls. */
+const applyWalls = (scene, walls, by = "Angel") => applyAreas(scene, walls.stone, { name: `Stone walls (${by})`, color: "#7a7a7a", flag: "stoneWalls", sceneFlag: "walls", by });
+/* areas: "all", "none" or rectangles of squares, made into one GM-only region with a rectangle each; returns how many rectangles */
+async function applyAreas(scene, areas, { name, color, flag, sceneFlag, by }) {
   const d = scene.dimensions, px = scene.grid.size, cols = Math.round(d.sceneWidth / px), rows = Math.round(d.sceneHeight / px);
-  const rects = ground.soil === "all" ? [[0, 0, cols - 1, rows - 1]] : ground.soil === "none" ? [] : ground.soil.map(([a, b, c, e]) => [Math.max(0, a), Math.max(0, b), Math.min(cols - 1, c), Math.min(rows - 1, e)]).filter(([a, b, c, e]) => a <= c && b <= e);
-  if (rects.length) await watched(() => scene.createEmbeddedDocuments("Region", [{ name: `Soil (${by})`, color: "#8b5a2b", visibility: CONST.REGION_VISIBILITY.GAMEMASTER, levels: [],
-    shapes: rects.map(([a, b, c, e]) => ({ type: "rectangle", x: d.sceneX + a * px, y: d.sceneY + b * px, width: (c - a + 1) * px, height: (e - b + 1) * px, rotation: 0 })), flags: { [ID]: { soil: true } } }]));
-  await watched(() => scene.setFlag(ID, "ground", { by, at: Date.now(), soil: ground.soil === "all" || ground.soil === "none" ? ground.soil : rects.length }));
+  const rects = areas === "all" ? [[0, 0, cols - 1, rows - 1]] : areas === "none" ? [] : areas.map(([a, b, c, e]) => [Math.max(0, a), Math.max(0, b), Math.min(cols - 1, c), Math.min(rows - 1, e)]).filter(([a, b, c, e]) => a <= c && b <= e);
+  if (rects.length) await watched(() => scene.createEmbeddedDocuments("Region", [{ name, color, visibility: CONST.REGION_VISIBILITY.GAMEMASTER, levels: [],
+    shapes: rects.map(([a, b, c, e]) => ({ type: "rectangle", x: d.sceneX + a * px, y: d.sceneY + b * px, width: (c - a + 1) * px, height: (e - b + 1) * px, rotation: 0 })), flags: { [ID]: { [flag]: true } } }]));
+  await watched(() => scene.setFlag(ID, sceneFlag, { by, at: Date.now(), [sceneFlag === "ground" ? "soil" : "stone"]: areas === "all" || areas === "none" ? areas : rects.length }));
   hideGroundPicture();
   return rects.length;
 }
@@ -639,13 +689,14 @@ async function mover(combat, tok, speed, known = null, flySpeed = 0, swimSpeed =
   /* What it has already moved this turn: Foundry keeps the token's movement history for the turn (cleared when the turn changes) and charges a new move
      as the rest of that path, so diagonals carry on from it, as the rules say. */
   const history = (tok.movementHistory ?? []).map(w => [Math.round((w.x - ox) / px), Math.round((w.y - oy) / px)]);
-  const soil = soilOf(scene, model, read, isDeep), occupied = sq => footprintAt(sq, size).some(([i, j]) => !!who.get(`${i},${j}`));
+  const glide = burrowSpeed > 0 && glidesThroughRock(tok.actor) ? glideBounds(scene, model) : null;   /* Earth Glide (0.17.0) */
+  const soil = soilOf(scene, model, read, isDeep, glide), occupied = sq => footprintAt(sq, size).some(([i, j]) => !!who.get(`${i},${j}`));
   const route = (from, to, before = [], { step = false, kind = "stride", surface = false } = {}) => {
     const prefix = [...history]; for (const r of before) prefix.push(...(prefix.length && same(prefix.at(-1), r[0]) ? r.slice(1) : r));
     if (!prefix.length || !same(prefix.at(-1), from)) prefix.push(from);
     const fly = kind === "fly", swim = kind === "swim", dig = kind === "burrow", odd = diagonalsIn(prefix) % 2 === 1, budget = fly ? flySpeed : swim ? Math.max(swimSpeed, 20) : dig ? burrowSpeed : speed;
     if (dig && surface && occupied(to)) return { ok: false, reason: `another creature is at [${to[0]}, ${to[1]}], so it can't come up there.` };   /* below ground no one is in its way; where it comes up, anyone it knows of is */
-    const r = step ? findStep({ from, to, size, odd }, world) : findRoute({ from, to, size, budget, odd }, fly ? flyWorld(world) : swim ? swimWorld(world, isDeep) : dig ? burrowWorld(world, soil) : world);
+    const r = step ? findStep({ from, to, size, odd }, world) : findRoute({ from, to, size, budget, odd }, fly ? flyWorld(world) : swim ? swimWorld(world, isDeep) : dig ? (glide ? glideWorld(world, isDeep, glide.hard, (a, b) => glide.wallBetween(a, b, size)) : burrowWorld(world, soil)) : world);
     if (!r.ok && (r.why !== "far" || !r.route)) return { ok: false, reason: routeWords(r, to, budget, kind) };   /* "far" with no route: past where the search looked */
     /* a Swim is priced by Foundry with its swim action, which Survey Sheet's regions don't slow; a bank square it climbs out onto keeps its own terrain cost */
     const bank = swim ? Math.max(0, ...footprintAt(to, size).filter(([i, j]) => !isDeep(i, j)).map(([i, j]) => model.costs[model.idx(i, j)] ?? 0)) * FT : 0;
@@ -655,6 +706,8 @@ async function mover(combat, tok, speed, known = null, flySpeed = 0, swimSpeed =
   route.waterAt = sq => waterUnder(sq, size, kind); route.waterIn = sq => waterUnder(sq, size, kind, true);
   route.trees = treesOf(read);   /* for a Climb: the trees beside a square */
   route.soilAt = sq => footprintAt(sq, size).every(([i, j]) => soil(i, j)); route.occupiedAt = occupied;   /* for a Burrow (0.16.0) */
+  /* where a Burrow may come up: open floor, nothing solid and no deep water under its footprint (a glider may be below rock, but can't come up in it) */
+  route.surfaceAt = sq => footprintAt(sq, size).every(([i, j]) => model.inMap(i, j) && !model.blocked[model.idx(i, j)] && !isDeep(i, j));
   return route;
 }
 /** Whether a square of this scene is deep water: Survey Sheet's greater-difficult region named "Deep water" (other greater difficult terrain isn't).
@@ -694,6 +747,11 @@ async function judgeNow(combat, requestId) {
   if (clean.plan.ground && r.packet?.you?.burrow?.judgeGround && !groundJudged(combat.scene)) {
     try { const n = await applyGround(combat.scene, clean.plan.ground); await addNote(combat, requestId, `Angel judged this map's ground: ${clean.plan.ground.soil === "all" ? "all soil" : n ? `soil in ${n} area${n === 1 ? "" : "s"}` : "all rock"} (GM-only "Soil (Angel)" regions: reshape or delete them with the region tools).`); }
     catch (e) { console.error(`${ID} | ground`, e); await addNote(combat, requestId, `I couldn't mark the ground Angel judged (${e.message}); everything counts as rock until you draw soil regions (name them "Soil").`); }
+  }
+  /* which walls are stone, for a monster that glides through rock (0.17.0): the same, once */
+  if (clean.plan.walls && r.packet?.you?.burrow?.judgeWalls && !wallsJudged(combat.scene)) {
+    try { const n = await applyWalls(combat.scene, clean.plan.walls); await addNote(combat, requestId, `Angel judged this map's walls: ${clean.plan.walls.stone === "all" ? "all stone" : n ? `stone in ${n} area${n === 1 ? "" : "s"}` : "none of them stone"} (a GM-only "Stone walls (Angel)" region: reshape or delete it with the region tools; doors are never stone).`); }
+    catch (e) { console.error(`${ID} | walls`, e); await addNote(combat, requestId, `I couldn't mark the walls Angel judged (${e.message}); every wall stops it until you draw a region named "Stone walls".`); }
   }
   const c = checkPlan(clean.plan, await gather(combat, r, undefined, { moves: hasMove(clean.plan.steps), spells: hasSpell(clean.plan.steps) }));
   if (!c.ok) return reject(combat, requestId, c.reason);
@@ -954,7 +1012,8 @@ async function runStride(combat, id, i, step, tok) {
   const charged = await (async () => { try { return await watched(async () => {
     let got = null; const hook = Hooks.on("moveToken", (doc, mv) => { if (doc.id === tok.id) got = { cost: mv.passed?.cost ?? null, x: mv.destination?.x, y: mv.destination?.y, elevation: mv.destination?.elevation }; });
     try {
-      await tok.move(waypoints);
+      /* a glider passes through earthen walls, which Foundry would stop it at: its route already keeps to what it may cross (0.17.0) */
+      if (dig && glidesThroughRock(tok.actor)) await scene.moveTokens({ [tok.id]: { waypoints, constrainOptions: { ignoreWalls: true } } }); else await tok.move(waypoints);
       for (let t = 0; t < STEP_MS && !(got && tok.x === got.x && tok.y === got.y && (got.elevation == null || tok.elevation === got.elevation)); t += 100) await new Promise(res => setTimeout(res, 100));   /* the hook comes before the update lands */
       await within(tok.object?.movementAnimationPromise ?? Promise.resolve(), 10000, "The move's animation didn't finish.").catch(() => {});   /* cover and sight are read from where the token is drawn */
       return got;

@@ -244,6 +244,27 @@ export function rockSquares(read, cols, rows) {
     terrain costs nothing more (it digs under it); trunks, walls and rock stop it; no creature's space blocks it below ground. The square it comes up on
     is checked for creatures by the glue. */
 export const burrowWorld = (w, soil) => ({ ...w, terrain: (i, j) => soil(i, j) ? 0 : null, creature: () => null, rock: true });
+/* ---------- Earth Glide (0.17.0; Rhea, 2026-11-09: "Absolutely") ---------- */
+const orient = (ax, ay, bx, by, cx, cy) => (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+const segsCross = (px, py, qx, qy, w) => { const d1 = orient(w.ax, w.ay, w.bx, w.by, px, py), d2 = orient(w.ax, w.ay, w.bx, w.by, qx, qy), d3 = orient(px, py, qx, qy, w.ax, w.ay), d4 = orient(px, py, qx, qy, w.bx, w.by); return (d1 > 0) !== (d2 > 0) && (d3 > 0) !== (d4 > 0); };
+/** The squares a set of walls (in squares, { ax, ay, bx, by }) pass through, marked the way the map model marks a blocked square: a wall touching the
+    inner part of the square (0.15 to 0.85). Returns a flat array, index j * cols + i. */
+export function wallSquares(walls, cols, rows) {
+  const out = new Array(cols * rows).fill(false);
+  for (const w of walls) {
+    const i0 = Math.max(0, Math.floor(Math.min(w.ax, w.bx)) - 1), i1 = Math.min(cols - 1, Math.floor(Math.max(w.ax, w.bx)) + 1), j0 = Math.max(0, Math.floor(Math.min(w.ay, w.by)) - 1), j1 = Math.min(rows - 1, Math.floor(Math.max(w.ay, w.by)) + 1);
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) { if (out[j * cols + i]) continue; const x0 = i + .15, y0 = j + .15, x1 = i + .85, y1 = j + .85, inside = (x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
+      if (inside(w.ax, w.ay) || inside(w.bx, w.by) || [[x0, y0, x1, y0], [x1, y0, x1, y1], [x1, y1, x0, y1], [x0, y1, x0, y0]].some(([a, b, c, d]) => segsCross(a, b, c, d, w))) out[j * cols + i] = true; }
+  }
+  return out;
+}
+/** Whether the straight line between a creature's centres on two squares (top-left squares, `size` squares across) crosses any of the walls. */
+export const crossesWalls = (walls, a, b, size = 1) => walls.some(w => segsCross(a[0] + size / 2, a[1] + size / 2, b[0] + size / 2, b[1] + size / 2, w));
+/** The world as a Burrow crosses it for a creature that glides through rock and earth (Earth Glide, Rock Tunneler, Unstoppable Burrow): every square
+    but deep water and squares something that isn't earthen passes through (a trunk, a door, a wall that isn't stone), and only walls that aren't earthen
+    stand in its way; creatures don't (it is below them). `hard(i, j)` and `wallBetween(a, b)` come from the glue, which knows what each wall is made of.
+    Where it comes up is checked by the glue (open floor, no one there). */
+export const glideWorld = (w, isDeep, hard, wallBetween) => ({ ...w, terrain: (i, j) => isDeep(i, j) ? null : 0, blocked: hard, wall: wallBetween, creature: () => null, rock: true });
 /** What going down or coming up adds to a Burrow, in feet: 5 ft each way (Angel's reading: one depth, 5 ft below). from, to: below at the start and
     the end; across: whether it moves across squares at all (a Burrow that starts and ends at the surface dips down and comes up). */
 export function burrowVertical(from, to, across) {

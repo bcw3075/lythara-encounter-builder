@@ -53,21 +53,33 @@ export function cleanPlan(raw) {
   }
   /* the ground the thinker judged, on a map the module can't read, when its packet asked (0.16.0) */
   let ground = null; if (p.ground != null) { const g = cleanGround(p.ground); if (!g.ok) return g; ground = g.ground; }
-  return { ok: true, plan: { schema: PLAN_SCHEMA, reason: text(p.reason, 300), steps, ifBlocked: text(p.ifBlocked, 100) || null, suggestOpus: p.suggestOpus === true, ...(ground ? { ground } : {}) } };
+  /* which of the map's walls are stone, for a monster that glides through rock (0.17.0) */
+  let walls = null; if (p.walls != null) { const g = cleanWalls(p.walls); if (!g.ok) return g; walls = g.walls; }
+  return { ok: true, plan: { schema: PLAN_SCHEMA, reason: text(p.reason, 300), steps, ifBlocked: text(p.ifBlocked, 100) || null, suggestOpus: p.suggestOpus === true, ...(ground ? { ground } : {}), ...(walls ? { walls } : {}) } };
 }
 export const MAX_SOIL_AREAS = 24;
 /** The ground judgment a plan may carry (0.16.0; Rhea, 2026-11-08: on a map the module can't read, Angel judges the soil in play): { soil: "all" } (the
     whole floor is soil), { soil: "none" } (all rock), or { soil: [[x0, y0, x1, y1], ...] }, rectangles of squares, both corners included, at most
     MAX_SOIL_AREAS. Returns { ok, ground } or a refusal in words. */
 export function cleanGround(g) {
-  if (!g || typeof g !== "object" || Array.isArray(g)) return bad(`"ground" is { "soil": "all" }, { "soil": "none" } or { "soil": [[x0, y0, x1, y1], ...] }.`);
-  if (g.soil === "all" || g.soil === "none") return { ok: true, ground: { soil: g.soil } };
-  if (!Array.isArray(g.soil) || !g.soil.length) return bad(`"ground.soil" is "all", "none" or a list of rectangles [x0, y0, x1, y1].`);
-  if (g.soil.length > MAX_SOIL_AREAS) return bad(`"ground.soil" has at most ${MAX_SOIL_AREAS} rectangles.`);
+  const r = cleanAreas(g, "ground", "soil"); return r.ok ? { ok: true, ground: { soil: r.value } } : r;
+}
+/** Which walls are stone, a plan may carry for a monster that glides through rock (0.17.0; Rhea, 2026-11-09: "Angel's choice based on what the walls are
+    made of for the location"): { stone: "all" | "none" | [[x0, y0, x1, y1], ...] }, rectangles of squares whose walls are stone or earth. */
+export function cleanWalls(g) {
+  const r = cleanAreas(g, "walls", "stone"); return r.ok ? { ok: true, walls: { stone: r.value } } : r;
+}
+/* "all", "none" or up to MAX_SOIL_AREAS rectangles of squares, under one key of one object, in words when it is wrong */
+function cleanAreas(g, name, key) {
+  if (!g || typeof g !== "object" || Array.isArray(g)) return bad(`"${name}" is { "${key}": "all" }, { "${key}": "none" } or { "${key}": [[x0, y0, x1, y1], ...] }.`);
+  const v = g[key];
+  if (v === "all" || v === "none") return { ok: true, value: v };
+  if (!Array.isArray(v) || !v.length) return bad(`"${name}.${key}" is "all", "none" or a list of rectangles [x0, y0, x1, y1].`);
+  if (v.length > MAX_SOIL_AREAS) return bad(`"${name}.${key}" has at most ${MAX_SOIL_AREAS} rectangles.`);
   const out = [];
-  for (const r of g.soil) { if (!Array.isArray(r) || r.length !== 4 || !r.every(v => Number.isInteger(v) && v >= 0 && v < 1000)) return bad(`each soil rectangle is [x0, y0, x1, y1], four whole numbers (squares).`);
+  for (const r of v) { if (!Array.isArray(r) || r.length !== 4 || !r.every(x => Number.isInteger(x) && x >= 0 && x < 1000)) return bad(`each ${key} rectangle is [x0, y0, x1, y1], four whole numbers (squares).`);
     out.push([Math.min(r[0], r[2]), Math.min(r[1], r[3]), Math.max(r[0], r[2]), Math.max(r[1], r[3])]); }
-  return { ok: true, ground: { soil: out } };
+  return { ok: true, value: out };
 }
 /** Who made a plan, kept with it: the route, the model, the chat's generation, and usage (filled by the API route later). */
 export function cleanMeta(m = {}) {

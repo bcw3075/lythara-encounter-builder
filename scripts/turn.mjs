@@ -92,7 +92,9 @@ export const listWords = (xs = []) => xs.length < 2 ? xs.join("") : `${xs.slice(
     ({ at, top }: the tree it is up now, from the token's flag, or null), holding ([{ id, name }]: what it holds in its hands, which a Climb needs free),
     and each Strike's `dropped` (the weapon it is made with lies on the ground) and `weapon` (that weapon's item id).
     Burrow (0.16.0): burrowSpeed, below (it is burrowed under the ground now), soilAt(square) (every square of its footprint there is soil it can dig
-    through), and route's kind "burrow" with { surface } (it comes up at the end, so the end square must be free of creatures it knows of). */
+    through), and route's kind "burrow" with { surface } (it comes up at the end, so the end square must be free of creatures it knows of).
+    Earth Glide (0.17.0): glides (it burrows through rock and earth: soilAt then means "it can dig there", rock included) and surfaceAt(square) (its
+    footprint there is open floor it can come up onto, not inside rock, a wall, a trunk or deep water). */
 export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
   let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, herePos = ctx.me?.pos ?? here, hereElev = Number(ctx.me?.elev) || 0, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, surfaced = false, fled = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {}, shots = {};
@@ -309,7 +311,9 @@ export function checkPlan(plan, ctx) {
       const to = step.to ?? here, up = step.up === true, endBelow = !up, across = !same(here, to);
       if (!Array.isArray(to)) return { ok: false, reason: `${at}: a Burrow needs "to", the square to end on (its own square to go down or come up there).` };
       if (!across && below === endBelow) return { ok: false, reason: below ? `${at}: it is already below ground at [${here[0]}, ${here[1]}]: give "to" another square, or "up": true to come up.` : `${at}: a Burrow on its own square goes down, so leave out "up" (or name another square).` };
-      if (!below && !ctx.soilAt(here)) return { ok: false, reason: `${at}: the ground at [${here[0]}, ${here[1]}] is rock (or not soil it can dig through), so it can't burrow down there.` };
+      if (!below && !ctx.soilAt(here)) return { ok: false, reason: ctx.glides ? `${at}: it can't burrow down at [${here[0]}, ${here[1]}]: something it can't glide through is there.` : `${at}: the ground at [${here[0]}, ${here[1]}] is rock (or not soil it can dig through), so it can't burrow down there.` };
+      /* coming up: only onto open floor (a glider can be below rock or a stone wall, but can't come up inside it) */
+      if (up && ctx.surfaceAt && !ctx.surfaceAt(to)) return { ok: false, reason: `${at}: it can't come up at [${to[0]}, ${to[1]}]: that is solid rock, a wall or deep water, not open floor.` };
       let route = [[...here]], cost = 0;
       if (across) { const way = ctx.route(here, to, routes, { kind: "burrow", surface: up }); if (!way.ok) return { ok: false, reason: `${at}: ${way.reason}` }; route = way.route; cost = way.cost; }
       else if (up && ctx.occupiedAt?.(to)) return { ok: false, reason: `${at}: another creature is at [${to[0]}, ${to[1]}], so it can't come up there.` };
