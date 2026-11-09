@@ -18,6 +18,7 @@ import { historyHTML, historyOf, journalHTML, stepResult } from "../../scripts/h
 import { cutShort, diagonalsIn, distanceBetween, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, headingOf, heightCost, heightWhenCut, routeWords, swimDistance, swimWorld, waterKinds, waterUnder } from "../../scripts/move.mjs";
 import { SWIM_DC, movedOn, shouldFall, shouldSink } from "../../scripts/turn.mjs";
 import { CLIMB_DC, climbResult, nextClimb } from "../../scripts/turn.mjs";
+import { endsCover as endsCover2 } from "../../scripts/turn.mjs";
 import { climbDistance, treeTop, treesBeside } from "../../scripts/move.mjs";
 import { verticalGap } from "../../scripts/area.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
@@ -1085,6 +1086,19 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   const hl = (step, rec) => JSON.stringify(stepResult(step, rec, { card: () => ({ total: 17 }), nameOf: x => x }));
   check("climb: history lines", /Athletics 17 vs DC 15: success/.test(hl(st, { climb: { dc: 15, degree: 2, message: "m1" }, moved: { elev: 5 } })) && /arrived, 5 ft up/.test(hl(st, { climb: { dc: 15, degree: 2 }, moved: { elev: 5 } })) && /climb Speed, no check/.test(hl({ do: "climb", height: 20, climbSpeed: 20 }, { moved: { elev: 20 } })) && /dropped its Dogslicer/.test(hl({ do: "release", itemName: "Dogslicer" }, { dropped: true })) && !/\(a critical failure\)/.test(hl(st, { climb: { dc: 15, degree: 0, message: "m1" }, fell: { from: 10, damage: 5, prone: true } })));
   check("climb: packet carries climb, holding and dropped", (() => { const p = packetOf({ you: { climb: { trees: [{ at: [1, 2], top: 20 }], up: { tree: [1, 2], top: 20 } }, holding: [{ id: "dogslicer", name: "Dogslicer" }], dropped: ["Shortbow"] } }).you; return p.climb.up.top === 20 && p.holding[0].id === "dogslicer" && p.dropped[0] === "Shortbow"; })());
+}
+/* the 0.15.0 review's findings */
+{
+  const cl = { do: "climb", fromHeight: 0, height: 5, dc: 15 };
+  check("climb review: a Climb that moved ends Take Cover", endsCover2([{ do: "take-cover" }, cl], { 0: { covered: true }, 1: { moved: { elev: 5 } } }) && endsCover2([cl], { 0: { climb: { degree: 0 }, fell: { from: 0 } } }) && !endsCover2([cl], { 0: { climb: { degree: 1 } } }));
+  check("climb review: a Fly up on its own square ends Take Cover", endsCover2([{ do: "fly", from: [1, 1], to: [1, 1], fromHeight: 0, height: 10 }], { 0: { moved: { to: [1, 1], elev: 10 } } }) && !endsCover2([{ do: "fly", from: [1, 1], to: [1, 1], fromHeight: 10, height: 10 }], { 0: { moved: { to: [1, 1], elev: 10 } } }));
+  check("climb review: a fall begun before a reload asks", nextClimb({ climbStarted: true, climb: { degree: 0 }, falling: { from: 10 } }, cl, 10) === "ask" && /not confirmed/.test(climbResult(cl, { climb: { degree: 0 }, falling: { from: 10 } })));
+  const done = steps => ({ state: "done", steps, log: {} });
+  check("climb review: a dead flier up a tree still drops", shouldFall({ requests: [done([{ do: "strike" }])], height: 15, flies: true, clinging: true, dead: true }) === "drop");
+  check("climb review: a failed Climb's re-plan words", describeChange({ who: "me", what: "noClimb", height: 5 }) === "It failed its Athletics check to Climb and made no progress (still 5 ft up)." && /still on the ground/.test(describeChange({ who: "me", what: "noClimb", height: 0 })));
+  const q = checkPlan({ steps: [{ do: "climb", height: 5 }] }, { actions: 3, strikes: [], targets: {}, me: { square: [1, 1], size: 1, elev: 0 }, speed: 25, holding: [], treesAt: null });
+  check("climb review: no tree info says why", !q.ok && /can't work out moves here/.test(q.reason), q.reason);
+  check("climb review: the prompt's distance at 60", /15 at 60/.test(promptText()));
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
 for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs", "ui/history.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);

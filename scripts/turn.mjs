@@ -228,7 +228,8 @@ export function checkPlan(plan, ctx) {
       let on = tree;
       if (!on) {
         if (hereElev > 0) return { ok: false, reason: ctx.flySpeed > 0 ? `${at}: it is ${Math.round(hereElev)} ft up in the air, so it moves by Fly (a "fly" step); a Fly with "height": 0 lands it, and it can climb a tree from the ground.` : `${at}: it is ${Math.round(hereElev)} ft up on something that isn't a tree it climbed, so there is nothing to Climb there.` };
-        const near = ctx.treesAt?.(here) ?? [];
+        if (!ctx.treesAt) return { ok: false, reason: `${at}: I can't work out moves here, so I can't tell which trees are beside it.` };
+        const near = ctx.treesAt(here);
         if (Array.isArray(step.tree)) on = near.find(t => same(t.at, step.tree)) ?? null;
         else on = near[0] ?? null;
         if (!on) return { ok: false, reason: Array.isArray(step.tree) ? `${at}: the tree at [${step.tree[0]}, ${step.tree[1]}] isn't beside it at [${here[0]}, ${here[1]}]${near.length ? ` (it could climb ${listWords(near.map(t => `the one at [${t.at[0]}, ${t.at[1]}]`))})` : ""}.` : `${at}: there is no tree beside it at [${here[0]}, ${here[1]}] to Climb ("you.climb.trees" lists the trees near it: Stride next to one first).` };
@@ -526,7 +527,7 @@ export function lastAction({ step = null, rec = {}, done = null, strikes = [] } 
     forward: the turn moved on, not back; clinging: it is up a tree it climbed. Returns "fall", "drop" (dead) or null. */
 export function shouldFall({ requests = [], height = 0, flies = false, dead = false, forward = true, clinging = false } = {}) {
   if (!(height > 0) || !flies || !forward || !requests.length) return null;
-  if (clinging) return null;   /* up a tree it climbed, it holds on: a flier there isn't airborne (0.15.0) */
+  if (clinging && !dead) return null;   /* up a tree it climbed, it holds on: a flier there isn't airborne (0.15.0); a dead one's body still drops */
   if (requests.some(r => r.fell)) return null;
   if (requests.some(r => (r.steps ?? []).some((s, k) => s?.do === "delay" && (r.log?.[k]?.ended || r.log?.[k]?.moved)) || r.delayed)) return null;
   if (dead) return "drop";
@@ -631,6 +632,7 @@ export function describeChange(c, nameOf = l => l, self = "It") {
     case "moved": return `${who} moved.`;
     case "stopped": return `${who} was stopped at [${c.at?.[0]}, ${c.at?.[1]}], short of where it was going.`;
     case "extended": return `The map was extended to the ${c.side ?? "edge"}: there is more ground that way now, and ${who === "It" ? "it keeps its turn" : `${who} keeps its turn`}.${c.side === "north" || c.side === "west" ? " Every square's number shifted by the new strip, so read positions afresh from this packet." : ""}`;
+    case "noClimb": return `${who} failed its Athletics check to Climb and made no progress${c.height ? ` (still ${c.height} ft up)` : " (still on the ground)"}.`;
     case "sought": return `${who} finished Seeking: what it perceives now shows what it found.`;
     case "noShot": return `${who} couldn't shoot its ${c.item ?? "weapon"}${c.why ? ` (${c.why})` : ""}; ${c.spent ? "the action is spent (its flat check was rolled)" : "the action isn't spent"}.`;
     case "hurt": return `${who} was hurt.`;
@@ -663,6 +665,7 @@ function climbWords(s) {
 }
 /** How a Climb came out, for the next plan and the history. */
 export function climbResult(step, rec = {}) {
+  if (rec.falling && !rec.fell) return `a critical failure: it began to fall from ${rec.falling.from} ft (not confirmed)`;
   if (rec.fell) return `fell ${rec.fell.from} ft${rec.fell.damage ? `, took ${rec.fell.damage} damage` : ""}${rec.fell.prone ? " and landed prone" : ""} (a critical failure)`;
   if (rec.climb && rec.climb.degree < 2) return "no progress (it failed its Athletics check to Climb)";
   if (rec.moved) return rec.moved.elev === step.height ? (step.height ? `arrived, ${step.height} ft up` : "back on the ground") : `stopped ${rec.moved.elev ?? "?"} ft up`;
@@ -671,6 +674,7 @@ export function climbResult(step, rec = {}) {
 /** What to do next with a Climb step, from its record and the height it is at now: "roll" (a check it hasn't made), "move", "next" (done, or no progress,
     or it fell), "ask" (a check or move begun with no record of how it ended: a reload), "arrived" (begun before a reload and already there). */
 export function nextClimb(rec = {}, step = {}, elev = 0) {
+  if (rec.falling && !rec.fell) return "ask";   /* a critical failure's fall began before a reload: the GM looks */
   if (rec.moved || rec.fell || (rec.climb && rec.climb.degree < 2)) return "next";
   if (rec.started) return elev === step.height ? "arrived" : "ask";
   if (step.dc && !rec.climb) return rec.climbStarted ? "ask" : "roll";
@@ -820,6 +824,9 @@ export function endsCover(steps = [], log = {}, upto = steps.length, from = 0) {
     if ((s?.do === "strike" || (s?.do === "ability" && s.attack)) && (rec.started || rec.flatStarted)) return true;
     if (s?.do === "spell" && s.attack && rec.castStarted) return true;
     if (isMove(s) && rec.moved?.to && !same(rec.moved.to, s.from)) return true;
+    /* up or down out of its space: a Climb that moved or fell, a Fly that changed height on its own square (0.15.0) */
+    if (s?.do === "climb" && ((rec.moved && rec.moved.elev !== s.fromHeight) || rec.fell)) return true;
+    if (s?.do === "fly" && rec.moved && rec.moved.elev != null && rec.moved.elev !== s.fromHeight) return true;
   }
   return false;
 }

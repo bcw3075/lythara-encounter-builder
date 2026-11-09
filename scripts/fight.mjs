@@ -1,6 +1,6 @@
 /* A fight's turns. One named account does the work (the runner: the Claude Bridge unless the setting says otherwise), on its own page with the
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
-   summarised chat loses nothing. For now it runs Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek and fleeing off the map; see claude/encounter-builder-plan.md for the rest of step 2. */
+   summarised chat loses nothing. It runs Strikes, Strides, Steps, Crawls, Fly, Swim, Climb, Release, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek, Interact, Delay and fleeing off the map; what is still to come is in the repo's docs/features and the project's plan doc. */
 import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, shouldSink, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract, nextClimb, climbResult } from "./turn.mjs";
 import { FT, cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, heightWhenCut, routeWords, swimWorld, treeTop, treesBeside, waterKinds, waterUnder } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
@@ -442,7 +442,7 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
   return { actions: Math.max(0, actionsOf(actor, combat) - (req.spent ?? 0) - used.actions), attacksBefore: (req.attacks ?? 0) + used.attacks, strikes, targets,
     me: { square: squareOf(tok, scene), ...placeOf(tok, scene), size: sizeOf(tok), ...heightOf(tok), cat: actor.size ?? null }, speed, flySpeed, swimSpeed, waterAt: route?.waterAt, waterIn: route?.waterIn,
     /* Climb and Release (0.15.0): its climb Speed, the trees beside a square, the tree it is up now, what it holds */
-    climbSpeed: climbSpeedOf(actor), treesAt: sq => treesBeside(sq, sizeOf(tok), route?.trees ?? []), onTree: treeUp(tok, scene), holding: holding.map(({ id, name }) => ({ id, name })),
+    climbSpeed: climbSpeedOf(actor), treesAt: route?.trees ? sq => treesBeside(sq, sizeOf(tok), route.trees) : null, onTree: treeUp(tok, scene), holding: holding.map(({ id, name }) => ({ id, name })),
     cantAct: cantAct(actor), cantMove: cantMove(actor), cantAttack: cantAttack(actor), prone: !!actor.hasCondition?.("prone"), route,
     tookCover: takingCover(tok), coverFrom, nearCover: nearCoverFor(scene),
     /* Interact and Delay (0.12.0): grabbed asks a DC 5 flat check of a manipulate action; a Delay needs an untouched turn and a creature still to act this round */
@@ -537,7 +537,7 @@ function cantMove(actor) {
 }
 /** The movement action a move is sent and priced with: crawl for a Crawl (a prone token can't walk); otherwise the token's own, except never crawl for a
     Stride or Step (one after a Crawl and a Stand in the same plan). */
-const moveAction = (tok, kind) => kind === "crawl" ? "crawl" : kind === "fly" ? "fly" : kind === "swim" ? "swim" : ["crawl", "fly", "swim"].includes(tok.movementAction) ? "walk" : tok.movementAction;   /* a Stride after a landing or a swim walks */
+const moveAction = (tok, kind) => kind === "crawl" ? "crawl" : kind === "fly" ? "fly" : kind === "swim" ? "swim" : ["crawl", "fly", "swim", "climb"].includes(tok.movementAction) ? "walk" : tok.movementAction;   /* a Stride after a landing or a swim walks */
 const DEEP = /deep water/i;   /* Survey Sheet's name for its greater-difficult water. Other greater difficult terrain is just 10 ft more a square. */
 /** route(from, to, before, { step, kind }) for checkPlan, for this monster on this scene as it stands now: a Stride's route, or with step a single 5-ft
     square (a Step or a Crawl, which kind names for the words). */
@@ -856,6 +856,7 @@ async function runStride(combat, id, i, step, tok) {
     } finally { Hooks.off("moveToken", hook); }
   });
   await finish({ moved: { to: squareOf(tok, scene), cost: charged?.cost ?? null } });
+  if (fly && tok.getFlag(ID, "climbing")) await setClimbing(tok, null).catch(e => console.warn(`${ID} | climbing`, e));   /* it flew off its tree: not holding on any more */
   return "next";
 }
 /* ---------- climbing (0.15.0) ---------- */
@@ -864,8 +865,9 @@ async function runStride(combat, id, i, step, tok) {
     another cause stays. */
 async function setClimbing(tok, tree, guard) {
   const actor = tok.actor, f = tok.getFlag(ID, "climbing");
-  if (!tree) { if (f?.guard) await watched(() => actor.items.get(f.guard)?.delete() ?? null); if (f) await watched(() => tok.unsetFlag(ID, "climbing")); return; }
-  let id = f?.guard ?? null;
+  if (!tree) { if (f?.guard && actor) await watched(() => actor.items.get(f.guard)?.delete() ?? null); if (f) await watched(() => tok.unsetFlag(ID, "climbing")); return; }
+  if (!actor) return;
+  let id = f?.guard && actor.items.get(f.guard) ? f.guard : null;   /* the GM may have deleted it by hand: add it again */
   if (guard && !id) id = (await watched(() => actor.increaseCondition?.("off-guard")))?.id ?? null;   /* null when it was already off-guard from something else */
   if (!guard && id) { await watched(() => actor.items.get(id)?.delete() ?? null); id = null; }
   await watched(() => tok.setFlag(ID, "climbing", { at: [...tree.at], top: tree.top, guard: id }));
@@ -873,7 +875,15 @@ async function setClimbing(tok, tree, guard) {
 /** At each turn change: a token whose climbing flag no longer holds (the GM moved it off the tree or down, or it is dead) loses the flag and the
     module's Off-Guard, so a monster on the ground isn't left off-guard. */
 async function settleClimbers(combat) {
-  for (const tok of combat.scene?.tokens ?? []) { if (!tok.getFlag(ID, "climbing")) continue; if (!treeUp(tok, combat.scene) || tok.actor?.isDead) await setClimbing(tok, null); }
+  for (const tok of combat.scene?.tokens ?? []) {
+    if (!tok.getFlag(ID, "climbing")) continue;
+    try {
+      const up = treeUp(tok, combat.scene);
+      if (!up || !tok.actor || tok.actor.isDead) { if (up && tok.actor?.isDead) await watched(() => tok.update({ elevation: 0 })); await setClimbing(tok, null); continue; }   /* a dead climber's body drops, as a dead flier's does */
+      /* still up without a climb Speed and no longer off-guard (another cause it shared ended, or the GM removed it): off-guard again */
+      if (!(climbSpeedOf(tok.actor) > 0) && !tok.actor.hasCondition?.("off-guard")) await setClimbing(tok, up, true);
+    } catch (e) { console.warn(`${ID} | climbing`, e); }
+  }
 }
 /** A Climb (Rhea, 2026-11-08; Player Core Climb, Actions ID 2374; climb Speed, Rules ID 2349): straight up or down the tree beside it, on its own
     square. With a climb Speed no check; without one PF2e's own Climb (an Athletics check, its card in chat) at the step's DC, rolled once (marked
@@ -889,8 +899,8 @@ async function runClimb(combat, id, i, step, tok) {
   for (let guard = 0; guard < 4; guard++) {
     const now = nextClimb(get(), step, heightUp(tok));
     if (now === "next") return "next";
-    if (now === "arrived") { const before = situationOf({ me: { conditions: conditionWords(actor) } }).me.conditions; await setClimbing(tok, step.height > 0 ? { at: step.tree, top: step.top } : null, !step.climbSpeed); await finish({ ...get(), moved: { elev: heightUp(tok) } }, before); return "next"; }
-    if (now === "ask") { await addNote(combat, id, `${tok.name}'s Climb was under way when the page reloaded: check its card and height, then move it or press Next step.`); return "ask"; }
+    if (now === "arrived") { const before = situationOf({ me: { conditions: conditionWords(actor) } }).me.conditions.filter(c => c !== "off-guard" || !(step.height > 0 && !step.climbSpeed));   /* after a reload its own Off-Guard may already be on */ await setClimbing(tok, step.height > 0 ? { at: step.tree, top: step.top } : null, !step.climbSpeed); await finish({ ...get(), moved: { elev: heightUp(tok) } }, before); return "next"; }
+    if (now === "ask") { const f = get().falling; await addNote(combat, id, f ? `${tok.name} critically failed its Climb and was falling ${f.from} ft when the page reloaded: put it on the ground, and apply ${f.from > 5 ? `${Math.floor(f.from / 2)} bludgeoning damage and Prone` : f.from ? "no damage" : "Prone"} if that didn't happen.` : `${tok.name}'s Climb was under way when the page reloaded: check its card and height, then move it or press Next step.`); return "ask"; }
     if (!stepGate(now === "roll" ? "climb-roll" : "climb", id)) return "stopped";
     if (!(await ensureScene(combat) && tok.object)) throw new Error(cantOpen());
     if (now === "roll") {
@@ -1786,6 +1796,8 @@ async function runTurn(combat, requestId) {
       /* a Stride, Step or Crawl that ended short of its square: the rest was planned from there, so ask again (the reason names the square, never what stopped it) */
       const at = squareOf(tok, combat.scene);
       if (isMove(step) && result !== "gm" && !same(at, step.to) && (i + 1 < r.steps.length || step.do === "flee") && request(combat, requestId).state !== "manual") return replan(combat, { ...request(combat, requestId), id: requestId }, i + 1, [{ who: "me", what: "stopped", at }], tok);
+      /* a Climb that made no progress (a failed check): the rest was planned from higher up, so ask again, as for a Stride stopped short */
+      if (step.do === "climb" && result !== "gm" && request(combat, requestId).log?.[i]?.climb?.degree === 1 && i + 1 < r.steps.length && request(combat, requestId).state !== "manual") return replan(combat, { ...request(combat, requestId), id: requestId }, i + 1, [{ who: "me", what: "noClimb", height: heightUp(tok) }], tok);
       /* at the map's edge (Rhea, 2026-11-08): the turn stops, Auto or not, and the GM chooses Extend map or Let it get away on the card */
       if (step.do === "flee" && result !== "gm" && request(combat, requestId).state !== "manual") return save(combat, requestId, { pos: i + 1, coverSettled: i + 1, state: "fled", fled: { sides: edgeSides(at, sizeOf(tok), ...mapSquares(combat.scene)), at } });
       /* an ability whose effects are the GM's to apply: the turn waits for Next step, Auto or not (the look before the next action then sees what changed) */
