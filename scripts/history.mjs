@@ -37,6 +37,7 @@ export function stepResult(step, rec = {}, look = {}, n = namer(), done = false)
   } else if (isMove(step)) {
     const got = rec.moved?.to;
     text = !got ? (rec.started ? "move started, not finished" : "") : `${same(got, step.to) ? "arrived at" : `stopped at`} ${sq(got)}${rec.moved.cost != null ? ` (${rec.moved.cost} ft charged)` : ""}${!same(got, step.to) ? `, short of ${sq(step.to)}` : ""}`;
+    if (step.do === "swim") { tag(rec.swim?.message); const c = card(rec.swim?.message); text = rec.swim ? join([`Athletics ${c?.total ?? "?"} vs DC ${rec.swim.dc}: ${CHECK_OUTCOMES[rec.swim.degree] ?? "unknown"}`, rec.swum ? text : "no progress"]) : same(step.from ?? step.to, step.to) && rec.swum ? "trod water" : text; }
     if (step.do === "sneak") { tag(rec.card?.message); text = join([text, rec.applied === "applied" ? "Visioner applied the secret result" : rec.applied === "none" ? "Visioner changed nothing" : rec.gm ? "left to you on its card" : ""]); }
   } else if (step.do === "stand" || step.do === "drop-prone") text = rec.changed || rec.stood ? (step.do === "stand" ? "stood up" : "dropped prone") : rec.started ? "started, not confirmed" : "";
   else if (step.do === "take-cover") text = rec.covered ? "took cover" : rec.gm ? "left to you" : "";

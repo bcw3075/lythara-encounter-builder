@@ -40,6 +40,8 @@ Record every id below in the release's change record when this feature, or a fea
 - (hi-4) {live,shared:brain} Close Simple Calendar's window first: it covered the tracker's End Encounter button.
 - (hi-5) {live,shared:brain} Delete the test journal and folder after.
 
+- **Swim (0.14.0):** a Swim's line shows its Athletics total against the DC and the degree when it rolled, "no progress" on a failure, "trod water" for a Swim on its own square, otherwise where it got to like any move.
+
 ## Traps
 - **Drawing an open `<details>` fires its `toggle` event,** so a toggle listener that records folds pins every default-open item open: record a fold only from a click on its `<summary>` (found by the 0.10.0 review).
 - **Whether something changed since a save can't be read from `since`:** many writes (saves, notes, presses, area results) don't move it, and the server clock restarts with the server. The history keeps a signature of the requests instead.

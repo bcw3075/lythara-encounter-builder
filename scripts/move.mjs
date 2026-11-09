@@ -46,6 +46,7 @@ function passProblem(at, size, w) {
     if (w.blocked(i, j)) return "blocked";
     if (w.terrain(i, j) == null) return "terrain";
     if (w.creature(i, j) === "enemy") return "occupied";
+    if (w.wet && !w.wet(i, j)) return "dry";   /* a Swim goes through deep water only; its last square may be the bank (findRoute) */
   }
   return null;
 }
@@ -85,7 +86,7 @@ export function findRoute({ from, to, size = 1, budget = 200, odd = false }, w) 
     }
     for (const [dx, dy] of SQUARE_DIRS) {
       const nx = x + dx, ny = y + dy, diag = dx && dy, nodd = diag ? (odd === "1" ? 0 : 1) : Number(odd);
-      if (passProblem([nx, ny], size, w)) continue;
+      const pp = passProblem([nx, ny], size, w); if (pp && !(pp === "dry" && nx === to[0] && ny === to[1])) continue;   /* a Swim may climb out on its last square */
       if (w.wall([x, y], [nx, ny])) continue;
       const nc = c + (diag && odd === "1" ? 2 * FT : FT) + extraFor([x, y], [nx, ny], size, w);
       if (nc > limit) { cut = true; continue; }
@@ -145,19 +146,54 @@ export function heightWhenCut(from = 0, to = 0, squares = 0, cut = true) {
     (trees are taller than it flies over, and walls stop Foundry's moves at any height). */
 export const flyWorld = w => ({ ...w, terrain: () => 0 });
 
+/** The world as a Swim crosses it (Player Core Swim, Actions ID 2381; swim Speed, Rules ID 2346): only through deep water, which costs no more than an
+    open square there, with the last square allowed on the bank (climbing out); walls, trunks, rocks and creatures as for a Stride. wet(i, j): the
+    square is deep water. The bank square keeps its own terrain cost. */
+export const swimWorld = (w, wet) => ({ ...w, terrain: (i, j) => wet(i, j) ? 0 : w.terrain(i, j) ?? 2, wet });
+/** How far a Swim action goes without a swim Speed (Player Core Swim, Actions ID 2381): up to 10 ft, plus 5 ft for every 20 ft of land Speed above 20
+    once the land Speed is 40 or more; a critical success adds 5 ft (most calm water is an automatic critical success). degree: 0 critical failure,
+    1 failure, 2 success, 3 critical success; no progress below a success. */
+export function swimDistance(landSpeed = 25, degree = 2) {
+  if (degree < 2) return 0;
+  const fast = landSpeed >= 40 ? FT * Math.floor((landSpeed - 20) / 20) : 0;
+  return 2 * FT + fast + (degree >= 3 ? FT : 0);
+}
+/** Which kind of deep water each square is, for a Swim: "calm" (a pond or lake: Player Core's "most calm water", an automatic critical success) or
+    "flowing" (a river or creek channel: a trained task, so an Athletics check), or null when the square isn't deep water. deep(i, j): the square is
+    deep water. read: Survey Sheet's map read ({ things: { placed: [{ kind, at, r (feet) }] }, lines: [{ kind, squares }] }); without one, all of it
+    is calm. Inside a pond or lake (its radius and 30% more, the shapes being irregular) wins over a creek running through it; otherwise deep water
+    within 5 squares of a creek or river line is flowing, and anything else (a pool in a hollow) is calm. Returns (i, j) → "calm" | "flowing" | null. */
+export function waterKinds(deep, read = null) {
+  const still = (read?.things?.placed ?? []).filter(p => p.kind === "lake" || p.kind === "pond");
+  const flowing = (read?.lines ?? []).filter(l => l.kind === "creek" || l.kind === "river").flatMap(l => l.squares ?? []);
+  const memo = new Map();
+  return (i, j) => {
+    if (!deep(i, j)) return null;
+    const k = `${i},${j}`; if (memo.has(k)) return memo.get(k);
+    const calm = still.some(p => Math.hypot(i - p.at[0], j - p.at[1]) * FT <= p.r * 1.3 + FT) || !flowing.some(([a, b]) => Math.max(Math.abs(a - i), Math.abs(b - j)) <= 5);
+    memo.set(k, calm ? "calm" : "flowing"); return memo.get(k);
+  };
+}
+/** The water under a creature's whole footprint at [x, y]: null unless every square of it is deep water; "flowing" if any of it is. */
+export function waterUnder(at, size, kind) {
+  let out = "calm";
+  for (const [i, j] of footprintAt(at, size)) { const k = kind(i, j); if (!k) return null; if (k === "flowing") out = "flowing"; }
+  return out;
+}
+
 /** A route's failure in words, for the thinker and the card. Squares stay squares, which is what the thinker plans with. */
 export function routeWords(r, to, speed, kind = "stride") {
-  const sq = `[${to[0]}, ${to[1]}]`, word = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak", flee: "Flee", fly: "Fly" }[kind] ?? "Stride";
+  const sq = `[${to[0]}, ${to[1]}]`, word = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak", flee: "Flee", fly: "Fly", swim: "Swim" }[kind] ?? "Stride";
   switch (r.why) {
     case "same": return `it is already at ${sq}.`;
     case "off": return `${sq} is off the map.`;
     case "blocked": return `it can't stand at ${sq}: something solid is there.`;
-    case "terrain": return `${sq} is deep water: it would have to Swim, which a ${word} isn't.`;
+    case "terrain": return `${sq} is deep water: it would have to Swim (a "swim" step), which a ${word} isn't.`;
     case "occupied": return `another creature is at ${sq}.`;
     case "notNext": return `[${to[0]}, ${to[1]}] isn't next to it: a ${word} moves one square (5 ft).`;
     case "difficult": return kind === "crawl" ? `[${to[0]}, ${to[1]}] is difficult terrain, which would take 10 ft, and a Crawl moves only 5 ft.` : `[${to[0]}, ${to[1]}] is difficult terrain, and a Step can't go into difficult terrain.`;
     case "wall": return `a wall is between it and [${to[0]}, ${to[1]}].`;
-    case "far": { const what = kind === "fly" ? "fly Speed" : "Speed"; return r.cost == null ? `${sq} is far beyond its ${what} of ${speed} ft.` : `getting to ${sq} takes ${r.cost} ft, more than its ${what} of ${speed} ft.`; }
+    case "far": { const what = kind === "fly" ? "fly Speed" : kind === "swim" ? "swimming distance" : "Speed"; return r.cost == null ? `${sq} is far beyond its ${what} of ${speed} ft.` : `getting to ${sq} takes ${r.cost} ft, more than its ${what} of ${speed} ft.`; }
     default: return `there's no way to ${sq} from where it is.`;
   }
 }

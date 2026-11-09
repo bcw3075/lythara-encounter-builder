@@ -1,9 +1,9 @@
 /* A monster's turn as plain data: what a plan means, whether it's legal, and where a step stands. Pure: no Foundry globals.
    The glue gathers live values first. Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek, fleeing, Interact and Delay; other speeds come as step 2 goes on. */
-import { FT, distanceBetween, headingOf, heightCost } from "./move.mjs";
+import { FT, distanceBetween, headingOf, heightCost, swimDistance } from "./move.mjs";
 import { placeable } from "./area.mjs";
 /** What each step kind costs. An ability's cost is its own (0 for a free action); 1 here is only the fallback. */
-export const COSTS = { strike: 1, stride: 1, fly: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, flee: 1, interact: 1, delay: 0, none: 0 };
+export const COSTS = { strike: 1, stride: 1, fly: 1, swim: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, flee: 1, interact: 1, delay: 0, none: 0 };
 /* Interact and Delay (0.12.0). Interact (https://2e.aonprd.com/Actions.aspx?ID=2296): 1 action, manipulate; the module can't know what a monster does
    with its hands, so it posts a card saying what, and the GM applies it, as for any ability the module can't run. Restrained bars manipulate actions;
    Grabbed asks a DC 5 flat check for them, lost on a failure. Delay (ID 2294): a free action when its turn begins, so it must be the plan's only step and
@@ -21,10 +21,13 @@ export const SAVE_MULT = [2, 1, 0.5, 0];
 export const FOLLOW_UPS = { grab: "grapple", "improved-grab": "grapple", knockdown: "trip", "improved-knockdown": "trip", push: "shove", "improved-push": "shove", pull: "reposition", "improved-pull": "reposition" };
 export const CHECK_WORD = { grapple: "Grapple", trip: "Trip", shove: "Shove", reposition: "Reposition" };
 const SIZES = ["tiny", "sm", "med", "lg", "huge", "grg"];
-const MOVES = ["stride", "step", "crawl", "sneak", "flee", "fly"], ONE_SQUARE = ["step", "crawl"];
+const MOVES = ["stride", "step", "crawl", "sneak", "flee", "fly", "swim"], ONE_SQUARE = ["step", "crawl"];
 /** Steps that change only whether the monster is prone, and what they leave it. Rules: Prone (https://2e.aonprd.com/Conditions.aspx?ID=88). */
 export const POSTURES = { stand: false, "drop-prone": true };
-export const WORD = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak", flee: "Flee", fly: "Fly" };
+export const WORD = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak", flee: "Flee", fly: "Fly", swim: "Swim" };
+/** The Athletics DC to Swim in flowing water (a river or creek channel): Player Core's sample Swim tasks put flowing water at trained, and GM Core's
+    simple DC for trained is 15. Calm water (a pond or lake) is an automatic critical success and needs no roll. */
+export const SWIM_DC = 15;
 /* Fleeing off the map (Rhea, 2026-11-08): a `flee` step is a Stride that must end on the outermost ring of squares, the map's edge, and must be the plan's
    last step. Once the monster stands there the turn stops and the GM chooses on the card: Extend map (the monster keeps its turn and is asked again
    from a fresh packet) or Let it get away (it leaves the fight; its token stays, hidden and flagged). Ending an ordinary Stride on the ring triggers nothing. */
@@ -211,9 +214,36 @@ export function checkPlan(plan, ctx) {
       steps.push({ do: "fly", from: [...here], to: [...to], fromHeight: hereElev, height, route, cost: total }); if (route.length > 1) routes.push(route);
       const shifted = route.length > 1 || height !== hereElev; here = [...to]; herePos = here; hereElev = height; moved = moved || shifted; if (shifted) took = tookProne = false; last = { do: "fly" }; continue;   /* Take Cover ends on leaving its space, up or down too, not on a hover */
     }
+    if (step.do === "swim") {
+      /* Swim (Rhea, 2026-11-08: by the rules, the ground deciding; surface only for now). Player Core Swim (Actions ID 2381) and swim Speed (Rules ID
+         2346): through deep water only, able to start on the bank (going in) or end on it (climbing out). With a swim Speed it moves up to that Speed with
+         no check; without one, calm water is an automatic critical success (15 ft for most), flowing water an Athletics check (SWIM_DC) for up to 10 ft,
+         which may make no progress at all, and then it is asked again. Swimming to its own square treads water: a successful Swim that keeps it from
+         sinking at the end of the turn. */
+      if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
+      if (hereElev > 0 && ctx.flySpeed > 0) return { ok: false, reason: `${at}: it is ${Math.round(hereElev)} ft up in the air, so it moves by Fly (a "fly" step); a Fly with "height": 0 lands it.` };
+      if (prone) return { ok: false, reason: `${at}: it is prone, so it has to Stand first (a "stand" step, 1 action) before it can Swim.` };
+      if (!here || !ctx.route || !ctx.waterAt) return { ok: false, reason: `${at}: I can't work out moves here.` };
+      const to = step.to ?? here; if (!Array.isArray(to)) return { ok: false, reason: `${at}: a Swim needs "to", the square to end on (its own square to tread water).` };
+      const startW = ctx.waterAt(here), endW = ctx.waterAt(to);
+      let route = [[...here]], cost = 0;
+      if (same(here, to)) { if (!startW) return { ok: false, reason: `${at}: it isn't in deep water at [${here[0]}, ${here[1]}], so there is nothing to swim in.` }; }
+      else {
+        const way = ctx.route(here, to, routes, { kind: "swim" }); if (!way.ok) return { ok: false, reason: `${at}: ${way.reason}` };
+        route = way.route; cost = way.cost;
+        if (!route.some(sq => ctx.waterAt(sq))) return { ok: false, reason: `${at}: neither [${here[0]}, ${here[1]}] nor [${to[0]}, ${to[1]}] is deep water, so there is nothing to swim in; Stride instead.` };
+      }
+      const flowing = route.some(sq => ctx.waterAt(sq) === "flowing"), swimmer = ctx.swimSpeed > 0;
+      const limit = swimmer ? ctx.swimSpeed : swimDistance(ctx.speed ?? 0, flowing ? 2 : 3);
+      if (cost > limit) return { ok: false, reason: swimmer ? `${at}: swimming to [${to[0]}, ${to[1]}] takes ${cost} ft, more than its swim Speed of ${ctx.swimSpeed} ft.` : `${at}: swimming to [${to[0]}, ${to[1]}] takes ${cost} ft, and with no swim Speed a Swim goes at most ${limit} ft in ${flowing ? "flowing water (on a success; an Athletics check)" : "calm water (an automatic critical success)"}.` };
+      steps.push({ do: "swim", from: [...here], to: [...to], route, cost, water: flowing ? "flowing" : "calm", ...(swimmer ? { swimSpeed: ctx.swimSpeed } : {}), ...(!swimmer && flowing ? { dc: SWIM_DC } : {}), ...(endW ? {} : { out: true }) });
+      if (route.length > 1) { routes.push(route); moved = true; took = tookProne = false; }
+      here = [...to]; herePos = here; last = { do: "swim" }; continue;
+    }
     if (MOVES.includes(step.do)) {
       const word = WORD[step.do], small = ONE_SQUARE.includes(step.do);
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
+      if (ctx.waterAt?.(here)) return { ok: false, reason: `${at}: it is in deep water at [${here[0]}, ${here[1]}], so it moves by Swim (a "swim" step), which can end on the bank; it can't ${word} there.` };
       if (hereElev > 0 && ctx.flySpeed > 0) return { ok: false, reason: `${at}: it is ${Math.round(hereElev)} ft up in the air, so it moves by Fly (a "fly" step); a Fly with "height": 0 lands it.` };
       if (step.do === "crawl" && !prone) return { ok: false, reason: `${at}: it isn't prone; Crawl is how a prone creature moves, so Stride or Step instead.` };
       if (step.do !== "crawl" && prone) return { ok: false, reason: `${at}: it is prone, so it has to Stand first (a "stand" step, 1 action) before it can ${word}, or Crawl 5 ft.` };
@@ -453,6 +483,20 @@ export function shouldFall({ requests = [], height = 0, flies = false, dead = fa
   if (requests.some(r => (r.steps ?? []).some((s, k) => s?.do === "fly" && (r.log?.[k]?.started || r.log?.[k]?.moved)))) return null;
   return "fall";
 }
+/** Whether a ticked monster that ended its turn in deep water needs the GM's sink-or-drift note (Player Core Swim, Actions ID 2381: ending a turn in water
+    without having succeeded at a Swim action that turn, it sinks 10 ft or the current moves it, as the GM decides; not when its last action was
+    entering the water, which only a successful Swim can do here). Surface only for now (Rhea, 2026-11-08), so the module moves nothing: it tells the
+    GM. The same guards as the fall: only a turn the module ran to the end, never after a Delay, a note already made, or a turn change backwards; a
+    dead one needs no note. requests: this creature's requests this round; wet: it is in deep water now. A Swim counts when its log says `swum`
+    (it moved, or trod water, on an automatic or rolled success). Returns "sink" or null. Pure. */
+export function shouldSink({ requests = [], wet = false, dead = false, forward = true } = {}) {
+  if (!wet || dead || !forward || !requests.length) return null;
+  if (requests.some(r => r.sank)) return null;
+  if (requests.some(r => (r.steps ?? []).some((s, k) => s?.do === "delay" && (r.log?.[k]?.ended || r.log?.[k]?.moved)) || r.delayed)) return null;
+  if (!requests.every(r => r.state === "done")) return null;
+  if (requests.some(r => (r.steps ?? []).some((s, k) => s?.do === "swim" && r.log?.[k]?.swum))) return null;
+  return "sink";
+}
 /** Whether the turn moved on from `prev` to `now` ({ round, turn }), rather than back (the GM stepping the tracker backwards). */
 export const movedOn = (prev = {}, now = {}) => (now.round ?? 0) > (prev.round ?? 0) || ((now.round ?? 0) === (prev.round ?? 0) && (now.turn ?? 0) > (prev.turn ?? 0));
 /** Whether a step moves the monster across the map (a Stride, Step or Crawl). */
@@ -474,6 +518,7 @@ export function doneStep(step, rec = {}) {
   if (step.do === "hide") return { do: "hide", result: rec.applied ? "hid (whether it worked is secret)" : rec.gm ? "card posted for the GM to apply" : "unknown" };
   if (step.do === "seek") return { do: "seek", aim: step.aim, result: rec.applied ? "searched: what it perceives now shows what it found" : rec.gm ? "card posted for the GM to apply" : "unknown" };
   if (step.do === "sneak") { const got = rec.moved?.to; return { do: "sneak", to: step.to, result: `${!got ? "unknown" : same(got, step.to) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]`}${rec.applied ? " (whether it stayed unseen is secret)" : rec.gm ? "; card posted for the GM to apply" : ""}` }; }
+  if (step.do === "swim") { const got = rec.moved?.to; return { do: "swim", to: step.to, result: rec.swim && !rec.swum ? `no progress (it failed its Athletics check to Swim${rec.swim.degree === 0 ? " badly" : ""})` : !got && !rec.swum ? "unknown" : !got || same(got, step.to) ? (same(step.from ?? step.to, step.to) ? "trod water" : "arrived") : `stopped at [${got[0]}, ${got[1]}]` }; }
   if (step.do === "fly") { const got = rec.moved?.to, at = rec.moved?.elev; return { do: "fly", to: step.to, height: step.height, result: !got ? "unknown" : same(got, step.to) && (at == null || at === step.height) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]${at != null ? `, ${at} ft up` : ""}` }; }
   if (isMove(step)) { const got = rec.moved?.to; return { do: step.do, to: step.to, result: !got ? "unknown" : same(got, step.to) ? (step.do === "flee" ? "reached the map's edge" : "arrived") : `stopped at [${got[0]}, ${got[1]}]` }; }
   if (step.do in POSTURES) return { do: step.do, result: rec.changed || rec.stood ? (step.do === "stand" ? "stood" : "dropped") : "unknown" };
@@ -557,6 +602,8 @@ function flyWords(s) {
 export function describeStep(s) {
   if (s.do === "none") return "Does nothing.";
   if (s.do === "fly") return flyWords(s);
+  if (s.do === "swim") { const across = s.from && !same(s.from, s.to), way = across ? headingOf(s.from, s.to) : "", how = s.swimSpeed ? "" : s.dc ? ` (flowing water: an Athletics check, DC ${s.dc}; on a failure it makes no progress)` : " (calm water: an automatic critical success)";
+    return across ? `Swims ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}${s.out ? ", climbing out onto the bank" : ""}${how}.` : `Treads water where it is (Swim 0 ft, so it doesn't sink)${how}.`; }
   if (isMove(s)) { const way = s.from ? headingOf(s.from, s.to) : ""; return `${WORD[s.do]}s ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}${s.do === "sneak" ? " (a secret Stealth check; Visioner applies the result)" : s.do === "flee" ? ` at the ${listWords(s.sides ?? [])} edge of the map: you decide whether it gets away or the map grows` : ""}.`; }
   if (s.do === "hide") return `Hides (a secret Stealth check against each creature it has cover or concealment from; Visioner applies the result).`;
   if (s.do === "seek") return s.aim?.type === "burst" ? `Seeks in a ${s.aim.size}-foot burst from the corner [${s.aim.corner[0]}, ${s.aim.corner[1]}] (a secret Perception check; Visioner applies the result).` : `Seeks in a ${s.aim?.size ?? SEEK.cone}-foot cone toward square ${s.aim?.toward?.[0]}, ${s.aim?.toward?.[1]} (a secret Perception check; Visioner applies the result).`;
