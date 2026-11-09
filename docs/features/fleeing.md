@@ -19,6 +19,7 @@ Designed with Rhea one question at a time on 2026-11-08; she chose the recommend
 8. **Bringing one back:** an **Escaped** section in the Monster Turns window with a **Bring back** button per monster: unhide the token, add it to the combat, roll initiative as for any monster joining a fight. It lands where its token is now (the GM can move it first). The history keeps the escape line and adds a "brought back" line.
 9. **Too far from the edge to arrive this turn:** the thinker runs toward the nearest edge with ordinary Strides (already legal) and plans `flee` once the edge is within what its remaining actions can reach. A Fleeing monster must move away from the source; checked the same way.
 10. **What players see:** the token has already stood on the edge square; when the GM presses Let it get away the module hides it, so the table watches it run off and vanish. **No chat message** (her standing rule: no whispered or extra chat cards). The card and history carry the record.
+11. **End Encounter leaves escaped tokens hidden (Rhea, 2026-11-09):** asked whether escaped tokens should be unhidden when the encounter ends, she answered "stay hidden". No change: they keep their hidden state and flag.
 
 Build choices (Angel, 2026-11-08, within the design; Rhea can change them):
 - **The outermost ring is read from the scene's current bounds** (`scene.dimensions` ÷ grid size), never a stored size, so an extended map has new edges at once.
@@ -61,6 +62,6 @@ Build choices (Angel, 2026-11-08, within the design; Rhea can change them):
 - A Fleeing monster with no reachable edge: the prompt tells the thinker to Stride away from the source; the checker doesn't enforce "away from the source".
 - The thinker gets no hint that the edge is in reach beyond the map's size and its square; it works it out.
 - Extend's effect on other hidden tokens: the Survey Sheet shifts every token, hidden ones too; not yet watched live.
-- Escaped tokens stay hidden after End Encounter (the window then shows no fight, so Bring back is unreachable); unhiding them at the end would be a decision for Rhea. Each flag names its combat, so a later fight doesn't list them.
+- Each escaped token's flag names its combat, so a later fight doesn't list it (the window shows no fight after End Encounter, so Bring back is unreachable then).
 - Reactions to a monster's move (Reactive Strike as it flees) are not built, as for every move.
 - A Stride's diagonal count for the rest of the turn is lost when an extension's shift was recorded as movement (the history is cleared): a 5 ft difference at most.

@@ -1,24 +1,67 @@
 {
-  "scripts": ["scripts"],
-  "functionOwned": ["scripts/fight.mjs", "scripts/turn.mjs"],
+  "scripts": [
+    "scripts"
+  ],
+  "functionOwned": [
+    "scripts/fight.mjs",
+    "scripts/turn.mjs"
+  ],
   "features": "docs/features",
   "changes": "docs/changes",
   "developing": "docs/DEVELOPING.md",
   "manifest": "module.json",
-  "zip": {"path": "dist/lythara-encounter-builder.zip", "include": ["module.json", "scripts"]},
+  "zip": {
+    "path": "dist/lythara-encounter-builder.zip",
+    "include": [
+      "module.json",
+      "scripts"
+    ]
+  },
   "tests": "node tools/test/unit.mjs",
   "mainBranch": "main",
-  "reviewPaths": ["scripts"],
-  "extraDocs": ["README.md", "tools/test/README.md"],
+  "reviewPaths": [
+    "scripts"
+  ],
+  "extraDocs": [
+    "README.md",
+    "tools/test/README.md"
+  ],
   "setupChecks": [
-    {"path": "../lythara-survey-sheet", "hint": "clone the Survey Sheet repo beside this one (the unit tests use its generator)"},
-    {"path": "tools/test/data/spots.json", "hint": "copy the test data from the project docs claude/test-data/*.json"}
+    {
+      "path": "../lythara-survey-sheet",
+      "hint": "clone the Survey Sheet repo beside this one (the unit tests use its generator)"
+    },
+    {
+      "path": "tools/test/data/spots.json",
+      "hint": "copy the test data from the project docs claude/test-data/*.json"
+    }
   ],
   "finishList": [
     "claude/lythara-encounter-builder.md (what changed, what was verified)",
-    "claude/encounter-builder-plan.md status and next step",
     "the lythara-encounter-builder skill card, only if the one-page skill text changed",
     "claude/foundry-version-baseline.md if the installed version changed",
-    "claude/docs-index.md: Last checked for every doc touched, a row for any new doc"
-  ]
+    "claude/docs-index.md: Last checked for every doc touched, a row for any new doc",
+    "claude/encounter-builder-plan.md: Status and Next (the lock and questions are checked by guide)"
+  ],
+  "unverified": "docs/unverified.md",
+  "unverifiedLimit": 8,
+  "closeOutAtLeast": 3,
+  "planDoc": "claude/encounter-builder-plan.md",
+  "pageChecks": [
+    {
+      "id": "calendar-off",
+      "why": "Simple Calendar Reborn's open-on-load comes back on (per browser, every fresh hidden session) and its window covers the canvas; seen in the 0.13.0 and 0.14.0 chats",
+      "script": "tools/setup/calendar-off.js",
+      "pages": "run_script on target bridge, on each started session (gm, player), and in the browser pane's console if it is joined"
+    }
+  ],
+  "handoff": {
+    "load": "Load foundry-module-dev, foundry-test-process, foundry-vtt-operator, foundry-bridge and lythara-encounter-builder; clone bcw3075/foundry-mod-tools and this repo side by side; pull the plan doc into /home/claude/scratch for --plan.",
+    "where": [
+      "claude/docs-index.md (where each fact lives)",
+      "claude/lythara-encounter-builder.md (history)",
+      "docs/features/<name>.md (`guide` prints what a change needs)"
+    ]
+  },
+  "protocol2From": "0.16.1"
 }
