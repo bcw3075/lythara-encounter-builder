@@ -1,9 +1,9 @@
 /* A monster's turn as plain data: what a plan means, whether it's legal, and where a step stands. Pure: no Foundry globals.
    The glue gathers live values first. Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek, fleeing, Interact and Delay; other speeds come as step 2 goes on. */
-import { distanceBetween, headingOf } from "./move.mjs";
+import { FT, distanceBetween, headingOf, heightCost } from "./move.mjs";
 import { placeable } from "./area.mjs";
 /** What each step kind costs. An ability's cost is its own (0 for a free action); 1 here is only the fallback. */
-export const COSTS = { strike: 1, stride: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, flee: 1, interact: 1, delay: 0, none: 0 };
+export const COSTS = { strike: 1, stride: 1, fly: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, flee: 1, interact: 1, delay: 0, none: 0 };
 /* Interact and Delay (0.12.0). Interact (https://2e.aonprd.com/Actions.aspx?ID=2296): 1 action, manipulate; the module can't know what a monster does
    with its hands, so it posts a card saying what, and the GM applies it, as for any ability the module can't run. Restrained bars manipulate actions;
    Grabbed asks a DC 5 flat check for them, lost on a failure. Delay (ID 2294): a free action when its turn begins, so it must be the plan's only step and
@@ -21,10 +21,10 @@ export const SAVE_MULT = [2, 1, 0.5, 0];
 export const FOLLOW_UPS = { grab: "grapple", "improved-grab": "grapple", knockdown: "trip", "improved-knockdown": "trip", push: "shove", "improved-push": "shove", pull: "reposition", "improved-pull": "reposition" };
 export const CHECK_WORD = { grapple: "Grapple", trip: "Trip", shove: "Shove", reposition: "Reposition" };
 const SIZES = ["tiny", "sm", "med", "lg", "huge", "grg"];
-const MOVES = ["stride", "step", "crawl", "sneak", "flee"], ONE_SQUARE = ["step", "crawl"];
+const MOVES = ["stride", "step", "crawl", "sneak", "flee", "fly"], ONE_SQUARE = ["step", "crawl"];
 /** Steps that change only whether the monster is prone, and what they leave it. Rules: Prone (https://2e.aonprd.com/Conditions.aspx?ID=88). */
 export const POSTURES = { stand: false, "drop-prone": true };
-export const WORD = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak", flee: "Flee" };
+export const WORD = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak", flee: "Flee", fly: "Fly" };
 /* Fleeing off the map (Rhea, 2026-11-08): a `flee` step is a Stride that must end on the outermost ring of squares, the map's edge, and must be the plan's
    last step. Once the monster stands there the turn stops and the GM chooses on the card: Extend map (the monster keeps its turn and is asked again
    from a fresh packet) or Let it get away (it leaves the fight; its token stays, hidden and flagged). Ending an ordinary Stride on the ring triggers nothing. */
@@ -84,9 +84,9 @@ export const listWords = (xs = []) => xs.length < 2 ? xs.join("") : `${xs.slice(
     this round). */
 export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
-  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, herePos = ctx.me?.pos ?? here, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, fled = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {}, shots = {};
+  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, herePos = ctx.me?.pos ?? here, hereElev = Number(ctx.me?.elev) || 0, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, fled = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {}, shots = {};
   /* distances from where each creature really stands (pos, fractional off the grid), as PF2e and the packet measure them; after a move, from the square it moved to */
-  const distanceTo = (t, reach) => { const p = t.pos ?? t.square; return herePos && p ? distanceBetween({ x: herePos[0], y: herePos[1], size: ctx.me.span ?? ctx.me.size ?? 1, elev: ctx.me.elev, depth: ctx.me.depth }, { x: p[0], y: p[1], size: t.pos ? t.span ?? t.size ?? 1 : t.size ?? 1, elev: t.elev, depth: t.depth }, { reach }) : t.distance; };
+  const distanceTo = (t, reach) => { const p = t.pos ?? t.square; return herePos && p ? distanceBetween({ x: herePos[0], y: herePos[1], size: ctx.me.span ?? ctx.me.size ?? 1, elev: hereElev, depth: ctx.me.depth }, { x: p[0], y: p[1], size: t.pos ? t.span ?? t.size ?? 1 : t.size ?? 1, elev: t.elev, depth: t.depth }, { reach }) : t.distance; };
   for (const [n, step] of plan.steps.entries()) {
     const at = `Step ${n + 1}`;
     if (!(step.do in COSTS)) return { ok: false, reason: `${at}: I can't do "${step.do}" yet.` };
@@ -151,7 +151,7 @@ export function checkPlan(plan, ctx) {
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
       if (step.do === "stand" && !prone) return { ok: false, reason: `${at}: it isn't prone, so it has nothing to Stand up from.` };
       if (step.do === "drop-prone" && prone) return { ok: false, reason: `${at}: it is already prone.` };
-      if (step.do === "drop-prone" && (ctx.me?.elev ?? 0) > 0) return { ok: false, reason: `${at}: it is ${Math.round(ctx.me.elev)} ft up, and a creature knocked or dropping prone in the air falls instead.` };
+      if (step.do === "drop-prone" && hereElev > 0) return { ok: false, reason: `${at}: it is ${Math.round(hereElev)} ft up, and a creature knocked or dropping prone in the air falls instead.` };
       /* a Take Cover taken while prone gives its greater cover against ranged attacks only while prone, so Standing ends it (Visioner removes its effect) */
       if (step.do === "stand" && tookProne) took = tookProne = false;
       steps.push({ do: step.do }); prone = POSTURES[step.do]; last = { do: step.do }; continue;
@@ -193,9 +193,27 @@ export function checkPlan(plan, ctx) {
       }
       steps.push({ do: "seek", aim }); sought = true; last = { do: "seek" }; continue;
     }
+    if (step.do === "fly") {
+      /* Fly (Rhea, 2026-11-08: a monster moves the way its speeds and the ground allow, by the rules; Rules ID 2344): its fly Speed, ground terrain and
+         deep water no bar, height priced by heightCost. Flying to where it is, at the same height, is a hover (Fly 0 ft), which keeps it aloft. */
+      if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
+      if (prone) return { ok: false, reason: `${at}: it is prone, so it has to Stand first (a "stand" step, 1 action) before it can Fly.` };
+      if (!(ctx.flySpeed > 0)) return { ok: false, reason: `${at}: it has no fly Speed.` };
+      const to = step.to ?? here, height = step.height ?? hereElev;
+      if (!Array.isArray(to)) return { ok: false, reason: `${at}: a Fly needs "to", the square to end on (its own square to hover or change height there).` };
+      if (!Number.isInteger(height) || height < 0 || height % FT) return { ok: false, reason: `${at}: "height" is how high it ends, in feet above the ground: 0 or more, in steps of ${FT}.` };
+      if (!here || !ctx.route) return { ok: false, reason: `${at}: I can't work out moves here.` };
+      let route = [[...here]], cost = 0;
+      if (!same(here, to)) { const way = ctx.route(here, to, routes, { kind: "fly" }); if (!way.ok) return { ok: false, reason: `${at}: ${way.reason}` }; route = way.route; cost = way.cost; }
+      const up = heightCost(route.length - 1, height - hereElev), total = cost + up;
+      if (total > ctx.flySpeed) return { ok: false, reason: `${at}: flying to [${to[0]}, ${to[1]}] at ${height} ft up takes ${total} ft (${cost} ft across${up ? `, ${up} ft for the height` : ""}), more than its fly Speed of ${ctx.flySpeed} ft. Rising costs double; dropping straight down costs half.` };
+      steps.push({ do: "fly", from: [...here], to: [...to], fromHeight: hereElev, height, route, cost: total }); if (route.length > 1) routes.push(route);
+      const across = route.length > 1; here = [...to]; herePos = here; hereElev = height; moved = moved || across || height !== steps.at(-1).fromHeight; if (across) took = tookProne = false; last = { do: "fly" }; continue;   /* Take Cover ends on leaving its square, not on a hover */
+    }
     if (MOVES.includes(step.do)) {
       const word = WORD[step.do], small = ONE_SQUARE.includes(step.do);
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
+      if (hereElev > 0) return { ok: false, reason: `${at}: it is ${Math.round(hereElev)} ft up in the air, so it moves by Fly (a "fly" step); a Fly with "height": 0 lands it.` };
       if (step.do === "crawl" && !prone) return { ok: false, reason: `${at}: it isn't prone; Crawl is how a prone creature moves, so Stride or Step instead.` };
       if (step.do !== "crawl" && prone) return { ok: false, reason: `${at}: it is prone, so it has to Stand first (a "stand" step, 1 action) before it can ${word}, or Crawl 5 ft.` };
       if (!(ctx.speed > 0)) return { ok: false, reason: `${at}: it has no land Speed.` };
@@ -439,6 +457,7 @@ export function doneStep(step, rec = {}) {
   if (step.do === "hide") return { do: "hide", result: rec.applied ? "hid (whether it worked is secret)" : rec.gm ? "card posted for the GM to apply" : "unknown" };
   if (step.do === "seek") return { do: "seek", aim: step.aim, result: rec.applied ? "searched: what it perceives now shows what it found" : rec.gm ? "card posted for the GM to apply" : "unknown" };
   if (step.do === "sneak") { const got = rec.moved?.to; return { do: "sneak", to: step.to, result: `${!got ? "unknown" : same(got, step.to) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]`}${rec.applied ? " (whether it stayed unseen is secret)" : rec.gm ? "; card posted for the GM to apply" : ""}` }; }
+  if (step.do === "fly") { const got = rec.moved?.to, at = rec.moved?.elev; return { do: "fly", to: step.to, height: step.height, result: !got ? "unknown" : same(got, step.to) && (at == null || at === step.height) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]${at != null ? `, ${at} ft up` : ""}` }; }
   if (isMove(step)) { const got = rec.moved?.to; return { do: step.do, to: step.to, result: !got ? "unknown" : same(got, step.to) ? (step.do === "flee" ? "reached the map's edge" : "arrived") : `stopped at [${got[0]}, ${got[1]}]` }; }
   if (step.do in POSTURES) return { do: step.do, result: rec.changed || rec.stood ? (step.do === "stand" ? "stood" : "dropped") : "unknown" };
   if (step.do === "take-cover") return { do: "take-cover", result: rec.covered ? "took cover" : "unknown" };
@@ -509,9 +528,18 @@ export function describeChange(c, nameOf = l => l, self = "It") {
 }
 export const describeChanges = (list = [], nameOf, self) => list.map(c => describeChange(c, nameOf, self)).join(" ");
 
+/** A Fly in plain words: across, up, down, a hover or a landing. */
+function flyWords(s) {
+  const across = s.from && !same(s.from, s.to), way = across ? headingOf(s.from, s.to) : "", h = s.height ?? 0, was = s.fromHeight ?? 0;
+  const where = h ? `${h} ft up` : "on the ground";
+  if (!across && h === was) return `Hovers ${where} (Fly 0 ft, so it stays aloft).`;
+  if (!across) return h > was ? `Flies up to ${h} ft (${s.cost ?? "?"} ft of movement).` : h ? `Flies down to ${h} ft (${s.cost ?? "?"} ft of movement).` : `Flies down and lands (${s.cost ?? "?"} ft of movement).`;
+  return `Flies ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}, ${h ? where : "landing there"}.`;
+}
 /** A resolved step in plain words, for the card. */
 export function describeStep(s) {
   if (s.do === "none") return "Does nothing.";
+  if (s.do === "fly") return flyWords(s);
   if (isMove(s)) { const way = s.from ? headingOf(s.from, s.to) : ""; return `${WORD[s.do]}s ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}${s.do === "sneak" ? " (a secret Stealth check; Visioner applies the result)" : s.do === "flee" ? ` at the ${listWords(s.sides ?? [])} edge of the map: you decide whether it gets away or the map grows` : ""}.`; }
   if (s.do === "hide") return `Hides (a secret Stealth check against each creature it has cover or concealment from; Visioner applies the result).`;
   if (s.do === "seek") return s.aim?.type === "burst" ? `Seeks in a ${s.aim.size}-foot burst from the corner [${s.aim.corner[0]}, ${s.aim.corner[1]}] (a secret Perception check; Visioner applies the result).` : `Seeks in a ${s.aim?.size ?? SEEK.cone}-foot cone toward square ${s.aim?.toward?.[0]}, ${s.aim?.toward?.[1]} (a secret Perception check; Visioner applies the result).`;
@@ -559,12 +587,12 @@ export function nextAction(rec = {}, { apply = false, flat = 0 } = {}) {
   if (!rec.applying) return "apply";
   return rec.applied ? "next" : "ask";
 }
-/** What to do next with a Stride or Step. A move begun before a reload is never sent again: if the monster is where it was going, the step is done;
-    anywhere else, the GM looks. at: the square it stands on now. */
-export function nextMove(rec = {}, at = null, to = null) {
+/** What to do next with a Stride, Step or Fly. A move begun before a reload is never sent again: if the monster is where it was going, the step is done;
+    anywhere else, the GM looks. at: the square it stands on now; for a Fly, elev is its height now and height where the Fly ends. */
+export function nextMove(rec = {}, at = null, to = null, elev = null, height = null) {
   if (rec.moved) return "next";
   if (!rec.started) return "move";
-  return same(at, to) ? "arrived" : "ask";
+  return same(at, to) && (height == null || elev === height) ? "arrived" : "ask";
 }
 /** What to do next with a Stand or Drop Prone. Its card is posted and Prone changed in one go, so one begun before a reload is never sent again: if the
     monster is already as the step leaves it, it counts as done; otherwise the GM looks. Not begun and already as it leaves it (something else stood it

@@ -113,8 +113,8 @@ export function groundAround(model, [i, j], radius = 10, coverAt = .3, takeCover
 export function packetOf({ you, allies = [], others = [], memory = {}, ground = null, round = 0, note = null, done = [] }) {
   const perceived = [], remembered = [];
   for (const o of others) {
-    if (o.state === "observed" || o.state === "concealed") perceived.push({ label: o.label, state: o.state, square: o.square, ...(o.offGrid ? { offGrid: true } : {}), size: o.size, gear: o.gear ?? [], conditions: o.conditions ?? [], healthWord: o.healthWord ?? null, distance: o.distance, cover: o.cover ?? "none" });
-    else if (o.state === "hidden") perceived.push({ label: o.label, state: "hidden", square: o.square });
+    if (o.state === "observed" || o.state === "concealed") perceived.push({ label: o.label, state: o.state, square: o.square, ...(o.height > 0 ? { height: o.height } : {}), ...(o.offGrid ? { offGrid: true } : {}), size: o.size, gear: o.gear ?? [], conditions: o.conditions ?? [], healthWord: o.healthWord ?? null, distance: o.distance, cover: o.cover ?? "none" });
+    else if (o.state === "hidden") perceived.push({ label: o.label, state: "hidden", square: o.square, ...(o.height > 0 ? { height: o.height } : {}) });   /* a hidden creature's space is known, height included */
     else if (o.state === "undetected" && memory[o.id]) remembered.push({ label: o.label, lastSeen: memory[o.id].square, round: memory[o.id].round });
   }
   /* done: what this monster already did this turn, from turn.mjs's doneStep (labels and ids only); note: why it's asked again, in labels */

@@ -116,9 +116,32 @@ export function cutShort(route = [], size = 1, unknown = () => false) {
   return route;
 }
 
+/** What changing height costs on top of a Fly's ground route, by the rules (Rules ID 2344, https://2e.aonprd.com/Rules.aspx?ID=2344): moving upward,
+    straight or diagonally, is difficult terrain, so each 5 ft risen costs 10, but a square moved across while rising is that same 5 ft step (a
+    diagonal upward move into a square costs 10, not 5 + 10); moving straight down costs 5 ft for each 10 ft descended, and height lost while moving
+    across squares costs nothing more. Foundry measures height as a plain third axis, so it can't price this. squares: how many squares the ground route
+    crosses; dz: the change in height, in feet (a multiple of 5). */
+export function heightCost(squares = 0, dz = 0) {
+  const n = Math.max(0, squares), steps = Math.round(Math.abs(dz) / FT);
+  if (dz > 0) return 2 * FT * steps - FT * Math.min(steps, n);
+  if (dz < 0) return Math.ceil(Math.max(0, steps - n) / 2) * FT;
+  return 0;
+}
+/** The height at each square of a Fly's route: it rises or drops 5 ft a square as it goes (as heightCost prices it), and any height left over is
+    changed at the last square. Returns [{ square, elev }] for every square after the first, plus one more at the last square when height is left. */
+export function flyWaypoints(route = [], from = 0, to = 0) {
+  const out = [], dir = Math.sign(to - from); let e = from;
+  for (const sq of route.slice(1)) { if (e !== to) e += dir * FT; out.push({ square: [...sq], elev: e }); }
+  if (e !== to || !out.length) out.push({ square: [...(route.at(-1) ?? [0, 0])], elev: to });
+  return out;
+}
+/** The world as a flier crosses it: ground terrain costs nothing and deep water is no bar, while trunks, rocks, walls and creatures stay as they are
+    (trees are taller than it flies over, and walls stop Foundry's moves at any height). */
+export const flyWorld = w => ({ ...w, terrain: () => 0 });
+
 /** A route's failure in words, for the thinker and the card. Squares stay squares, which is what the thinker plans with. */
 export function routeWords(r, to, speed, kind = "stride") {
-  const sq = `[${to[0]}, ${to[1]}]`, word = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak", flee: "Flee" }[kind] ?? "Stride";
+  const sq = `[${to[0]}, ${to[1]}]`, word = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak", flee: "Flee", fly: "Fly" }[kind] ?? "Stride";
   switch (r.why) {
     case "same": return `it is already at ${sq}.`;
     case "off": return `${sq} is off the map.`;
@@ -128,7 +151,7 @@ export function routeWords(r, to, speed, kind = "stride") {
     case "notNext": return `[${to[0]}, ${to[1]}] isn't next to it: a ${word} moves one square (5 ft).`;
     case "difficult": return kind === "crawl" ? `[${to[0]}, ${to[1]}] is difficult terrain, which would take 10 ft, and a Crawl moves only 5 ft.` : `[${to[0]}, ${to[1]}] is difficult terrain, and a Step can't go into difficult terrain.`;
     case "wall": return `a wall is between it and [${to[0]}, ${to[1]}].`;
-    case "far": return r.cost == null ? `${sq} is far beyond its Speed of ${speed} ft.` : `getting to ${sq} takes ${r.cost} ft, more than its Speed of ${speed} ft.`;
+    case "far": { const what = kind === "fly" ? "fly Speed" : "Speed"; return r.cost == null ? `${sq} is far beyond its ${what} of ${speed} ft.` : `getting to ${sq} takes ${r.cost} ft, more than its ${what} of ${speed} ft.`; }
     default: return `there's no way to ${sq} from where it is.`;
   }
 }

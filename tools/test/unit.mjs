@@ -15,7 +15,7 @@ import { aimText, areaHurt, forThinker, listWords, nextArea } from "../../script
 import { COSTS, SEEK, SIDES, edgeSides, isAttack, nextInteract, nextStealth, revealsAfter, revealsBefore, sneakSpeed } from "../../scripts/turn.mjs";
 import { promptText } from "../../scripts/prompt.mjs";
 import { historyHTML, historyOf, journalHTML, stepResult } from "../../scripts/history.mjs";
-import { cutShort, diagonalsIn, distanceBetween, featureNear, findRoute, findStep, footprintAt, headingOf, routeWords } from "../../scripts/move.mjs";
+import { cutShort, diagonalsIn, distanceBetween, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, headingOf, heightCost, routeWords } from "../../scripts/move.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
 
@@ -201,7 +201,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   /* the campaign words live in the git-ignored .private-words at the repo root (master copy in a private project doc), never here */
   const wordsFile = path.resolve(HERE, "../../.private-words"), words = fs.existsSync(wordsFile) ? fs.readFileSync(wordsFile, "utf8").split("\n").map(l => l.split("#")[0].trim()).filter(Boolean) : null;
   check("prompt names no campaign", words ? !words.some(w => new RegExp(`(?<![A-Za-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9])`, "i").test(h.prompt)) : (console.log("  (no .private-words: campaign-word check skipped)"), true));
-  check("prompt explains asking again", h.promptVersion === 14 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 15 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -892,6 +892,46 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   const ended = historyOf({ requests: { e: { round: 1, combatantId: "c", tokenId: "t", state: "done", why: [{ who: "me", what: "actions", now: 0 }], steps: [], plan: { reason: "r", steps: [] } } } }, { round: 1, order: [] }, { t: "T" })[0].turns[0].parts[0];
   check("history: a turn ended (not asked again) says so", !ended.asked && /The turn ended/.test(ended.lines.at(-1).text));
   check("history: empty fight", /Nothing yet/.test(historyHTML([], esc)));
+}
+/* Fly (0.13.0): height by the rules, the route over deep water, refusals, words, done results, arrival by height, the packet's heights */
+{
+  check("fly: height up straight 10 costs 20", heightCost(0, 10) === 20);
+  check("fly: up 10 across 2 costs 10 extra (two diagonal-up squares at 10 each)", heightCost(2, 10) === 10);
+  check("fly: up 10 across 1 costs 15 extra", heightCost(1, 10) === 15);
+  check("fly: straight down 10 costs 5, 20 costs 10, 5 costs 5", heightCost(0, -10) === 5 && heightCost(0, -20) === 10 && heightCost(0, -5) === 5);
+  check("fly: down while moving across costs nothing more", heightCost(3, -15) === 0 && heightCost(1, -15) === 5);
+  check("fly: level costs nothing", heightCost(4, 0) === 0);
+  check("fly: waypoints rise 5 a square, rest at the end", JSON.stringify(flyWaypoints([[0, 0], [1, 0], [2, 0]], 0, 15)) === JSON.stringify([{ square: [1, 0], elev: 5 }, { square: [2, 0], elev: 10 }, { square: [2, 0], elev: 15 }]));
+  check("fly: waypoints straight up", JSON.stringify(flyWaypoints([[3, 3]], 0, 10)) === JSON.stringify([{ square: [3, 3], elev: 10 }]));
+  check("fly: waypoints descend", JSON.stringify(flyWaypoints([[0, 0], [1, 1]], 10, 0)) === JSON.stringify([{ square: [1, 1], elev: 5 }, { square: [1, 1], elev: 0 }]));
+  check("fly: level waypoints", JSON.stringify(flyWaypoints([[0, 0], [1, 0]], 20, 20)) === JSON.stringify([{ square: [1, 0], elev: 20 }]));
+  const FW = ({ deep = [], solid = [], who = {} } = {}) => ({ cols: 12, rows: 12, terrain: (i, j) => deep.some(p => p[0] === i && p[1] === j) ? null : 0, blocked: (i, j) => solid.some(p => p[0] === i && p[1] === j), creature: (i, j) => who[`${i},${j}`] ?? null, wall: () => false });
+  const water = [[2, 0], [3, 0], [2, 1], [3, 1], [2, 2], [3, 2]];
+  check("fly: a walker can't cross deep water there", !findRoute({ from: [0, 0], to: [5, 0], budget: 30 }, FW({ deep: [...water, [2, 3], [3, 3], [2, 4], [3, 4], [2, 5], [3, 5], [2, 6], [3, 6], [2, 7], [3, 7], [2, 8], [3, 8], [2, 9], [3, 9], [2, 10], [3, 10], [2, 11], [3, 11]] })).ok);
+  check("fly: a flier crosses it", findRoute({ from: [0, 0], to: [5, 0], budget: 30 }, flyWorld(FW({ deep: water }))).cost === 25);
+  check("fly: a trunk still blocks a flier", findRoute({ from: [0, 0], to: [2, 0], budget: 30 }, flyWorld(FW({ solid: [[2, 0]] }))).why === "blocked");
+  const froute = (f, t, before, o) => { const x = findRoute({ from: f, to: t, budget: 40 }, flyWorld(FW())); return x.ok || x.why === "far" ? { ok: true, route: x.route, cost: x.cost } : { ok: false, reason: routeWords(x, t, 40, o?.kind) }; };
+  const fctx = { actions: 3, strikes: [{ id: "talon", name: "Talon", reach: 5 }], targets: { E1: { name: "E1", square: [3, 0], size: 1, elev: 0 } }, me: { square: [0, 0], size: 1, elev: 0 }, speed: 10, flySpeed: 40, cantMove: null, route: froute };
+  let p = checkPlan({ steps: [{ do: "fly", to: [2, 0], height: 10 }] }, fctx); check("fly: across 2 and up 10 costs 20", p.ok && p.steps[0].cost === 20 && p.steps[0].height === 10, JSON.stringify(p));
+  p = checkPlan({ steps: [{ do: "fly", to: [2, 0], height: 10 }, st({ item: "talon", target: "E1" })] }, fctx); check("fly: height counts in reach", !p.ok && /out of reach/.test(p.reason), p.reason);
+  p = checkPlan({ steps: [{ do: "fly", to: [2, 0], height: 5 }, st({ item: "talon", target: "E1" })] }, fctx); check("fly: 5 ft up next to it is in reach", p.ok, p.reason);
+  p = checkPlan({ steps: [{ do: "fly", to: [8, 0], height: 0 }] }, { ...fctx, flySpeed: 0 }); check("fly: no fly Speed", /no fly Speed/.test(p.reason));
+  p = checkPlan({ steps: [{ do: "fly", to: [0, 0], height: 25 }] }, fctx); check("fly: straight up 25 is 50, too far", !p.ok && /takes 50 ft/.test(p.reason), p.reason);
+  p = checkPlan({ steps: [{ do: "fly", to: [0, 0], height: 7 }] }, fctx); check("fly: height in steps of 5", /steps of 5/.test(p.reason));
+  p = checkPlan({ steps: [{ do: "stride", to: [1, 0] }] }, { ...fctx, me: { ...fctx.me, elev: 15 } }); check("fly: no Stride in the air", /in the air, so it moves by Fly/.test(p.reason));
+  p = checkPlan({ steps: [{ do: "fly", to: [0, 0], height: 15 }] }, { ...fctx, me: { ...fctx.me, elev: 15 } }); check("fly: a hover is 0 ft", p.ok && p.steps[0].cost === 0 && /Hovers 15 ft up/.test(describeStep(p.steps[0])));
+  p = checkPlan({ steps: [{ do: "fly", to: [0, 0], height: 0 }, { do: "stride", to: [1, 0] }] }, { ...fctx, me: { ...fctx.me, elev: 20 } }); check("fly: land then Stride", p.ok && p.steps[0].cost === 10 && /lands/.test(describeStep(p.steps[0])), p.reason ?? describeStep(p.steps[0]));
+  p = checkPlan({ steps: [{ do: "fly", to: [1, 0] }] }, { ...fctx, prone: true }); check("fly: not while prone", /prone/.test(p.reason));
+  p = checkPlan({ steps: [{ do: "fly", to: [1, 0] }] }, { ...fctx, cantMove: "it is grabbed." }); check("fly: grabbed can't", /grabbed/.test(p.reason));
+  p = checkPlan({ steps: [{ do: "drop-prone" }] }, { ...fctx, me: { ...fctx.me, elev: 10 } }); check("fly: no Drop Prone in the air", /falls instead/.test(p.reason));
+  p = checkPlan({ steps: [{ do: "fly", to: [3, 0], height: 20 }] }, fctx); check("fly: words across and up", p.ok && /^Flies \d+ ft east, to square 3, 0, 20 ft up\.$/.test(describeStep(p.steps[0])), describeStep(p.steps[0] ?? {}));
+  check("fly: done arrived", doneStep({ do: "fly", to: [3, 0], height: 20 }, { moved: { to: [3, 0], elev: 20 } }).result === "arrived");
+  check("fly: done short of height", /stopped at \[3, 0\], 10 ft up/.test(doneStep({ do: "fly", to: [3, 0], height: 20 }, { moved: { to: [3, 0], elev: 10 } }).result));
+  check("fly: arrival needs the height", nextMove({ started: true }, [3, 0], [3, 0], 20, 20) === "arrived" && nextMove({ started: true }, [3, 0], [3, 0], 0, 20) === "ask" && nextMove({ started: true }, [3, 0], [3, 0]) === "arrived");
+  check("fly: plan keeps height", cleanPlan({ steps: [{ do: "fly", to: [1, 1], height: 15 }] }).plan?.steps[0].height === 15 && !cleanPlan({ steps: [{ do: "fly", to: [1, 1], height: -5 }] }).ok && STEP_KINDS.includes("fly") && COSTS.fly === 1);
+  const pk = packetOf({ you: {}, others: [{ id: "a", state: "observed", label: "E1", square: [1, 1], height: 15 }, { id: "b", state: "hidden", label: "E2", square: [2, 2], height: 10 }, { id: "c", state: "observed", label: "E3", square: [3, 3], height: 0 }] });
+  check("fly: packet heights", pk.perceived[0].height === 15 && pk.perceived[1].height === 10 && !("height" in pk.perceived[2]));
+  check("fly: prompt explains Fly", /"do": "fly"/.test(promptText()) && /falls/.test(promptText()));
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
 for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs", "ui/history.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);
