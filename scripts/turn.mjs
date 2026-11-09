@@ -95,7 +95,7 @@ export const listWords = (xs = []) => xs.length < 2 ? xs.join("") : `${xs.slice(
     through), and route's kind "burrow" with { surface } (it comes up at the end, so the end square must be free of creatures it knows of). */
 export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
-  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, herePos = ctx.me?.pos ?? here, hereElev = Number(ctx.me?.elev) || 0, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, fled = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {}, shots = {};
+  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, herePos = ctx.me?.pos ?? here, hereElev = Number(ctx.me?.elev) || 0, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, surfaced = false, fled = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {}, shots = {};
   /* up a tree it climbed (it holds on there: no Stride, Step and the like until it climbs down), and what it holds in its hands */
   let tree = hereElev > 0 && ctx.onTree ? ctx.onTree : null, below = !!ctx.below; if (below) hereElev = 0;   /* its token sits below 0; once up it stands at 0 */ const holding = new Map((ctx.holding ?? []).map(h => [h.id, h.name])), released = new Set();
   const upTree = word => `it is ${Math.round(hereElev)} ft up the tree at [${tree.at[0]}, ${tree.at[1]}], so it can't ${word} there: a Climb (a "climb" step) with "height": 0 gets it down${ctx.flySpeed > 0 ? `, or it can Fly off` : ""}.`;
@@ -105,6 +105,7 @@ export function checkPlan(plan, ctx) {
     const at = `Step ${n + 1}`;
     if (!(step.do in COSTS)) return { ok: false, reason: `${at}: I can't do "${step.do}" yet.` };
     if (sought) return { ok: false, reason: `${at}: a Seek has to be the plan's last step. You are asked again after it, with what it found.` };
+    if (surfaced) return { ok: false, reason: `${at}: coming up out of the ground has to be the plan's last step: below ground it perceives little, so you are asked again at the surface with what it perceives there.` };
     if (fled) return { ok: false, reason: `${at}: a flee has to be the plan's last step: at the edge the GM decides, and you are asked again if the map is extended.` };
     /* burrowed (0.16.0): earth stands between it and everything (no line of effect, Rules ID 2382), so it can only Burrow (on, or up), Delay or do nothing */
     if (below && !["burrow", "delay", "none"].includes(step.do)) return { ok: false, reason: `${at}: it is burrowed under the ground, where it can't reach, see or affect anything above. A Burrow with "up": true brings it to the surface first (1 action).` };
@@ -316,6 +317,7 @@ export function checkPlan(plan, ctx) {
       if (total > ctx.burrowSpeed) return { ok: false, reason: `${at}: burrowing to [${to[0]}, ${to[1]}]${up ? " and coming up" : ""} takes ${total} ft (${cost} ft across${total > cost ? `, ${total - cost} ft going down or up` : ""}), more than its burrow Speed of ${ctx.burrowSpeed} ft.` };
       steps.push({ do: "burrow", from: [...here], to: [...to], route, cost: total, fromBelow: below, below: endBelow });
       if (route.length > 1) routes.push(route);
+      if (below && !endBelow) surfaced = true;   /* asked again at the surface, uncounted, with what it perceives there (0.16.0 review) */
       here = [...to]; herePos = here; below = endBelow; moved = true; took = tookProne = false; last = { do: "burrow" }; continue;
     }
     if (MOVES.includes(step.do)) {
@@ -664,6 +666,7 @@ export function describeChange(c, nameOf = l => l, self = "It") {
     case "extended": return `The map was extended to the ${c.side ?? "edge"}: there is more ground that way now, and ${who === "It" ? "it keeps its turn" : `${who} keeps its turn`}.${c.side === "north" || c.side === "west" ? " Every square's number shifted by the new strip, so read positions afresh from this packet." : ""}`;
     case "noClimb": return `${who} failed its Athletics check to Climb and made no progress${c.height ? ` (still ${c.height} ft up)` : " (still on the ground)"}.`;
     case "sought": return `${who} finished Seeking: what it perceives now shows what it found.`;
+    case "surfaced": return `${who} came up out of the ground: what it perceives now is what it sees at the surface.`;
     case "noShot": return `${who} couldn't shoot its ${c.item ?? "weapon"}${c.why ? ` (${c.why})` : ""}; ${c.spent ? "the action is spent (its flat check was rolled)" : "the action isn't spent"}.`;
     case "hurt": return `${who} was hurt.`;
     case "healed": return `${who} regained HP.`;

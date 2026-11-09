@@ -230,12 +230,15 @@ const isHeld = actor => ["grabbed", "restrained"].some(c => actor?.hasCondition?
 function tacticsOf(scene, tok) { const page = game.journal.get(scene.getFlag(ID, "build")?.entry)?.pages.find(p => p.name === "Tactics"); return page ? tacticsFor(page.text?.content, tok.getFlag(ID, "group"), localize) : null; }
 /* Allies know where each other are, by default. */
 function alliesOf(scene, tok) { return scene.tokens.contents.filter(t => t.id !== tok.id && t.actor?.isOfType?.("creature") && t.actor.isAllyOf?.(tok.actor)); }
+/** The allies a thinker is told of: those the GM hasn't hidden, and a burrowed one (hidden only because it is below ground) unless the GM had hidden it
+    before it went down (0.16.0 review). The packet and a Delay use the same list. */
+const knownAllies = (scene, tok) => alliesOf(scene, tok).filter(a => !a.hidden || (isBelow(a) && !a.getFlag(ID, "burrowed")?.wasHidden));
 /** What its next diagonal costs this turn, 5 or 10 ft: the 5-10 count runs across all its movement in the turn (Rules ID 444), and Foundry keeps that
     movement as the token's history until the turn changes. The thinker can't see the history, so the packet says it. */
 function nextDiagonalFt(tok, scene) { const px = scene.grid.size, d = scene.dimensions; return diagonalsIn((tok.movementHistory ?? []).map(w => [Math.round((w.x - d.sceneX) / px), Math.round((w.y - d.sceneY) / px)])) % 2 ? 10 : 5; }
 /** A monster's packet as things stand, plus the labels it needs. Writes nothing. turn: what this turn already used ({ spent, attacks, done, note }), on a re-plan. */
 async function buildPacket(combat, tok, turn = {}) {
-  const scene = combat.scene, t = turns(combat), memory = t.memory?.[tok.id] ?? {}, others = sense(combat, tok, memory), allies = alliesOf(scene, tok).filter(a => !a.hidden || isBelow(a));   /* a GM-hidden or escaped ally isn't there for the thinker; a burrowed one is (it knows where its own are) */
+  const scene = combat.scene, t = turns(combat), memory = t.memory?.[tok.id] ?? {}, others = sense(combat, tok, memory), allies = knownAllies(scene, tok);   /* a GM-hidden or escaped ally isn't there for the thinker; a burrowed one is (it knows where its own are) */
   const known = others.filter(o => canTarget(o.state) || (o.state === "undetected" && memory[o.id])), labels = { ...(t.labels ?? {}) };
   const fresh = { ...assignLabels(labels, known.map(o => o.id), "E"), ...assignLabels(labels, [tok.id, ...allies.map(a => a.id)], "M") }; Object.assign(labels, fresh);
   const { model, read } = await readMap(scene), a = tok.actor, h = a.hitPoints, square = squareOf(tok, scene);
@@ -253,7 +256,7 @@ async function buildPacket(combat, tok, turn = {}) {
      judged yet, the request to judge it from a picture (Rhea, 2026-11-08: Angel judges each map in play) */
   const burrows = burrowSpeedOf(a) > 0, isDeep = burrows ? deepWater(scene, model) : null, soil = burrows ? soilOf(scene, model, read, isDeep) : null;
   if (burrows) {
-    const below = isBelow(tok), judge = !read && !groundJudged(scene), shown = judge ? await showGroundPicture(scene).catch(e => { console.warn(`${ID} | ground picture`, e); return false; }) : false;
+    const below = isBelow(tok), judge = !read && !groundJudged(scene), shown = judge && isRunner() ? await showGroundPicture(scene).catch(e => { console.warn(`${ID} | ground picture`, e); return false; }) : false;
     you.burrow = { below, soilHere: footprintAt(square, sizeOf(tok)).every(([i, j]) => soil(i, j)),
       ground: read ? "known: the module read this map (\"r\" on the ground map is rock)" : judge ? "not judged yet: everywhere counts as rock" : "judged: soil is where the GM's soil areas are (\"r\" on the ground map is rock)",
       ...(judge ? { judgeGround: { size: mapSquares(scene), picture: shown ? `a picture of the whole map with numbered squares is on the runner's page, element #${GROUND_EL}` : "no picture could be drawn: judge from the scene's name and the ground map, or answer \"none\"", sceneName: scene.name } } : {}) };
@@ -478,7 +481,7 @@ function alliesByLabel(combat, tok) {
 function turnOrder(combat, tok, req) {
   const out = {}, order = combat.turns ?? [], mine = order.findIndex(c => c.tokenId === tok.id);
   if (mine < 0) return out;   /* not in the order: nothing can be said, so every label reads as unknown */
-  const allies = alliesOf(combat.scene, tok).filter(a => !a.hidden);   /* a GM-hidden ally stays out, as in the packet */
+  const allies = knownAllies(combat.scene, tok);   /* as in the packet: a GM-hidden ally stays out, a burrowed one is there */
   const named = { ...Object.fromEntries(Object.entries(turns(combat).labels ?? {}).filter(([id]) => id === tok.id || allies.some(a => a.id === id)).map(([id, l]) => [l, id])), ...(req.labels ?? {}) };
   for (const [label, tokenId] of Object.entries(named)) { const i = order.findIndex(c => c.tokenId === tokenId); if (i < 0 || order[i].isDefeated || order[i].initiative == null) continue; out[label] = tokenId === tok.id ? "self" : i > mine ? "later" : "earlier"; }
   return out;
@@ -908,7 +911,7 @@ async function runStride(combat, id, i, step, tok) {
     await save(combat, id, change); };
   const now = nextMove(get(), squareOf(tok, scene), step.to, fly ? up() : dig ? isBelow(tok) : null, fly ? step.height : dig ? !!step.below : null);
   if (now === "next") return "next";
-  if (now === "arrived") { await finish({ moved: { to: squareOf(tok, scene), cost: null } }); return "next"; }
+  if (now === "arrived") { if (dig && tok.getFlag(ID, "burrowed") && !isBelow(tok)) await setBelow(tok, false); await finish({ moved: { to: squareOf(tok, scene), cost: null } }); return "next"; }   /* a reload after it came up and before it was shown: show it now (0.16.0 review) */
   if (now === "ask") { await save(combat, id, { note: `${tok.name} started a ${WORD[step.do] ?? "Stride"} and isn't where it was going.` }); return "ask"; }
   if (!stepGate(step.do, id)) return "stopped";
   if (!(await ensureScene(combat) && tok.object)) throw new Error(cantOpen());
@@ -932,9 +935,10 @@ async function runStride(combat, id, i, step, tok) {
   for (const t of scene.tokens) if (t.id !== tok.id && t.actor?.isOfType?.("creature") && !known.has(t.id) && !t.getFlag(ID, "escaped") && !isBelow(t)) for (const [a, b] of footprintAt(squareOf(t, scene), sizeOf(t))) taken.add(`${a},${b}`);   /* an escaped token is gone, not an unknown creature; a burrowed one is under the ground */
   /* a Burrow passes under everyone: only the square it comes up on can be taken (then it stays below, one square short) */
   const endKeys = dig && !step.below ? new Set(footprintAt(step.to, sizeOf(tok)).map(([a, b]) => `${a},${b}`)) : null;
-  let route = cutShort(step.route, sizeOf(tok), (a, b) => taken.has(`${a},${b}`) && (!dig || endKeys?.has(`${a},${b}`)));
-  const surfaceTaken = dig && !step.below && footprintAt(step.to, sizeOf(tok)).some(([a, b]) => taken.has(`${a},${b}`));
-  if (dig && step.route.length === 1 && surfaceTaken) route = [];   /* coming up where it is, into an unseen creature's space: it can't, and stays below */
+  const surfaceTaken = dig && !step.below && [...(endKeys ?? [])].some(k => taken.has(k));
+  /* a Burrow stops one square short of where it would come up into an unseen creature (only the last square: a Large one's footprints overlap along the
+     route), or, coming up where it is, doesn't move at all; either way it stays below (0.16.0 review) */
+  const route = dig ? (surfaceTaken ? step.route.slice(0, -1) : step.route) : cutShort(step.route, sizeOf(tok), (a, b) => taken.has(`${a},${b}`));
   const below = dig ? (surfaceTaken ? true : !!step.below) : null;
   /* a Fly that stops short ends at the height it had reached there; a hover (Fly 0 ft) moves nothing and is recorded as flown */
   const height = fly ? heightWhenCut(up(), step.height, route.length - 1, route.length !== step.route.length) : null;
@@ -947,7 +951,7 @@ async function runStride(combat, id, i, step, tok) {
     : route.slice(1).map(sq => ({ ...at(sq), action }));
   await record({ started: true, ...swum });
   if (dig && !isBelow(tok)) await setBelow(tok, true);
-  const charged = await watched(async () => {
+  const charged = await (async () => { try { return await watched(async () => {
     let got = null; const hook = Hooks.on("moveToken", (doc, mv) => { if (doc.id === tok.id) got = { cost: mv.passed?.cost ?? null, x: mv.destination?.x, y: mv.destination?.y, elevation: mv.destination?.elevation }; });
     try {
       await tok.move(waypoints);
@@ -955,8 +959,7 @@ async function runStride(combat, id, i, step, tok) {
       await within(tok.object?.movementAnimationPromise ?? Promise.resolve(), 10000, "The move's animation didn't finish.").catch(() => {});   /* cover and sight are read from where the token is drawn */
       return got;
     } finally { Hooks.off("moveToken", hook); }
-  });
-  if (dig && !isBelow(tok)) await setBelow(tok, false);   /* up: seen again */
+  }); } finally { if (dig) await setBelow(tok, isBelow(tok)).catch(e => console.warn(`${ID} | burrowing`, e)); } })();   /* hidden only while really below, even if the move failed (0.16.0 review) */
   await finish({ moved: { to: squareOf(tok, scene), cost: charged?.cost ?? null } });
   if (dig && surfaceTaken) await addNote(combat, id, `${tok.name} couldn't come up at square ${step.to[0]}, ${step.to[1]}: something is there. It stays below ground.`);
   if (fly && tok.getFlag(ID, "climbing")) await setClimbing(tok, null).catch(e => console.warn(`${ID} | climbing`, e));   /* it flew off its tree: not holding on any more */
@@ -1895,6 +1898,7 @@ async function runTurn(combat, requestId) {
       if (revealsAfter(step)) await comeOut(combat, requestId, tok, actWords(step), request(combat, requestId).log?.[i]?.attack?.message ?? null).catch(e => console.warn(`${ID} | out of hiding`, e));
       await settleCover(combat, requestId, i + 1, tok, i);   /* its own attack or move ends a Take Cover */
       /* a Seek ends the plan: ask again with what it found, while it has actions left (replan ends the turn otherwise) */
+      if (step.do === "burrow" && step.fromBelow && !step.below && result !== "gm" && request(combat, requestId).state !== "manual") return replan(combat, { ...request(combat, requestId), id: requestId }, i + 1, [isBelow(tok) ? { who: "me", what: "stopped", at: squareOf(tok, combat.scene) } : { who: "me", what: "surfaced" }], tok, { counted: false });   /* a reload before this repeats nothing: the Seek's record says it's done, and this is reached again */   /* up out of the ground (0.16.0): asked again at the surface, as after a Seek */
       if (step.do === "seek" && result !== "gm" && request(combat, requestId).state !== "manual") return replan(combat, { ...request(combat, requestId), id: requestId }, i + 1, [{ who: "me", what: "sought" }], tok, { counted: false });   /* a reload before this repeats nothing: the Seek's record says it's done, and this is reached again */
       /* a Stride, Step or Crawl that ended short of its square: the rest was planned from there, so ask again (the reason names the square, never what stopped it) */
       const at = squareOf(tok, combat.scene);

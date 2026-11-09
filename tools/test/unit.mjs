@@ -1139,11 +1139,13 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   q = checkPlan({ steps: [{ do: "burrow", to: [4, 1] }] }, { ...bctx, me: { ...bctx.me, square: [4, 1] } }); check("burrow: not down from rock", !q.ok && /is rock/.test(q.reason), q.reason);
   const below = { ...bctx, below: true, me: { ...bctx.me, elev: -5 } };
   q = checkPlan({ steps: [{ do: "burrow", to: [7, 1] }, { do: "burrow", to: [7, 1], up: true }] }, below); check("burrow: below, on and up in two actions", q.ok && q.steps[0].cost === 10 && q.steps[1].cost === 5 && /coming up/.test(describeStep(q.steps[1])), q.reason);
-  q = checkPlan({ steps: [{ do: "burrow", to: [6, 1], up: true }, { do: "strike", item: "jaws", target: "E1" }] }, below); check("burrow: up then bite, measured from the surface", q.ok && q.steps.length === 2, q.reason);
+  q = checkPlan({ steps: [{ do: "burrow", to: [6, 1], up: true }, { do: "strike", item: "jaws", target: "E1" }] }, below); check("burrow: coming up from below ends the plan (asked again at the surface)", !q.ok && /last step/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "burrow", to: [6, 1], up: true }] }, below); check("burrow: up alone from below", q.ok && q.steps[0].fromBelow && !q.steps[0].below, q.reason);
+  check("burrow: the surfaced re-plan words", /came up out of the ground/.test(describeChange({ who: "me", what: "surfaced" })));
   q = checkPlan({ steps: [{ do: "burrow", to: [5, 1] }] }, below); check("burrow: already below, nowhere to go", !q.ok && /already below ground/.test(q.reason), q.reason);
   q = checkPlan({ steps: [{ do: "stride", to: [6, 1] }] }, below); check("burrow: no Stride below", !q.ok && /burrowed/.test(q.reason));
   q = checkPlan({ steps: [{ do: "delay", after: "E1" }] }, { ...below, fresh: true, order: { E1: "later" } }); check("burrow: Delay still allowed below", q.ok, q.reason);
-  q = checkPlan({ steps: [{ do: "none" }] }, below); check("burrow: nothing allowed below", q.ok);
+  q = checkPlan({ steps: [{ do: "none" }] }, below); check("burrow: doing nothing is allowed below", q.ok);
   q = checkPlan({ steps: [{ do: "burrow", to: [9, 9], up: true }] }, { ...below, burrowSpeed: 100 }); check("burrow: can't come up on a creature it knows of", !q.ok && /another creature is at \[9, 9\]/.test(q.reason), q.reason);
   q = checkPlan({ steps: [{ do: "burrow", to: [9, 9], up: true }] }, { ...below, me: { ...below.me, square: [9, 9] } }); check("burrow: nor straight up into one", !q.ok && /another creature/.test(q.reason), q.reason);
   q = checkPlan({ steps: [{ do: "burrow", to: [5, 1] }] }, { ...bctx, prone: true }); check("burrow: not while prone", !q.ok && /prone/.test(q.reason));
