@@ -238,7 +238,7 @@ async function buildPacket(combat, tok, turn = {}) {
   const known = others.filter(o => canTarget(o.state) || (o.state === "undetected" && memory[o.id])), labels = { ...(t.labels ?? {}) };
   const fresh = { ...assignLabels(labels, known.map(o => o.id), "E"), ...assignLabels(labels, [tok.id, ...allies.map(a => a.id)], "M") }; Object.assign(labels, fresh);
   const { model, read } = await readMap(scene), a = tok.actor, h = a.hitPoints, square = squareOf(tok, scene);
-  const water = waterKinds(deepWater(scene, model), read), swimming = waterUnder(square, sizeOf(tok), water);   /* "calm" | "flowing" | null */
+  const water = waterKinds(deepWater(scene, model), read), swimming = heightUp(tok) > 0 ? null : waterUnder(square, sizeOf(tok), water);   /* "calm" | "flowing" | null; a flier above the water isn't swimming */
   const speeds = a.system.movement?.speeds ?? {}, extra = Object.fromEntries(["fly", "swim", "climb", "burrow"].filter(k => speeds[k]?.value).map(k => [k, speeds[k].value]));
   const you = { label: labels[tok.id], name: tok.name, square, size: a.size, nextDiagonal: nextDiagonalFt(tok, scene), actionsLeft: Math.max(0, actionsOf(a, combat) - (turn.spent ?? 0)), attacksMade: turn.attacks ?? 0, hp: `${h.value}/${h.max}`, speed: speeds.land?.value ?? 0, ...(Object.keys(extra).length ? { speeds: extra } : {}), ...(heightUp(tok) ? { height: heightUp(tok) } : {}), ...(swimming ? { swimming } : {}), conditions: (a.conditions?.active ?? []).map(c => c.value ? `${c.slug} ${c.value}` : c.slug), strikes: await strikesOf(a, combat, tok), abilities: abilitiesOf(a), tactics: tacticsOf(scene, tok) };
   const book = await spellBook(a); if (book.length) you.spells = spellsOf(book);
@@ -426,7 +426,7 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
   const vis = visionerApi(), coverFrom = {};
   if (vis) for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && SEES.includes(o.state)) { const l = coverOf(vis, o.token, tok); if (STANDARD.includes(l)) coverFrom[label] = l; } }
   return { actions: Math.max(0, actionsOf(actor, combat) - (req.spent ?? 0) - used.actions), attacksBefore: (req.attacks ?? 0) + used.attacks, strikes, targets,
-    me: { square: squareOf(tok, scene), ...placeOf(tok, scene), size: sizeOf(tok), ...heightOf(tok), cat: actor.size ?? null }, speed, flySpeed, swimSpeed, waterAt: route?.waterAt, cantAct: cantAct(actor), cantMove: cantMove(actor), cantAttack: cantAttack(actor), prone: !!actor.hasCondition?.("prone"), route,
+    me: { square: squareOf(tok, scene), ...placeOf(tok, scene), size: sizeOf(tok), ...heightOf(tok), cat: actor.size ?? null }, speed, flySpeed, swimSpeed, waterAt: route?.waterAt, waterIn: route?.waterIn, cantAct: cantAct(actor), cantMove: cantMove(actor), cantAttack: cantAttack(actor), prone: !!actor.hasCondition?.("prone"), route,
     tookCover: takingCover(tok), coverFrom, nearCover: nearCoverFor(scene),
     /* Interact and Delay (0.12.0): grabbed asks a DC 5 flat check of a manipulate action; a Delay needs an untouched turn and a creature still to act this round */
     grabbed: !!actor.hasCondition?.("grabbed"), fresh: !(req.spent ?? 0) && !used.actions && !(req.done?.length) && !before, order: turnOrder(combat, tok, req),
@@ -530,7 +530,7 @@ async function mover(combat, tok, speed, known = null, flySpeed = 0, swimSpeed =
     return { ok: true, route: r.route, cost: measure([...prefix, ...r.route.slice(1)], prefix.length, kind) - measure(prefix) + bank };   /* checkPlan compares the cost with Speed */
   };
   /* the deep water under its footprint at a square, for checkPlan: "calm", "flowing" or null */
-  route.waterAt = sq => waterUnder(sq, size, kind);
+  route.waterAt = sq => waterUnder(sq, size, kind); route.waterIn = sq => waterUnder(sq, size, kind, true);
   return route;
 }
 /** Whether a square of this scene is deep water: Survey Sheet's greater-difficult region named "Deep water" (other greater difficult terrain isn't).
@@ -786,11 +786,14 @@ async function runStride(combat, id, i, step, tok) {
   if (step.do === "swim" && step.dc) {
     let rolled = get().swim;
     if (!rolled) {
+      /* marked before the roll, so a reload between its card and its record asks the GM instead of rolling again (as a follow-up check does) */
+      if (get().swimStarted) { await addNote(combat, id, `${tok.name}'s Swim check may already be in chat: check its card, then move it or press Next step.`); return "ask"; }
+      await record({ swimStarted: true });
       const res = await watched(() => game.pf2e.actions.get("swim").use({ actors: [tok.actor], difficultyClass: { value: step.dc }, event: clickWith("showCheckDialogs") }));
-      const got = (Array.isArray(res) ? res : []).find(x => x?.outcome in DEGREE); if (!got) return "ask";
+      const got = (Array.isArray(res) ? res : []).find(x => x?.outcome in DEGREE); if (!got) { await addNote(combat, id, `${tok.name}'s Swim check gave no result: check the chat.`); return "ask"; }
       rolled = { dc: step.dc, degree: DEGREE[got.outcome], message: got.message?.id ?? null }; await record({ swim: rolled });
     }
-    if (rolled.degree < 2) { await save(combat, id, { log: { [i]: { swim: rolled, moved: { to: squareOf(tok, scene), cost: 0 } } }, note: `${tok.name} failed its Athletics check to Swim (DC ${rolled.dc}) and made no progress.` }); return "next"; }
+    if (rolled.degree < 2) { await save(combat, id, { log: { [i]: { swim: rolled, moved: { to: squareOf(tok, scene), cost: 0 } } }, note: joinNote(combat, id, `${tok.name} failed its Athletics check to Swim (DC ${rolled.dc}) and made no progress.`) }); return "next"; }
   }
   const swum = step.do === "swim" ? { swum: true } : {};   /* an automatic success (a swim Speed, calm water) or a rolled one */
   /* someone it didn't know was there, on the way: the move ends before their space, as the rules say. The thinker is asked again without being told why. */

@@ -223,17 +223,18 @@ export function checkPlan(plan, ctx) {
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
       if (hereElev > 0 && ctx.flySpeed > 0) return { ok: false, reason: `${at}: it is ${Math.round(hereElev)} ft up in the air, so it moves by Fly (a "fly" step); a Fly with "height": 0 lands it.` };
       if (prone) return { ok: false, reason: `${at}: it is prone, so it has to Stand first (a "stand" step, 1 action) before it can Swim.` };
-      if (!here || !ctx.route || !ctx.waterAt) return { ok: false, reason: `${at}: I can't work out moves here.` };
+      if (!here || !ctx.route || !ctx.waterAt || !ctx.waterIn) return { ok: false, reason: `${at}: I can't work out moves here.` };
       const to = step.to ?? here; if (!Array.isArray(to)) return { ok: false, reason: `${at}: a Swim needs "to", the square to end on (its own square to tread water).` };
-      const startW = ctx.waterAt(here), endW = ctx.waterAt(to);
+      /* waterIn: any deep water under its footprint there (a Large creature half on the bank is in the water); waterAt: all of it */
+      const endW = ctx.waterAt(to);
       let route = [[...here]], cost = 0;
-      if (same(here, to)) { if (!startW) return { ok: false, reason: `${at}: it isn't in deep water at [${here[0]}, ${here[1]}], so there is nothing to swim in.` }; }
+      if (same(here, to)) { if (!ctx.waterIn(here)) return { ok: false, reason: `${at}: it isn't in deep water at [${here[0]}, ${here[1]}], so there is nothing to swim in.` }; }
       else {
         const way = ctx.route(here, to, routes, { kind: "swim" }); if (!way.ok) return { ok: false, reason: `${at}: ${way.reason}` };
         route = way.route; cost = way.cost;
-        if (!route.some(sq => ctx.waterAt(sq))) return { ok: false, reason: `${at}: neither [${here[0]}, ${here[1]}] nor [${to[0]}, ${to[1]}] is deep water, so there is nothing to swim in; Stride instead.` };
+        if (!route.some(sq => ctx.waterIn(sq))) return { ok: false, reason: `${at}: neither [${here[0]}, ${here[1]}] nor [${to[0]}, ${to[1]}] is deep water, so there is nothing to swim in; Stride instead.` };
       }
-      const flowing = route.some(sq => ctx.waterAt(sq) === "flowing"), swimmer = ctx.swimSpeed > 0;
+      const flowing = route.some(sq => ctx.waterIn(sq) === "flowing"), swimmer = ctx.swimSpeed > 0;
       const limit = swimmer ? ctx.swimSpeed : swimDistance(ctx.speed ?? 0, flowing ? 2 : 3);
       if (cost > limit) return { ok: false, reason: swimmer ? `${at}: swimming to [${to[0]}, ${to[1]}] takes ${cost} ft, more than its swim Speed of ${ctx.swimSpeed} ft.` : `${at}: swimming to [${to[0]}, ${to[1]}] takes ${cost} ft, and with no swim Speed a Swim goes at most ${limit} ft in ${flowing ? "flowing water (on a success; an Athletics check)" : "calm water (an automatic critical success)"}.` };
       steps.push({ do: "swim", from: [...here], to: [...to], route, cost, water: flowing ? "flowing" : "calm", ...(swimmer ? { swimSpeed: ctx.swimSpeed } : {}), ...(!swimmer && flowing ? { dc: SWIM_DC } : {}), ...(endW ? {} : { out: true }) });
@@ -243,8 +244,8 @@ export function checkPlan(plan, ctx) {
     if (MOVES.includes(step.do)) {
       const word = WORD[step.do], small = ONE_SQUARE.includes(step.do);
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
-      if (ctx.waterAt?.(here)) return { ok: false, reason: `${at}: it is in deep water at [${here[0]}, ${here[1]}], so it moves by Swim (a "swim" step), which can end on the bank; it can't ${word} there.` };
       if (hereElev > 0 && ctx.flySpeed > 0) return { ok: false, reason: `${at}: it is ${Math.round(hereElev)} ft up in the air, so it moves by Fly (a "fly" step); a Fly with "height": 0 lands it.` };
+      if (!(hereElev > 0) && ctx.waterAt?.(here)) return { ok: false, reason: `${at}: it is in deep water at [${here[0]}, ${here[1]}], so it moves by Swim (a "swim" step), which can end on the bank; it can't ${word} there.` };
       if (step.do === "crawl" && !prone) return { ok: false, reason: `${at}: it isn't prone; Crawl is how a prone creature moves, so Stride or Step instead.` };
       if (step.do !== "crawl" && prone) return { ok: false, reason: `${at}: it is prone, so it has to Stand first (a "stand" step, 1 action) before it can ${word}, or Crawl 5 ft.` };
       if (!(ctx.speed > 0)) return { ok: false, reason: `${at}: it has no land Speed.` };
@@ -495,6 +496,9 @@ export function shouldSink({ requests = [], wet = false, dead = false, forward =
   if (requests.some(r => (r.steps ?? []).some((s, k) => s?.do === "delay" && (r.log?.[k]?.ended || r.log?.[k]?.moved)) || r.delayed)) return null;
   if (!requests.every(r => r.state === "done")) return null;
   if (requests.some(r => (r.steps ?? []).some((s, k) => s?.do === "swim" && r.log?.[k]?.swum))) return null;
+  /* "if your last action was entering the water": a Fly that landed it there (the last step it began this round) */
+  const begun = requests.flatMap(r => (r.steps ?? []).map((s, k) => ({ s, rec: r.log?.[k] })).filter(x => x.rec?.started || x.rec?.moved));
+  if (begun.at(-1)?.s?.do === "fly") return null;
   return "sink";
 }
 /** Whether the turn moved on from `prev` to `now` ({ round, turn }), rather than back (the GM stepping the tracker backwards). */
@@ -518,7 +522,7 @@ export function doneStep(step, rec = {}) {
   if (step.do === "hide") return { do: "hide", result: rec.applied ? "hid (whether it worked is secret)" : rec.gm ? "card posted for the GM to apply" : "unknown" };
   if (step.do === "seek") return { do: "seek", aim: step.aim, result: rec.applied ? "searched: what it perceives now shows what it found" : rec.gm ? "card posted for the GM to apply" : "unknown" };
   if (step.do === "sneak") { const got = rec.moved?.to; return { do: "sneak", to: step.to, result: `${!got ? "unknown" : same(got, step.to) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]`}${rec.applied ? " (whether it stayed unseen is secret)" : rec.gm ? "; card posted for the GM to apply" : ""}` }; }
-  if (step.do === "swim") { const got = rec.moved?.to; return { do: "swim", to: step.to, result: rec.swim && !rec.swum ? `no progress (it failed its Athletics check to Swim${rec.swim.degree === 0 ? " badly" : ""})` : !got && !rec.swum ? "unknown" : !got || same(got, step.to) ? (same(step.from ?? step.to, step.to) ? "trod water" : "arrived") : `stopped at [${got[0]}, ${got[1]}]` }; }
+  if (step.do === "swim") { const got = rec.moved?.to; return { do: "swim", to: step.to, result: rec.swim && rec.swim.degree < 2 ? `no progress (it failed its Athletics check to Swim${rec.swim.degree === 0 ? " badly" : ""})` : !got && !rec.swum ? "unknown" : !got || same(got, step.to) ? (same(step.from ?? step.to, step.to) ? "trod water" : "arrived") : `stopped at [${got[0]}, ${got[1]}]` }; }
   if (step.do === "fly") { const got = rec.moved?.to, at = rec.moved?.elev; return { do: "fly", to: step.to, height: step.height, result: !got ? "unknown" : same(got, step.to) && (at == null || at === step.height) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]${at != null ? `, ${at} ft up` : ""}` }; }
   if (isMove(step)) { const got = rec.moved?.to; return { do: step.do, to: step.to, result: !got ? "unknown" : same(got, step.to) ? (step.do === "flee" ? "reached the map's edge" : "arrived") : `stopped at [${got[0]}, ${got[1]}]` }; }
   if (step.do in POSTURES) return { do: step.do, result: rec.changed || rec.stood ? (step.do === "stand" ? "stood" : "dropped") : "unknown" };

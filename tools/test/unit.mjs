@@ -967,14 +967,14 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   const deepAll = (i, j) => j >= 0 && j < 20 && i >= 0 && i < 40;
   const read = { things: { placed: [{ kind: "lake", at: [5, 5], r: 20 }] }, lines: [{ kind: "creek", squares: [[30, 0], [30, 1], [30, 2]] }, { kind: "road", squares: [[20, 0]] }] };
   const kind = waterKinds(deepAll, read);
-  check("swim: water kinds", kind(5, 5) === "calm" && kind(9, 5) === "calm" && kind(30, 1) === "flowing" && kind(26, 1) === "flowing" && kind(20, 1) === "calm" && kind(50, 50) === null, `${kind(9, 5)} ${kind(26, 1)} ${kind(20, 1)}`);
+  check("swim: water kinds", kind(5, 5) === "calm" && kind(9, 5) === "calm" && kind(30, 1) === "flowing" && kind(26, 1) === "flowing" && kind(20, 1) === "flowing" && kind(50, 50) === null, `${kind(9, 5)} ${kind(26, 1)} ${kind(20, 1)}`);
   check("swim: a lake wins over a creek through it", waterKinds(deepAll, { things: { placed: [{ kind: "pond", at: [30, 1], r: 15 }] }, lines: read.lines })(30, 1) === "calm");
   check("swim: no map read means calm", waterKinds(deepAll, null)(30, 1) === "calm");
   check("swim: water under a footprint", waterUnder([5, 5], 2, kind) === "calm" && waterUnder([29, 0], 2, kind) === "flowing" && waterUnder([39, 19], 2, kind) === null);
   /* the legality check */
   const wk = (sq) => pond(sq[0], sq[1]) ? (sq[0] === 6 ? "flowing" : "calm") : null;
-  const sroute = (f, t, before, o) => { const x = findRoute({ from: f, to: t, budget: 60 }, o?.kind === "swim" ? swimWorld(SW(), pond) : SW()); return x.ok || x.why === "far" ? { ok: true, route: x.route, cost: x.cost } : { ok: false, reason: routeWords(x, t, 25, o?.kind) }; };
-  const sctx = { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 5 }], targets: { E1: { name: "E1", square: [8, 2], size: 1, elev: 0 } }, me: { square: [2, 2], size: 1, elev: 0 }, speed: 25, flySpeed: 0, swimSpeed: 0, cantMove: null, route: sroute, waterAt: wk };
+  const sroute = (f, t, before, o) => { const x = findRoute({ from: f, to: t, budget: 60 }, o?.kind === "swim" ? swimWorld(SW(), pond) : SW()); return x.ok || (x.why === "far" && x.route) ? { ok: true, route: x.route, cost: x.cost } : { ok: false, reason: routeWords(x, t, 25, o?.kind) }; };
+  const sctx = { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 5 }], targets: { E1: { name: "E1", square: [8, 2], size: 1, elev: 0 } }, me: { square: [2, 2], size: 1, elev: 0 }, speed: 25, flySpeed: 0, swimSpeed: 0, cantMove: null, route: sroute, waterAt: wk, waterIn: wk };
   let q = checkPlan({ steps: [{ do: "swim", to: [5, 2] }] }, sctx); check("swim: calm water, no swim Speed, 15 ft", q.ok && q.steps[0].cost === 15 && !q.steps[0].dc && q.steps[0].water === "calm" && /automatic critical success/.test(describeStep(q.steps[0])), q.reason ?? JSON.stringify(q.steps));
   q = checkPlan({ steps: [{ do: "swim", to: [5, 0] }] }, { ...sctx, me: { ...sctx.me, square: [2, 4] } }); check("swim: calm water beyond 15 ft refused", !q.ok && /at most 15 ft in calm water/.test(q.reason), q.reason);
   q = checkPlan({ steps: [{ do: "swim", to: [6, 2] }] }, { ...sctx, me: { ...sctx.me, square: [4, 2] } }); check("swim: flowing water needs a check, 10 ft", q.ok && q.steps[0].dc === SWIM_DC && q.steps[0].water === "flowing" && /DC 15/.test(describeStep(q.steps[0])), q.reason ?? JSON.stringify(q.steps));
@@ -985,7 +985,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   q = checkPlan({ steps: [{ do: "step", to: [7, 2] }] }, { ...sctx, me: { ...sctx.me, square: [6, 2] } }); check("swim: no Step out of deep water", !q.ok && /moves by Swim/.test(q.reason), q.reason);
   q = checkPlan({ steps: [{ do: "swim", to: [4, 2] }] }, { ...sctx, me: { ...sctx.me, square: [4, 2] } }); check("swim: treading water is 0 ft", q.ok && q.steps[0].cost === 0 && /Treads water/.test(describeStep(q.steps[0])), q.reason);
   q = checkPlan({ steps: [{ do: "swim", to: [2, 2] }] }, sctx); check("swim: nothing to tread on land", !q.ok && /isn't in deep water/.test(q.reason), q.reason);
-  q = checkPlan({ steps: [{ do: "swim", to: [1, 2] }] }, sctx); check("swim: land to land is no Swim", !q.ok && /nothing to swim in|no way/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "swim", to: [1, 2] }] }, sctx); check("swim: land to land is no Swim", !q.ok && /nothing to swim in/.test(q.reason), q.reason);
   q = checkPlan({ steps: [{ do: "swim", to: [4, 2] }] }, { ...sctx, prone: true }); check("swim: not while prone", !q.ok && /prone/.test(q.reason));
   q = checkPlan({ steps: [{ do: "swim", to: [4, 2] }] }, { ...sctx, cantMove: "it is grabbed." }); check("swim: grabbed can't", /grabbed/.test(q.reason));
   q = checkPlan({ steps: [{ do: "swim", to: [4, 2] }, { do: "swim", to: [5, 2] }, { do: "swim", to: [7, 2] }] }, sctx); check("swim: three Swims, the last onto the bank", q.ok && q.steps.length === 3 && q.steps[2].out, q.reason);
@@ -997,6 +997,27 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("sink: not on land, not dead, not backwards, not twice, not the GM's turn, not after a Delay", shouldSink({ requests: [done([])], wet: false }) === null && shouldSink({ requests: [done([])], wet: true, dead: true }) === null && shouldSink({ requests: [done([])], wet: true, forward: false }) === null && shouldSink({ requests: [done([], {}, { sank: true })], wet: true }) === null && shouldSink({ requests: [{ state: "manual", steps: [] }], wet: true }) === null && shouldSink({ requests: [done([{ do: "delay" }], {}, { delayed: true })], wet: true }) === null);
   check("swim: step kind, cost, plan keeps it, prompt explains it", STEP_KINDS.includes("swim") && COSTS.swim === 1 && cleanPlan({ steps: [{ do: "swim", to: [1, 1] }] }).plan?.steps[0].to?.[0] === 1 && /"do": "swim"/.test(promptText()) && /sink/.test(promptText()));
   check("swim: packet says it is swimming", packetOf({ you: { swimming: "calm" } }).you.swimming === "calm");
+  /* the review's findings (0.14.0) */
+  r = findRoute({ from: [1, 2], to: [4, 2], size: 2, budget: 40 }, swimWorld(SW(), pond)); check("swim: a Large creature swims in from the bank", r.ok && r.cost === 15, JSON.stringify(r));
+  r = findRoute({ from: [4, 2], to: [7, 2], size: 2, budget: 40 }, swimWorld(SW(), pond)); check("swim: a Large creature climbs out", r.ok && r.cost === 15, JSON.stringify(r));
+  r = findRoute({ from: [4, 2], to: [9, 2], size: 2, budget: 40 }, swimWorld(SW(), pond)); check("swim: a Large creature still can't swim across dry land", !r.ok && r.why === "noway", JSON.stringify(r));
+  const lk = sq => waterUnder(sq, 2, (i, j) => pond(i, j) ? "calm" : null), lin = sq => waterUnder(sq, 2, (i, j) => pond(i, j) ? "calm" : null, true);
+  check("swim: water under a half-wet footprint", lk([2, 2]) === null && lin([2, 2]) === "calm" && lk([3, 2]) === "calm" && lin([0, 2]) === null);
+  const lroute = (f, t, before, o) => { const x = findRoute({ from: f, to: t, size: 2, budget: 60 }, o?.kind === "swim" ? swimWorld(SW(), pond) : SW()); return x.ok || (x.why === "far" && x.route) ? { ok: true, route: x.route, cost: x.cost } : { ok: false, reason: routeWords(x, t, 25, o?.kind) }; };
+  q = checkPlan({ steps: [{ do: "swim", to: [2, 2] }] }, { ...sctx, swimSpeed: 25, me: { square: [1, 2], size: 2, elev: 0 }, route: lroute, waterAt: lk, waterIn: lin }); check("swim: Large one square half into the water is a Swim", q.ok, q.reason);
+  q = checkPlan({ steps: [{ do: "swim", to: [4, 2] }, { do: "swim", to: [7, 2] }] }, { ...sctx, swimSpeed: 25, me: { square: [1, 2], size: 2, elev: 0 }, route: lroute, waterAt: lk, waterIn: lin }); check("swim: Large in then out", q.ok && !q.steps[0].out && q.steps[1].out, q.reason);
+  q = checkPlan({ steps: [{ do: "stride", to: [1, 2] }] }, { ...sctx, flySpeed: 40, me: { ...sctx.me, square: [4, 2], elev: 20 } }); check("swim: a flier above the water is told to Fly", !q.ok && /moves by Fly/.test(q.reason), q.reason);
+  check("swim: unknown distance words", routeWords({ ok: false, why: "far", cost: null }, [9, 9], 20, "swim") === "[9, 9] is farther than one Swim can go.");
+  check("sink: not after a Fly landed it in the water", shouldSink({ requests: [done([{ do: "strike" }, { do: "fly" }], { 0: { applied: true }, 1: { started: true, moved: { to: [4, 2] } } })], wet: true }) === null && shouldSink({ requests: [done([{ do: "fly" }, { do: "strike" }], { 0: { started: true, moved: { to: [4, 2] } }, 1: { started: true } })], wet: true }) === "sink");
+  check("swim: a success not moved yet isn't 'no progress'", !/no progress/.test(doneStep({ do: "swim", from: [4, 2], to: [5, 2] }, { swim: { degree: 2 } }).result));
+  /* a wide river: deep water 8 squares either side of its line is still flowing; a pool away from it is calm */
+  const riverDeep = (i, j) => (i >= 0 && i < 30 && j >= 2 && j <= 18) || (i >= 40 && i <= 42 && j >= 5 && j <= 7);
+  const rk = waterKinds(riverDeep, { things: { placed: [] }, lines: [{ kind: "river", squares: Array.from({ length: 30 }, (_, i) => [i, 10]) }] });
+  check("swim: a wide river's edges flow, a separate pool is calm", rk(5, 2) === "flowing" && rk(5, 18) === "flowing" && rk(41, 6) === "calm" && rk(35, 6) === null);
+  const g = groundAround({ cols: 6, rows: 1, idx: (x, y) => y * 6 + x, blocked: [0, 0, 0, 0, 0, 0], costs: [2, 2, 2, 1, 0, 0], cover: [0, 0, 0, 0, 0, 0] }, [3, 0], 3, .3, null, x => x === 0 ? "calm" : x === 1 ? "flowing" : null);
+  check("swim: ground letters W, R and D", g.rows[0] === "WRDd..", JSON.stringify(g.rows));
+  const hl = (rec, step = { do: "swim", from: [4, 2], to: [5, 2] }) => stepResult(step, rec, { card: () => ({ total: 18 }), nameOf: x => x });
+  check("swim: history lines", /no progress/.test(JSON.stringify(hl({ swim: { dc: 15, degree: 1 }, moved: { to: [4, 2] } }))) && !/no progress/.test(JSON.stringify(hl({ swim: { dc: 15, degree: 2 } }))) && /trod water/.test(JSON.stringify(hl({ swum: true, moved: { to: [4, 2] } }, { do: "swim", from: [4, 2], to: [4, 2] }))), JSON.stringify(hl({ swim: { dc: 15, degree: 2 } })));
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
 for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs", "ui/history.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);

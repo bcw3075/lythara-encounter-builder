@@ -46,8 +46,10 @@ function passProblem(at, size, w) {
     if (w.blocked(i, j)) return "blocked";
     if (w.terrain(i, j) == null) return "terrain";
     if (w.creature(i, j) === "enemy") return "occupied";
-    if (w.wet && !w.wet(i, j)) return "dry";   /* a Swim goes through deep water only; its last square may be the bank (findRoute) */
   }
+  /* a Swim goes through water: every square it passes has some deep water under it (a Large creature half on the bank is still swimming in or out);
+     its last square may be dry land, the bank (findRoute) */
+  if (w.wet && !footprintAt(at, size).some(([i, j]) => w.wet(i, j))) return "dry";
   return null;
 }
 /** The extra cost of the squares a step enters: 5 ft for each difficult square, 10 ft for greater, as Foundry charged it (2026-11-07). A Large creature
@@ -149,7 +151,7 @@ export const flyWorld = w => ({ ...w, terrain: () => 0 });
 /** The world as a Swim crosses it (Player Core Swim, Actions ID 2381; swim Speed, Rules ID 2346): only through deep water, which costs no more than an
     open square there, with the last square allowed on the bank (climbing out); walls, trunks, rocks and creatures as for a Stride. wet(i, j): the
     square is deep water. The bank square keeps its own terrain cost. */
-export const swimWorld = (w, wet) => ({ ...w, terrain: (i, j) => wet(i, j) ? 0 : w.terrain(i, j) ?? 2, wet });
+export const swimWorld = (w, wet) => ({ ...w, terrain: (i, j) => wet(i, j) ? 0 : w.terrain(i, j) ?? 2, wet });   /* the part of a footprint on the bank keeps its own cost */
 /** How far a Swim action goes without a swim Speed (Player Core Swim, Actions ID 2381): up to 10 ft, plus 5 ft for every 20 ft of land Speed above 20
     once the land Speed is 40 or more; a critical success adds 5 ft (most calm water is an automatic critical success). degree: 0 critical failure,
     1 failure, 2 success, 3 critical success; no progress below a success. */
@@ -165,20 +167,27 @@ export function swimDistance(landSpeed = 25, degree = 2) {
     within 5 squares of a creek or river line is flowing, and anything else (a pool in a hollow) is calm. Returns (i, j) → "calm" | "flowing" | null. */
 export function waterKinds(deep, read = null) {
   const still = (read?.things?.placed ?? []).filter(p => p.kind === "lake" || p.kind === "pond");
-  const flowing = (read?.lines ?? []).filter(l => l.kind === "creek" || l.kind === "river").flatMap(l => l.squares ?? []);
-  const memo = new Map();
-  return (i, j) => {
-    if (!deep(i, j)) return null;
-    const k = `${i},${j}`; if (memo.has(k)) return memo.get(k);
-    const calm = still.some(p => Math.hypot(i - p.at[0], j - p.at[1]) * FT <= p.r * 1.3 + FT) || !flowing.some(([a, b]) => Math.max(Math.abs(a - i), Math.abs(b - j)) <= 5);
-    memo.set(k, calm ? "calm" : "flowing"); return memo.get(k);
+  const line = new Set((read?.lines ?? []).filter(l => l.kind === "creek" || l.kind === "river").flatMap(l => (l.squares ?? []).map(([a, b]) => `${a},${b}`)));
+  const inStill = (i, j) => still.some(p => Math.hypot(i - p.at[0], j - p.at[1]) * FT <= p.r * 1.3 + FT);
+  const patchOf = new Map(), flows = [];   /* each connected patch of deep water: does a creek or river line run through it (or along its edge)? */
+  const patch = (i, j) => {
+    const k0 = `${i},${j}`; if (patchOf.has(k0)) return patchOf.get(k0);
+    const id = flows.length; let touches = false; const todo = [[i, j]]; patchOf.set(k0, id);
+    for (let n = 0; todo.length && n < 20000; n++) {
+      const [x, y] = todo.pop();
+      for (let b = -1; b <= 1 && !touches; b++) for (let a = -1; a <= 1; a++) if (line.has(`${x + a},${y + b}`)) { touches = true; break; }
+      for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const k = `${x + a},${y + b}`; if (!patchOf.has(k) && deep(x + a, y + b)) { patchOf.set(k, id); todo.push([x + a, y + b]); } }
+    }
+    flows.push(touches); return id;
   };
+  return (i, j) => !deep(i, j) ? null : inStill(i, j) || !line.size || !flows[patch(i, j)] ? "calm" : "flowing";
 }
-/** The water under a creature's whole footprint at [x, y]: null unless every square of it is deep water; "flowing" if any of it is. */
-export function waterUnder(at, size, kind) {
-  let out = "calm";
-  for (const [i, j] of footprintAt(at, size)) { const k = kind(i, j); if (!k) return null; if (k === "flowing") out = "flowing"; }
-  return out;
+/** The water under a creature's footprint at [x, y]: with `any` false (swimming, the packet, the sink note), null unless every square of it is deep
+    water; with `any` true (is there water to swim in at all), null only when none of it is. "flowing" if any deep square of it flows. */
+export function waterUnder(at, size, kind, any = false) {
+  let out = null, dry = false;
+  for (const [i, j] of footprintAt(at, size)) { const k = kind(i, j); if (!k) { dry = true; continue; } if (k === "flowing" || !out) out = k === "flowing" ? "flowing" : out ?? "calm"; }
+  return dry && !any ? null : out;
 }
 
 /** A route's failure in words, for the thinker and the card. Squares stay squares, which is what the thinker plans with. */
@@ -193,7 +202,7 @@ export function routeWords(r, to, speed, kind = "stride") {
     case "notNext": return `[${to[0]}, ${to[1]}] isn't next to it: a ${word} moves one square (5 ft).`;
     case "difficult": return kind === "crawl" ? `[${to[0]}, ${to[1]}] is difficult terrain, which would take 10 ft, and a Crawl moves only 5 ft.` : `[${to[0]}, ${to[1]}] is difficult terrain, and a Step can't go into difficult terrain.`;
     case "wall": return `a wall is between it and [${to[0]}, ${to[1]}].`;
-    case "far": { const what = kind === "fly" ? "fly Speed" : kind === "swim" ? "swimming distance" : "Speed"; return r.cost == null ? `${sq} is far beyond its ${what} of ${speed} ft.` : `getting to ${sq} takes ${r.cost} ft, more than its ${what} of ${speed} ft.`; }
+    case "far": { const what = kind === "fly" ? "fly Speed" : kind === "swim" ? "swimming distance" : "Speed"; if (kind === "swim" && r.cost == null) return `${sq} is farther than one Swim can go.`; return r.cost == null ? `${sq} is far beyond its ${what} of ${speed} ft.` : `getting to ${sq} takes ${r.cost} ft, more than its ${what} of ${speed} ft.`; }
     default: return `there's no way to ${sq} from where it is.`;
   }
 }
