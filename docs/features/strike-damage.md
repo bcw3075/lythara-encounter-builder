@@ -16,6 +16,7 @@ Strikes from a plan, targeting on the runner's account, automatic damage with th
 - **D1 now includes Auto.** The first matrix used Do it only and passed; Auto then rolled the first attack twice. So run the matrix with Auto too, plus a three-Strike plan with real dice.
 
 ## How it works
+- **A character's Strikes (0.18.0):** `strikesWithIds` keeps only a character's Strikes that PF2e has ready and visible (a stowed weapon's isn't ready); every NPC Strike still counts. Its ammunition is PF2e's and Ranged Combat's own (the module takes ammunition only for NPCs); a refused shot with no roll is u-45.
 - **A Strike whose weapon lies on the ground isn't offered (0.15.0):** PF2e keeps an NPC's attack ready after its weapon is dropped, so `strikesOf` leaves out a Strike whose linked weapon (`weaponOf`) is carried "dropped" (after a Release), and `checkPlan` refuses one (`docs/features/moves.md`).
 - **Only the module rolls damage.** Workbench's auto-damage would roll on the card author's browser, with the dialog if that user has dialogs on. So `preCreateChatMessage` adds Workbench's own `noAutoDamageRoll` flag to this module's attack cards, and the module always rolls. One roller, one card, whatever anyone's settings. If Workbench drops that flag you'd see a second damage card, but not double HP, because Workbench never applies damage. Test D1 catches it; re-run D1 after any PF2e, Workbench or Toolbelt update.
 - **No dialogs:** a click event with `shiftKey` equal to the user's dialog setting, because PF2e flips on Shift. `skipDialog` doesn't work.

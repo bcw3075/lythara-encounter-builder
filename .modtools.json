@@ -63,5 +63,6 @@
       "docs/features/<name>.md (`guide` prints what a change needs)"
     ]
   },
-  "protocol2From": "0.16.1"
+  "protocol2From": "0.16.1",
+  "lessonScopeFrom": "0.18.0"
 }

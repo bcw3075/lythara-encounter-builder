@@ -211,7 +211,8 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   /* the campaign words live in the git-ignored .private-words at the repo root (master copy in a private project doc), never here */
   const wordsFile = path.resolve(HERE, "../../.private-words"), words = fs.existsSync(wordsFile) ? fs.readFileSync(wordsFile, "utf8").split("\n").map(l => l.split("#")[0].trim()).filter(Boolean) : null;
   check("prompt names no campaign", words ? !words.some(w => new RegExp(`(?<![A-Za-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9])`, "i").test(h.prompt)) : (console.log("  (no .private-words: campaign-word check skipped)"), true));
-  check("prompt explains asking again", h.promptVersion === 19 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains the party's side", /"you\.side": "party"/.test(h.prompt) && /don't plan "flee"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 20 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -311,6 +312,9 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("prompt teaches interact and delay", /"do": "interact", "what"/.test(hello(1).prompt) && /"do": "delay", "after"/.test(hello(1).prompt) && /DC 5 flat check/.test(hello(1).prompt));
   check("flee must be last", /last step/.test(checkPlan({ steps: [{ do: "flee", to: [0, 1] }, st({ item: "jaws", target: "E1" })] }, fctx).reason ?? ""));
   check("stride then flee", checkPlan({ steps: [{ do: "stride", to: [0, 5] }, { do: "flee", to: [0, 1] }] }, { ...fctx, me: { square: [4, 5], size: 1 } }).ok);
+  /* the party's side (0.18.0): a party member the GM plays, or an NPC with the party, doesn't flee off the map in a plan */
+  check("party side can't flee", /party's side/.test(checkPlan({ steps: [{ do: "flee", to: [0, 1] }] }, { ...fctx, party: true }).reason ?? ""));
+  check("party side still strides", checkPlan({ steps: [{ do: "stride", to: [0, 5] }] }, { ...fctx, party: true, me: { square: [4, 5], size: 1 } }).ok);
   check("flee needs the map's bounds", /where this map ends/.test(checkPlan({ steps: [{ do: "flee", to: [0, 1] }] }, mctx).reason ?? ""));
   check("a Stride onto the ring is just a Stride", checkPlan({ steps: [{ do: "stride", to: [0, 1] }] }, fctx).steps[0].sides === undefined);
   check("flee costs an action and is a move", COSTS.flee === 1 && isMove({ do: "flee" }) && STEP_KINDS.includes("flee") && spentBy([{ do: "flee" }]).actions === 1);

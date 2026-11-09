@@ -3,7 +3,7 @@ import { ID, build, clear, findCreatures, markDrawn, markReady, nextToParty, pla
 import { BuildApp, askClear, askReplace } from "./ui/build.mjs";
 import { TurnsApp } from "./ui/turns.mjs";
 import { HistoryApp, onPreDeleteCombat, saveHistory } from "./ui/history.mjs";
-import { busy, checkOnly, keepTurn, saveTurn, currentRequest, doIt, fightState, hold, onCombatUpdate, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
+import { busy, untickParty, checkOnly, keepTurn, saveTurn, currentRequest, doIt, fightState, hold, onCombatUpdate, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
 
 const CONTROL = "encounters", apps = new Map(); let turnsApp = null, historyApp = null, historyTimer = null;
 /* the history window fills in live; many flag writes come in a burst during a turn, so one redraw per quarter second */
@@ -41,6 +41,8 @@ Hooks.on("getSceneControlButtons", controls => {
 /* canvasReady goes through Hooks.call, so a handler returning false stops every later module's handler. No handler here returns anything. */
 Hooks.on("lythara-survey-sheet.encounterDrawn", scene => { markDrawn(scene); });
 Hooks.on("canvasReady", c => { markReady(c.scene?.id); redrawTurns(); });
+/* a party member's ticks last one fight (0.18.0): the runner clears them when the fight is deleted */
+Hooks.on("deleteCombat", combat => { untickParty(combat).catch(e => console.warn(`${ID} | untick`, e)); });
 for (const h of ["createCombat", "deleteCombat", "createCombatant", "updateCombatant", "deleteCombatant", "deleteToken"]) Hooks.on(h, () => { redrawTurns(); });
 /* a brief sent from a chat shows up in an open window */
 Hooks.on("updateScene", (scene, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}.brief`) && !scene.getFlag(ID, "build")) { const app = apps.get(scene.id); if (app?.rendered) { app.loadBrief(); app.render(); } } });

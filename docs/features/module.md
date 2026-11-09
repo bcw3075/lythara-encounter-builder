@@ -11,6 +11,7 @@ The module's glue: settings, the Encounters left-bar group, hooks and the `api` 
 (none recorded yet)
 
 ## How it works
+- **`deleteCombat` (0.18.0):** besides redrawing Monster Turns, the runner clears a party member's Angel and Auto ticks (`untickParty`, `docs/features/turn-loop.md`).
 - **`pauseGame` hook (0.11.0):** redraws the Monster Turns window, whose card says when Auto is waiting on the game's pause (`docs/features/turn-loop.md`).
 **Design-era text (from the plan; where it and the lines above disagree, the lines above, written from the code, win):**
 **The design in one page**

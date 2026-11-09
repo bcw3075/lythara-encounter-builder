@@ -29,7 +29,18 @@ const request = (combat, id) => turns(combat).requests[id];
 export const currentRequest = combat => currentOf(turns(combat).requests, combat.round, combat.combatant?.id);   /* only this turn's: an old unfinished one stays out of the way */
 /** The last finished turn, if it left something for the GM to read. */
 export const lastNote = combat => latestNote(turns(combat).requests);
-const hostile = t => t.actor?.isOfType?.("npc");
+/** A party member the GM plays (Rhea, 2026-11-09: "the option is OK to be there, but always have the default be unticked"): a character no player owns.
+    Angel can run it like a monster, only when the GM ticks it; the module never ticks it. */
+export const partyMember = actor => !!actor?.isOfType?.("character") && !actor.hasPlayerOwner && actor.alliance === "party";   /* a villain built as a character isn't one (0.18.0 review) */
+/** Who Angel can run: a monster (any NPC, on either side) or a party member the GM plays. */
+export const runnable = t => !!t?.actor?.isOfType?.("npc") || partyMember(t?.actor);
+/** On the party's side (a party member, or an NPC fighting with the party): fleeing off the map is a monster's escape, not theirs. */
+const onParty = actor => actor?.alliance === "party";
+/** What the thinker calls a character (0.18.0): never its name (the module's rule: no PC's name goes to the thinker), but its ancestry and class. */
+const kindOf = actor => [actor?.ancestry?.name, actor?.class?.name].filter(Boolean).join(" ") || (actor?.type === "familiar" ? "familiar" : actor?.isOfType?.("npc") ? "companion" : "party member");
+/** Only a monster's own kind of name goes to the thinker: an NPC no player owns. A character, a familiar or a player's companion (often named after its
+    master or given a pet's name) goes as what it is (0.18.0 review). */
+const nameFor = tok => tok.actor?.isOfType?.("npc") && !tok.actor.hasPlayerOwner ? tok.name : kindOf(tok.actor);
 /** HP with temporary HP, for the history's "from 18 to 9" (kept on the step's record when damage is applied). */
 const hpNow = tok => (tok?.actor?.hitPoints?.value ?? 0) + (tok?.actor?.hitPoints?.temp ?? 0);
 const tokenOf = (combat, c) => c?.token ?? null;
@@ -54,7 +65,7 @@ const within = (work, ms, words) => { let timer; return Promise.race([work, new 
    token isn't a vision source. So: core's own sight and sound tests on the fight scene, the light at the target, the monster's senses, then Visioner's record on top. */
 const onFightScene = combat => canvas.ready && canvas.scene?.id === combat.scene?.id;
 /** The monster's Strikes with the ids plans use. */
-const strikesWithIds = actor => { const list = (actor.system.actions ?? []).filter(a => a.type === "strike"), ids = strikeIds(list.map(a => ({ slug: a.slug ?? a.item?.id, ranged: !!a.item?.isRanged }))); return list.map((a, i) => ({ id: ids[i], strike: a })); };
+const strikesWithIds = actor => { const list = (actor.system.actions ?? []).filter(a => a.type === "strike" && (actor.isOfType?.("npc") || (a.ready !== false && a.visible !== false))),   /* a character's Strike with a stowed weapon isn't ready; an NPC's always counts (a Goblin's worn shortbow shoots) */ ids = strikeIds(list.map(a => ({ slug: a.slug ?? a.item?.id, ranged: !!a.item?.isRanged }))); return list.map((a, i) => ({ id: ids[i], strike: a })); };
 const conditionsOn = actor => (actor.conditions?.active ?? []).map(c => c.slug);
 const squareOf = (tok, scene) => { const px = scene.grid.size, d = scene.dimensions; return [Math.round((tok.x - d.sceneX) / px), Math.round((tok.y - d.sceneY) / px)]; };
 /** Where a token really is for distances, as PF2e's `distanceTo` measures it (its `mechanicalBounds`, PF2e 8.7.0): { pos, span } in squares, pos fractional
@@ -153,7 +164,8 @@ const localize = k => game.i18n.localize(k);
     Grab, Knockdown, Push or Pull rolls (FOLLOW_UPS), with `effect` the word a Strike's effects list for it. */
 function abilityList(actor) {
   const seen = new Map();
-  const list = (actor.itemTypes?.action ?? []).map(i => {
+  const own = [...(actor.itemTypes?.action ?? []), ...(actor.isOfType?.("npc") ? [] : (actor.itemTypes?.feat ?? []).filter(i => ["action", "free", "reaction"].includes(i.system.actionType?.value)))];   /* a character's actions are mostly feats (0.18.0 review) */
+  const list = own.map(i => {
     const slug = i.slug ?? game.pf2e.system.sluggify(i.name), n = (seen.get(slug) ?? 0) + 1; seen.set(slug, n);
     const kind = i.system.actionType?.value ?? "passive", f = i.system.frequency;
     return { item: i, id: n === 1 ? slug : `${slug}-${n}`, name: i.name, kind, cost: kind === "action" ? (i.actionCost?.value ?? i.system.actions?.value ?? 1) : kind === "free" ? 0 : null,
@@ -227,7 +239,8 @@ function spellsOf(book) {
 /** The spell a step casts, found again by its entry and item. */
 const spellFor = (actor, step) => { const entry = actor.spellcasting?.get(step.entryId); const spell = entry?.spells?.get(step.spellId) ?? actor.items.get(step.spellId); return entry && spell ? { entry, spell } : null; };
 const isHeld = actor => ["grabbed", "restrained"].some(c => actor?.hasCondition?.(c));
-function tacticsOf(scene, tok) { const page = game.journal.get(scene.getFlag(ID, "build")?.entry)?.pages.find(p => p.name === "Tactics"); return page ? tacticsFor(page.text?.content, tok.getFlag(ID, "group"), localize) : null; }
+function tacticsOf(scene, tok) { if (onParty(tok.actor)) return null;   /* the Tactics page is the monsters' plans: a party member or an NPC with the party knows none of it (0.18.0 review) */
+  const page = game.journal.get(scene.getFlag(ID, "build")?.entry)?.pages.find(p => p.name === "Tactics"); return page ? tacticsFor(page.text?.content, tok.getFlag(ID, "group"), localize) : null; }
 /* Allies know where each other are, by default. */
 function alliesOf(scene, tok) { return scene.tokens.contents.filter(t => t.id !== tok.id && t.actor?.isOfType?.("creature") && t.actor.isAllyOf?.(tok.actor)); }
 /** The allies a thinker is told of: those the GM hasn't hidden, and a burrowed one (hidden only because it is below ground) unless the GM had hidden it
@@ -244,7 +257,7 @@ async function buildPacket(combat, tok, turn = {}) {
   const { model, read } = await readMap(scene), a = tok.actor, h = a.hitPoints, square = squareOf(tok, scene);
   const water = waterKinds(deepWater(scene, model), read), swimming = heightUp(tok) > 0 ? null : waterUnder(square, sizeOf(tok), water);   /* "calm" | "flowing" | null; a flier above the water isn't swimming */
   const speeds = a.system.movement?.speeds ?? {}, extra = Object.fromEntries(["fly", "swim", "climb", "burrow"].filter(k => speeds[k]?.value).map(k => [k, speeds[k].value]));
-  const you = { label: labels[tok.id], name: tok.name, square, size: a.size, nextDiagonal: nextDiagonalFt(tok, scene), actionsLeft: Math.max(0, actionsOf(a, combat) - (turn.spent ?? 0)), attacksMade: turn.attacks ?? 0, hp: `${h.value}/${h.max}`, speed: speeds.land?.value ?? 0, ...(Object.keys(extra).length ? { speeds: extra } : {}), ...(heightUp(tok) ? { height: heightUp(tok) } : {}), ...(swimming ? { swimming } : {}), conditions: (a.conditions?.active ?? []).map(c => c.value ? `${c.slug} ${c.value}` : c.slug), strikes: await strikesOf(a, combat, tok), abilities: abilitiesOf(a), tactics: tacticsOf(scene, tok) };
+  const you = { label: labels[tok.id], name: nameFor(tok), ...(onParty(a) ? { side: "party" } : {}), square, size: a.size, nextDiagonal: nextDiagonalFt(tok, scene), actionsLeft: Math.max(0, actionsOf(a, combat) - (turn.spent ?? 0)), attacksMade: turn.attacks ?? 0, hp: `${h.value}/${h.max}`, speed: speeds.land?.value ?? 0, ...(Object.keys(extra).length ? { speeds: extra } : {}), ...(heightUp(tok) ? { height: heightUp(tok) } : {}), ...(swimming ? { swimming } : {}), conditions: (a.conditions?.active ?? []).map(c => c.value ? `${c.slug} ${c.value}` : c.slug), strikes: await strikesOf(a, combat, tok), abilities: abilitiesOf(a), tactics: tacticsOf(scene, tok) };
   const book = await spellBook(a); if (book.length) you.spells = spellsOf(book);
   /* Climb and Release (0.15.0): what it holds (a Climb needs both hands free), weapons it let go of, and the trees near it, tallest guess included */
   const held = heldItems(a); if (held.length) you.holding = held.map(({ id, name }) => ({ id, name }));
@@ -276,7 +289,7 @@ async function buildPacket(combat, tok, turn = {}) {
   const tried = t.stealth?.[tok.id] ?? null;
   you.stealth = { lastTried: tried ? `${tried.did === "sneak" ? "Sneaked" : "Hid"} in round ${tried.round}, and has only Hidden, Sneaked or Stepped since` : null, light: lightOn(tok.object.center, scene), concealed: !!a.hasCondition?.("concealed"), standardCoverFrom: coverList };   /* the real list: Taking Cover itself allows a Hide */
   const packet = packetOf({ you, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], ground: groundAround(model, square, GROUND_RADIUS, undefined, takeCoverSquares(scene), water, soil && !glides ? (x, y) => !soil(x, y) && !model.blocked[model.idx(x, y)] && !water(x, y) : null),
-    allies: allies.map(x => ({ label: labels[x.id], name: x.name, square: squareOf(x, scene), ...(heightUp(x) ? { height: heightUp(x) } : {}), ...(isBelow(x) ? { below: true } : {}), healthWord: wordsFor(x.actor), conditions: visibleConditions(conditionsOn(x.actor)) })),
+    allies: allies.map(x => ({ label: labels[x.id], name: nameFor(x), square: squareOf(x, scene), ...(heightUp(x) ? { height: heightUp(x) } : {}), ...(isBelow(x) ? { below: true } : {}), healthWord: wordsFor(x.actor), conditions: visibleConditions(conditionsOn(x.actor)) })),
     others: others.map(o => ({ id: o.id, state: o.state, label: labels[o.id], square: o.square, height: heightUp(o.token), offGrid: offGrid(o.token, scene), size: o.token.actor.size, distance: o.distance, gear: gearOf(o.token.actor), conditions: visibleConditions(conditionsOn(o.token.actor)), healthWord: wordsFor(o.token.actor), cover: cover?.getAutoCoverState?.(tok.object, o.token.object) ?? "none" })) });
   return { packet, labels: labelsOf(others.map(o => ({ id: o.id, state: o.state, label: labels[o.id] }))), fresh, others };
 }
@@ -284,7 +297,7 @@ async function buildPacket(combat, tok, turn = {}) {
 async function noteWhatTheySense(combat) {
   if (!onFightScene(combat)) return;
   const t = turns(combat), change = {};
-  for (const c of combat.combatants) { const tok = c.token; if (!tok?.object || !tok.getFlag(ID, "run") || !hostile(tok) || tok.actor?.isDead) continue;
+  for (const c of combat.combatants) { const tok = c.token; if (!tok?.object || !tok.getFlag(ID, "run") || !runnable(tok) || tok.actor?.isDead) continue;
     const mem = t.memory?.[tok.id] ?? {}, now = remember(mem, sense(combat, tok, mem), combat.round);
     for (const [id, m] of Object.entries(now)) change[`memory.${tok.id}.${id}`] = m; }
   if (Object.keys(change).length) await saveTurns(combat, change);
@@ -303,7 +316,8 @@ export async function perceived(tokenId, combat = game.combat) {
 const starting = new Set();
 async function onTurnChange(combat) {
   if (!isRunner() || !combat?.started) return;
-  const combatant = combat.combatant, tok = tokenOf(combat, combatant); if (!tok?.getFlag(ID, "run") || !hostile(tok)) return;
+  const combatant = combat.combatant, tok = tokenOf(combat, combatant); if (!tok?.getFlag(ID, "run") || !runnable(tok)) return;
+  if (partyMember(tok.actor) && isDown(tok.actor)) return;   /* dying or unconscious: its turn (the recovery check) is the GM's, and every plan would be refused (0.18.0 review) */
   const key = `${combat.id}.${combat.round}.${combatant.id}`; if (starting.has(key)) return;
   /* a Delay ends the request and the monster comes back later this round for a whole new turn (0.12.0): a delayed request never blocks it */
   const mine = Object.values(turns(combat).requests).filter(r => r.combatantId === combatant.id && r.round === combat.round);
@@ -354,7 +368,7 @@ export function onCombatUpdate(combat, change) {
     herself, or one ended by a Delay, is left alone: the GM may have flown it by hand, and a Delay hasn't ended its turn. prev: Combat#previous. */
 async function fallIfAloft(combat, prev) {
   if (!prev?.combatantId || prev.round == null) return;
-  const c = combat.combatants.get(prev.combatantId), tok = c?.token; if (!tok?.getFlag(ID, "run") || !hostile(tok)) return;
+  const c = combat.combatants.get(prev.combatantId), tok = c?.token; if (!tok?.getFlag(ID, "run") || !runnable(tok)) return;
   const fall = heightUp(tok), mine = Object.entries(turns(combat).requests ?? {}).filter(([, r]) => r.combatantId === c.id && r.round === prev.round).sort((a, b) => (a[1].at ?? 0) - (b[1].at ?? 0));
   const what = shouldFall({ requests: mine.map(([, r]) => r), height: fall, flies: flySpeedOf(tok.actor) > 0, dead: !!tok.actor?.isDead, forward: movedOn(prev, { round: combat.round, turn: combat.turn }), clinging: !!treeUp(tok, combat.scene) });
   if (!what) return;
@@ -392,7 +406,7 @@ async function fallDamage(tok, fall) {
     says so on its card. Same guards as the fall (`shouldSink`); `sank` is saved with the note so a second turn change can't repeat it. */
 async function sinkNote(combat, prev) {
   if (!prev?.combatantId || prev.round == null) return;
-  const c = combat.combatants.get(prev.combatantId), tok = c?.token; if (!tok?.getFlag(ID, "run") || !hostile(tok)) return;
+  const c = combat.combatants.get(prev.combatantId), tok = c?.token; if (!tok?.getFlag(ID, "run") || !runnable(tok)) return;
   const mine = Object.entries(turns(combat).requests ?? {}).filter(([, r]) => r.combatantId === c.id && r.round === prev.round).sort((a, b) => (a[1].at ?? 0) - (b[1].at ?? 0));
   const wet = await stillInWater(combat, tok);
   if (!shouldSink({ requests: mine.map(([, r]) => r), wet: !!wet, dead: !!tok.actor?.isDead, forward: movedOn(prev, { round: combat.round, turn: combat.turn }) })) return;
@@ -474,7 +488,7 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
     /* Interact and Delay (0.12.0): grabbed asks a DC 5 flat check of a manipulate action; a Delay needs an untouched turn and a creature still to act this round */
     grabbed: !!actor.hasCondition?.("grabbed"), fresh: !(req.spent ?? 0) && !used.actions && !(req.done?.length) && !before, order: turnOrder(combat, tok, req),
     /* flee: the map's edges as the scene stands now (an extended map has new bounds), never a stored size */
-    edgeAt: (sq, n) => edgeSides(sq, n, ...mapSquares(scene)),
+    edgeAt: (sq, n) => edgeSides(sq, n, ...mapSquares(scene)), party: onParty(actor),
     /* Hide: the light at a square (where it stands, or will after a move) and its own concealment */
     lightAt: sq => { const px = scene.grid.size, d = scene.dimensions, n = sizeOf(tok); return lightOn({ x: d.sceneX + (sq[0] + n / 2) * px, y: d.sceneY + (sq[1] + n / 2) * px }, scene); }, concealed: !!actor.hasCondition?.("concealed"),
     /* abilities, and its last action before this plan (a Grab or Knockdown needs it): the step just done, or the last thing done before a re-plan */
@@ -1976,7 +1990,7 @@ async function runTurn(combat, requestId) {
       if (revealsAfter(step)) await comeOut(combat, requestId, tok, actWords(step), request(combat, requestId).log?.[i]?.attack?.message ?? null).catch(e => console.warn(`${ID} | out of hiding`, e));
       await settleCover(combat, requestId, i + 1, tok, i);   /* its own attack or move ends a Take Cover */
       /* a Seek ends the plan: ask again with what it found, while it has actions left (replan ends the turn otherwise) */
-      if (step.do === "burrow" && step.fromBelow && !step.below && result !== "gm" && request(combat, requestId).state !== "manual") return replan(combat, { ...request(combat, requestId), id: requestId }, i + 1, [isBelow(tok) ? { who: "me", what: "stopped", at: squareOf(tok, combat.scene) } : { who: "me", what: "surfaced" }], tok, { counted: false });   /* a reload before this repeats nothing: the Seek's record says it's done, and this is reached again */   /* up out of the ground (0.16.0): asked again at the surface, as after a Seek */
+      if (step.do === "burrow" && !step.below && (step.fromBelow || isBelow(tok)) && result !== "gm" && request(combat, requestId).state !== "manual") return replan(combat, { ...request(combat, requestId), id: requestId }, i + 1, [isBelow(tok) ? { who: "me", what: "stopped", at: squareOf(tok, combat.scene) } : { who: "me", what: "surfaced" }], tok, step.fromBelow ? { counted: false } : {});   /* a reload before this repeats nothing: the Seek's record says it's done, and this is reached again */   /* up out of the ground (0.16.0): asked again at the surface, as after a Seek; and (0.18.0) one meant to come up that was stopped short below, even from the surface and as the last step, so it isn't left underground with actions unspent */
       if (step.do === "seek" && result !== "gm" && request(combat, requestId).state !== "manual") return replan(combat, { ...request(combat, requestId), id: requestId }, i + 1, [{ who: "me", what: "sought" }], tok, { counted: false });   /* a reload before this repeats nothing: the Seek's record says it's done, and this is reached again */
       /* a Stride, Step or Crawl that ended short of its square: the rest was planned from there, so ask again (the reason names the square, never what stopped it) */
       const at = squareOf(tok, combat.scene);
@@ -2145,3 +2159,11 @@ export const playMyself = (combat, id) => save(combat, id, { state: "manual" });
 /** A GM's press on the card (Do it, Next step, Hold, Play it myself, Roll it for them), for the history window. Keyed by time so two browsers never
     write over each other. Only real presses: Auto's own runs don't come here. */
 export const notePress = (combat, id, what, extra = {}) => save(combat, id, { presses: { [Date.now()]: { do: what, user: game.user.name, pos: request(combat, id)?.pos ?? 0, ...extra } } }).catch(e => console.warn(`${ID} | history`, e));
+
+/** A party member's Angel and Auto ticks last one fight (Rhea: "always have the default be unticked"): cleared when the fight is deleted, on the runner
+    only, so a ticked party member doesn't come up ticked in the next fight (0.18.0 review). */
+export async function untickParty(combat) {
+  if (!isRunner()) return;
+  for (const c of combat.combatants) { const tok = c.token; if (!tok || !partyMember(tok.actor)) continue;
+    for (const k of ["run", "auto"]) if (tok.getFlag(ID, k) != null) await tok.unsetFlag(ID, k).catch(e => console.warn(`${ID} | untick`, e)); }
+}

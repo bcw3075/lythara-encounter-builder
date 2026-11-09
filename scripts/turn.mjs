@@ -345,6 +345,7 @@ export function checkPlan(plan, ctx) {
       if (way.cost > limit) return { ok: false, reason: step.do === "sneak" ? `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, and a Sneak moves at most half its Speed (${limit} ft).` : `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, more than its Speed of ${ctx.speed} ft.` };
       let sides = null;
       if (step.do === "flee") {
+        if (ctx.party) return { ok: false, reason: `${at}: it fights on the party's side, and leaving the fight off the map is for the GM to decide, not a plan step.` };
         if (!ctx.edgeAt) return { ok: false, reason: `${at}: I can't tell where this map ends, so it can't flee off it here.` };
         sides = ctx.edgeAt(step.to, ctx.me?.size ?? 1);
         if (!sides.length) return { ok: false, reason: `${at}: a flee has to end on the outermost ring of squares, at the map's edge; [${step.to[0]}, ${step.to[1]}] isn't on it. Stride toward the edge instead and flee once it is within reach.` };

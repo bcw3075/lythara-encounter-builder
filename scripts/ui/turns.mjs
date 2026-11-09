@@ -3,7 +3,7 @@ import { SIDES, WORD, describeChanges, describeStep, isMove, listWords } from ".
 import { esc } from "../journal.mjs";
 import { describeKnows } from "../perceive.mjs";
 import { ID } from "../builder.mjs";
-import { applySetting, brainListening, bringBack, runnerName, escapedList, extendMap, extendProblem, letGo, notePress, brainSeenAt, clock, currentRequest, doIt, hold, lastNote, playMyself, rollFor, runnerProblem } from "../fight.mjs";
+import { applySetting, partyMember, runnable, brainListening, bringBack, runnerName, escapedList, extendMap, extendProblem, letGo, notePress, brainSeenAt, clock, currentRequest, doIt, hold, lastNote, playMyself, rollFor, runnerProblem } from "../fight.mjs";
 import { LISTEN_MS, stallWords } from "../brain.mjs";
 
 const STYLE = `.leb-turns .window-content{overflow-y:auto;padding:8px 12px}.leb-turns .leb-t{display:grid;grid-template-columns:1fr 58px 44px;gap:4px;align-items:center}.leb-turns .leb-cur{font-weight:700}.leb-turns .leb-card{border:1px solid #0006;padding:6px 8px;margin-top:8px}.leb-turns .leb-warn{color:#e07050}.leb-turns .leb-card.leb-stall{border-color:#e0a030;background:#e0a03022}.leb-turns .leb-stallw{color:#e0a030;font-weight:700}.leb-turns .leb-btns{display:flex;gap:6px;margin-top:6px}.leb-turns .leb-btns button{flex:1}.leb-turns .leb-listen{margin:0 0 6px;opacity:.8}.leb-turns .leb-listen i{color:#888}.leb-turns .leb-listen.on i{color:#4caf50}.leb-turns li.leb-done{opacity:.6}.leb-turns li.leb-next{font-weight:700}.leb-turns .leb-esc{margin-top:8px}.leb-turns .leb-esc .leb-t{grid-template-columns:1fr 110px}.leb-turns .leb-edge{font-weight:700}`;
@@ -13,7 +13,7 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
   async _renderHTML() {
     if (!document.getElementById("leb-turns-style")) { const s = document.createElement("style"); s.id = "leb-turns-style"; s.textContent = STYLE; document.head.append(s); }
     const c = this.combat; if (!c) return "<p>No fight on this scene.</p>";
-    const rows = c.combatants.filter(x => x.actor?.isOfType?.("npc") && x.token).map(x => `<div class="leb-t ${c.combatant?.id === x.id ? "leb-cur" : ""}" data-token="${x.token.id}"><span>${esc(x.token.name)}</span><label title="Angel runs this"><input type="checkbox" name="run" ${x.token.getFlag(ID, "run") ? "checked" : ""}> Angel</label><label title="Act without waiting for Do it"><input type="checkbox" name="auto" ${x.token.getFlag(ID, "auto") ? "checked" : ""}> Auto</label></div>`).join("");
+    const rows = c.combatants.filter(x => x.token && runnable(x.token)).map(x => `<div class="leb-t ${c.combatant?.id === x.id ? "leb-cur" : ""}" data-token="${x.token.id}"><span>${esc(x.token.name)}${partyMember(x.actor) ? " (party)" : ""}</span><label title="Angel runs this"><input type="checkbox" name="run" ${x.token.getFlag(ID, "run") ? "checked" : ""}> Angel</label><label title="Act without waiting for Do it"><input type="checkbox" name="auto" ${x.token.getFlag(ID, "auto") ? "checked" : ""}> Auto</label></div>`).join("");
     const r = currentRequest(c), problem = runnerProblem(), on = brainListening(); let card = "";
     const listen = `<p class="leb-listen ${on ? "on" : ""}"><i class="fa-solid fa-circle"></i> ${on ? "Angel is listening." : "Angel isn't listening."}</p>`;
     const deaf = r?.state === "requested" && r.packet && !r.gaveUp && !on ? `<p class="leb-warn">Angel isn't listening. Play it yourself, or in the chat say go.</p>` : "";

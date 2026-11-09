@@ -1,14 +1,17 @@
 ---
 feature: packet
 files: [scripts/perceive.mjs]
-functions: [fight.mjs:hostile, fight.mjs:hpNow, fight.mjs:tokenOf, fight.mjs:lightOn, fight.mjs:enemiesOf, fight.mjs:sense, fight.mjs:healthWords, fight.mjs:isDeadNow, fight.mjs:wordsFor, fight.mjs:gearOf, fight.mjs:actionsOf, fight.mjs:localize, fight.mjs:tacticsOf, fight.mjs:alliesOf, fight.mjs:buildPacket, fight.mjs:noteWhatTheySense, fight.mjs:perceived, fight.mjs:cantOpen, fight.mjs:packetExtras, fight.mjs:isDown, fight.mjs:conditionWords, fight.mjs:conditionsOn]
+functions: [fight.mjs:runnable, fight.mjs:onParty, fight.mjs:kindOf, fight.mjs:nameFor, fight.mjs:hpNow, fight.mjs:tokenOf, fight.mjs:lightOn, fight.mjs:enemiesOf, fight.mjs:sense, fight.mjs:healthWords, fight.mjs:isDeadNow, fight.mjs:wordsFor, fight.mjs:gearOf, fight.mjs:actionsOf, fight.mjs:localize, fight.mjs:tacticsOf, fight.mjs:alliesOf, fight.mjs:buildPacket, fight.mjs:noteWhatTheySense, fight.mjs:perceived, fight.mjs:cantOpen, fight.mjs:packetExtras, fight.mjs:isDown, fight.mjs:conditionWords, fight.mjs:conditionsOn]
 dependsOn: [distances]
 since: 0.10.0
 ---
 What a monster perceives: the packet built at the start of its turn, senses, light, memory, labels, health words; `packetOf` is the only way anything about others gets in.
 
 ## Decisions
-(none recorded yet)
+- **No PC's name to the thinker, on either side (0.18.0):** only an NPC no player owns goes by its name (`nameFor`); anything else (a character, a familiar, a player's companion, which are often named after their master or given a pet's name) goes as what it is (`kindOf`: ancestry and class, "Human Fighter", or "familiar", "companion", "party member"): as the `name` in `you` when Angel runs a party member the GM plays, and as an ally's `name` when the one acting fights on the party's side. Monsters' names are unchanged.
+- **The party's side gets no Tactics (0.18.0 review):** the build's Tactics page is the GM's plans for the monsters, so `tacticsOf` gives a party member, or an NPC with the party, nothing (before, a token with no group got the whole page).
+- **A character's sheet (0.18.0 review):** its Strikes are only those PF2e has ready and visible (a stowed weapon isn't; an NPC's Strikes all count, since a Goblin's worn shortbow shoots), and its abilities include its feats that are actions, free actions or reactions (a character's actions are mostly feats). Before 0.18.0 an NPC fighting with the party got its party allies' names in `allies` (found while building the party-member tick).
+- **`you.side: "party"` (0.18.0)** for anything on the party's side (PF2e's `alliance`): a party member the GM plays, or an NPC fighting with the party. The prompt (version 20) tells the thinker what it means. Sides themselves (who is an enemy, who an ally) were already PF2e's `isEnemyOf`/`isAllyOf` from the acting creature, so nothing else changes with the side.
 
 ## How it works
 - **Earth Glide (0.17.0):** a glider's `you.burrow` also has `glides: true`, `walls` (how the map's walls are known: Survey Sheet's own, judged, or not yet) and, when its scene has walls of its own and none are judged, `judgeWalls` (the same picture fields as `judgeGround`); its `ground` text says rock doesn't stop it, and it is never asked `judgeGround`; `soilHere` means it can go down there (rock included).
@@ -77,6 +80,7 @@ Result per pair: `observed / concealed / hidden / undetected / unnoticed`.
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.
 **What a monster perceives:**:
+- (pk-5) {live} A party member the GM plays, ticked: its packet has `you.side` "party", its own `name` its ancestry and class (not its name), its allies (the PCs) by label and ancestry and class only, the monsters in `perceived`; scan it for every PC name in the fight.
 - (pk-1) {live} `api.fight.perceived(tokenId, combat)` on the runner shows it with no turn needed, so change one thing and read the states: scene darkness at 0.5 and 0.9 with a creature with no senses, one with low-light, one with darkvision; a light on a target; a solid wall with sound on and off; `vis.setVisibility` hidden, undetected, concealed and back; a core-hidden token; invisible, blinded, dazzled.
 - (pk-2) {live} Scan a real packet for PC names, HP, AC, level, saves and slots outside `you`.
 - (pk-3) {live} A real Hide changes it, through Visioner's Apply All.
