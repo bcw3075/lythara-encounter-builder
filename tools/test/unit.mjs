@@ -17,6 +17,8 @@ import { promptText } from "../../scripts/prompt.mjs";
 import { historyHTML, historyOf, journalHTML, stepResult } from "../../scripts/history.mjs";
 import { cutShort, diagonalsIn, distanceBetween, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, headingOf, heightCost, heightWhenCut, routeWords, swimDistance, swimWorld, waterKinds, waterUnder } from "../../scripts/move.mjs";
 import { SWIM_DC, movedOn, shouldFall, shouldSink } from "../../scripts/turn.mjs";
+import { CLIMB_DC, climbResult, nextClimb } from "../../scripts/turn.mjs";
+import { climbDistance, treeTop, treesBeside } from "../../scripts/move.mjs";
 import { verticalGap } from "../../scripts/area.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
@@ -203,7 +205,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   /* the campaign words live in the git-ignored .private-words at the repo root (master copy in a private project doc), never here */
   const wordsFile = path.resolve(HERE, "../../.private-words"), words = fs.existsSync(wordsFile) ? fs.readFileSync(wordsFile, "utf8").split("\n").map(l => l.split("#")[0].trim()).filter(Boolean) : null;
   check("prompt names no campaign", words ? !words.some(w => new RegExp(`(?<![A-Za-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9])`, "i").test(h.prompt)) : (console.log("  (no .private-words: campaign-word check skipped)"), true));
-  check("prompt explains asking again", h.promptVersion === 16 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 17 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -1018,6 +1020,71 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("swim: ground letters W, R and D", g.rows[0] === "WRDd..", JSON.stringify(g.rows));
   const hl = (rec, step = { do: "swim", from: [4, 2], to: [5, 2] }) => stepResult(step, rec, { card: () => ({ total: 18 }), nameOf: x => x });
   check("swim: history lines", /no progress/.test(JSON.stringify(hl({ swim: { dc: 15, degree: 1 }, moved: { to: [4, 2] } }))) && !/no progress/.test(JSON.stringify(hl({ swim: { dc: 15, degree: 2 } }))) && /trod water/.test(JSON.stringify(hl({ swum: true, moved: { to: [4, 2] } }, { do: "swim", from: [4, 2], to: [4, 2] }))), JSON.stringify(hl({ swim: { dc: 15, degree: 2 } })));
+}
+/* Climb and Release (0.15.0): Rhea, 2026-11-08: trees, height by size, hands by the rule; Player Core Climb (Actions ID 2374), climb Speed (Rules ID 2349), Release (ID 2300) */
+{
+  check("climb: tree heights from the trunk", treeTop(0.48) === 15 && treeTop(0.78) === 15 && treeTop(1.28) === 20 && treeTop(1.6) === 25 && treeTop(2.4) === 30 && treeTop(3.12) === 35 && treeTop(0) === 10 && treeTop(9) === 40 && treeTop(undefined) === 20);
+  check("climb: distance without a climb Speed", climbDistance(25, 2) === 5 && climbDistance(25, 3) === 10 && climbDistance(30, 2) === 5 && climbDistance(40, 2) === 10 && climbDistance(60, 2) === 15 && climbDistance(25, 1) === 0 && climbDistance(25, 0) === 0);
+  const T = [{ at: [4, 4], top: 15 }, { at: [6, 4], top: 25 }, { at: [10, 10], top: 30 }];
+  check("climb: trees beside a square", JSON.stringify(treesBeside([5, 5], 1, T).map(t => t.at)) === "[[6,4],[4,4]]" && treesBeside([8, 8], 1, T).length === 0 && treesBeside([8, 8], 2, T).length === 1 && treesBeside([9, 9], 1, T)[0]?.top === 30 && treesBeside([4, 4], 1, T)[0]?.at[0] === 4);
+  check("climb: a Large creature's footprint reaches further", treesBeside([7, 2], 2, T).map(t => t.top).join() === "25");
+  const cctx = (o = {}) => ({ actions: 3, strikes: [{ id: "dogslicer", name: "Dogslicer", reach: 5, weapon: "dogslicer" }, { id: "shortbow", name: "Shortbow", ranged: true, maxRange: 300 }], targets: { E1: { name: "E1", square: [5, 9], size: 1, elev: 0 } },
+    me: { square: [5, 5], size: 1, elev: 0 }, speed: 25, flySpeed: 0, swimSpeed: 0, climbSpeed: 0, cantMove: null, route: () => ({ ok: true, route: [[5, 5], [5, 6]], cost: 5 }), waterAt: () => null, waterIn: () => null,
+    treesAt: sq => treesBeside(sq, 1, T), onTree: null, holding: [], ...o });
+  let q = checkPlan({ steps: [{ do: "climb", height: 5 }] }, cctx());
+  check("climb: up 5 ft with a check", q.ok && q.steps[0].dc === CLIMB_DC && CLIMB_DC === 15 && q.steps[0].height === 5 && q.steps[0].fromHeight === 0 && JSON.stringify(q.steps[0].tree) === "[6,4]" && q.steps[0].top === 25 && /Athletics check, DC 15/.test(describeStep(q.steps[0])), q.reason ?? JSON.stringify(q.steps));
+  q = checkPlan({ steps: [{ do: "climb", height: 10 }] }, cctx()); check("climb: 10 ft refused without a climb Speed", !q.ok && /at most 5 ft/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "climb", height: 5 }, { do: "climb", height: 10 }, { do: "climb", height: 15 }] }, cctx()); check("climb: three Climbs, 15 ft", q.ok && q.steps[2].fromHeight === 10, q.reason);
+  q = checkPlan({ steps: [{ do: "climb", height: 20 }] }, cctx({ climbSpeed: 20 })); check("climb: a climb Speed goes its Speed with no check", q.ok && !q.steps[0].dc && q.steps[0].climbSpeed === 20 && /no check/.test(describeStep(q.steps[0])), q.reason);
+  q = checkPlan({ steps: [{ do: "climb", height: 30 }] }, cctx({ climbSpeed: 40 })); check("climb: not above the tree's top", !q.ok && /about 25 ft tall/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "climb", height: 10, tree: [4, 4] }] }, cctx({ climbSpeed: 20 })); check("climb: names a tree beside it", q.ok && q.steps[0].top === 15, q.reason);
+  q = checkPlan({ steps: [{ do: "climb", height: 5, tree: [10, 10] }] }, cctx()); check("climb: a tree not beside it", !q.ok && /isn't beside it/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "climb", height: 5 }] }, cctx({ me: { square: [8, 0], size: 1, elev: 0 } })); check("climb: no tree, no Climb", !q.ok && /no tree beside it/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "climb", height: 7 }] }, cctx()); check("climb: height in 5-ft steps", !q.ok && /steps of 5/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "climb" }] }, cctx()); check("climb: needs a height", !q.ok && /needs "height"/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "climb", height: 0 }] }, cctx()); check("climb: already there", !q.ok && /already 0 ft up/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "climb", height: 5 }] }, cctx({ prone: true })); check("climb: not while prone", !q.ok && /prone/.test(q.reason));
+  q = checkPlan({ steps: [{ do: "climb", height: 5 }] }, cctx({ cantMove: "it is grabbed, so it can't use move actions." })); check("climb: grabbed can't", /grabbed/.test(q.reason));
+  q = checkPlan({ steps: [{ do: "climb", height: 5 }] }, cctx({ waterAt: () => "calm" })); check("climb: not from deep water", !q.ok && /moves by Swim/.test(q.reason), q.reason);
+  /* hands, by the rule */
+  const held = { holding: [{ id: "dogslicer", name: "Dogslicer" }] };
+  q = checkPlan({ steps: [{ do: "climb", height: 5 }] }, cctx(held)); check("climb: hands must be free", !q.ok && /both hands free/.test(q.reason) && /Dogslicer/.test(q.reason) && /release/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "release", item: "dogslicer" }, { do: "climb", height: 5 }, { do: "strike", item: "shortbow", target: "E1" }] }, cctx(held));
+  check("climb: release then climb then shoot", q.ok && q.steps[0].do === "release" && q.steps[0].itemName === "Dogslicer" && spentBy(q.steps).actions === 2 && COSTS.release === 0, q.reason);
+  q = checkPlan({ steps: [{ do: "release", item: "Dogslicer" }, { do: "strike", item: "dogslicer", target: "E1" }] }, cctx({ ...held, targets: { E1: { name: "E1", square: [5, 6], size: 1, elev: 0 } } }));
+  check("release: no Strike with what it let go of", !q.ok && /on the ground \(released earlier/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "strike", item: "dogslicer", target: "E1" }] }, cctx({ strikes: [{ id: "dogslicer", name: "Dogslicer", reach: 5, dropped: true }], targets: { E1: { name: "E1", square: [5, 6], size: 1, elev: 0 } } }));
+  check("release: no Strike with a weapon on the ground", !q.ok && /Dogslicer is on the ground,/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "release", item: "axe" }] }, cctx(held)); check("release: only what it holds", !q.ok && /it holds Dogslicer/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "release", item: "dogslicer" }] }, cctx({ ...held, cantAttack: "it is restrained, so it can't attack." })); check("release: restrained can't", !q.ok && /restrained/.test(q.reason));
+  q = checkPlan({ steps: [{ do: "release", item: "dogslicer" }] }, cctx({ ...held, grabbed: true })); check("release: grabbed asks a flat check", q.ok && q.steps[0].flat === 5 && /flat check/.test(describeStep(q.steps[0])));
+  q = checkPlan({ steps: [{ do: "release", item: "dogslicer" }, { do: "release", item: "dogslicer" }] }, cctx(held)); check("release: not twice", !q.ok && /holds nothing/.test(q.reason), q.reason);
+  /* up a tree */
+  const up = cctx({ me: { square: [5, 5], size: 1, elev: 15 }, onTree: { at: [6, 4], top: 25 } });
+  q = checkPlan({ steps: [{ do: "stride", to: [5, 6] }] }, up); check("climb: no Stride up a tree", !q.ok && /up the tree at \[6, 4\]/.test(q.reason) && /"height": 0/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "step", to: [5, 6] }] }, up); check("climb: no Step up a tree", !q.ok && /can't Step there/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "swim", to: [5, 6] }] }, up); check("climb: no Swim up a tree", !q.ok && /can't Swim there/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "drop-prone" }] }, up); check("climb: no Drop Prone up a tree", !q.ok && /15 ft up/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "climb", height: 10 }, { do: "climb", height: 5 }, { do: "climb", height: 0 }, { do: "stride", to: [5, 6] }] }, { ...up, actions: 4 }); check("climb: down, then Stride", q.ok && q.steps[2].height === 0 && /to the ground/.test(describeStep(q.steps[2])), q.reason);
+  q = checkPlan({ steps: [{ do: "climb", height: 10, tree: [4, 4] }] }, up); check("climb: only the tree it is up", !q.ok && /only Climb that one/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "strike", item: "shortbow", target: "E1" }] }, up); check("climb: shoots from up a tree", q.ok, q.reason);
+  q = checkPlan({ steps: [{ do: "strike", item: "dogslicer", target: "E1" }] }, { ...up, targets: { E1: { name: "E1", square: [5, 6], size: 1, elev: 0 } } }); check("climb: 15 ft up is out of a 5-ft reach", !q.ok && /out of reach/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "climb", height: 5 }] }, cctx({ me: { square: [5, 5], size: 1, elev: 10 } })); check("climb: up on something that isn't its tree", !q.ok && /isn't a tree it climbed/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "fly", to: [5, 6], height: 10 }, { do: "climb", height: 0 }] }, { ...up, flySpeed: 40 }); check("climb: a Fly off the tree leaves it", !q.ok && /up in the air/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "stride", to: [5, 6] }] }, { ...up, flySpeed: 40 }); check("climb: a flier up a tree is told it can Fly off", !q.ok && /Fly off/.test(q.reason), q.reason);
+  q = checkPlan({ steps: [{ do: "take-cover" }, { do: "climb", height: 5 }, { do: "take-cover" }] }, cctx({ nearCover: () => true })); check("climb: leaving its square up ends Take Cover", q.ok, q.reason);
+  check("climb: reveals a hidden monster", revealsBefore({ do: "climb" }) && revealsBefore({ do: "release" }));
+  /* falling and the resume rule */
+  const done = (steps, log = {}) => ({ state: "done", steps, log });
+  check("climb: a flier up a tree holds on", shouldFall({ requests: [done([{ do: "strike" }])], height: 15, flies: true, clinging: true }) === null && shouldFall({ requests: [done([{ do: "strike" }])], height: 15, flies: true }) === "fall");
+  const st = { do: "climb", height: 5, dc: 15 };
+  check("climb: next stage", nextClimb({}, st, 0) === "roll" && nextClimb({ climbStarted: true }, st, 0) === "ask" && nextClimb({ climbStarted: true, climb: { degree: 2 } }, st, 0) === "move" && nextClimb({ climb: { degree: 1 } }, st, 0) === "next" && nextClimb({ climb: { degree: 0 }, fell: { from: 0 } }, st, 0) === "next" && nextClimb({ climb: { degree: 2 }, started: true }, st, 5) === "arrived" && nextClimb({ climb: { degree: 2 }, started: true }, st, 0) === "ask" && nextClimb({}, { do: "climb", height: 20, climbSpeed: 20 }, 0) === "move" && nextClimb({ moved: { elev: 5 } }, st, 5) === "next");
+  check("climb: done words", climbResult(st, { climb: { degree: 2 }, moved: { elev: 5 } }) === "arrived, 5 ft up" && /no progress/.test(climbResult(st, { climb: { degree: 1 } })) && /fell 10 ft, took 5 damage and landed prone/.test(climbResult(st, { fell: { from: 10, damage: 5, prone: true } })) && climbResult({ do: "climb", height: 0 }, { moved: { elev: 0 } }) === "back on the ground" && doneStep(st, { moved: { elev: 5 } }).result === "arrived, 5 ft up" && doneStep({ do: "release", itemName: "Dogslicer" }, { dropped: true }).result === "dropped it");
+  check("climb: step kinds, costs, the plan keeps tree and height, the prompt explains both", STEP_KINDS.includes("climb") && STEP_KINDS.includes("release") && COSTS.climb === 1 && cleanPlan({ steps: [{ do: "climb", height: 10, tree: [3, 4] }, { do: "release", item: "dogslicer" }] }).plan?.steps[0].tree?.[1] === 4 && cleanPlan({ steps: [{ do: "climb", height: 10 }] }).plan?.steps[0].height === 10 && /"do": "climb"/.test(promptText()) && /"do": "release"/.test(promptText()) && /off-guard while up a tree/.test(promptText()));
+  check("climb: a bad tree square is refused by the cleaner", !cleanPlan({ steps: [{ do: "climb", height: 5, tree: [1] }] }).ok);
+  const hl = (step, rec) => JSON.stringify(stepResult(step, rec, { card: () => ({ total: 17 }), nameOf: x => x }));
+  check("climb: history lines", /Athletics 17 vs DC 15: success/.test(hl(st, { climb: { dc: 15, degree: 2, message: "m1" }, moved: { elev: 5 } })) && /arrived, 5 ft up/.test(hl(st, { climb: { dc: 15, degree: 2 }, moved: { elev: 5 } })) && /climb Speed, no check/.test(hl({ do: "climb", height: 20, climbSpeed: 20 }, { moved: { elev: 20 } })) && /dropped its Dogslicer/.test(hl({ do: "release", itemName: "Dogslicer" }, { dropped: true })));
+  check("climb: packet carries climb, holding and dropped", (() => { const p = packetOf({ you: { climb: { trees: [{ at: [1, 2], top: 20 }], up: { tree: [1, 2], top: 20 } }, holding: [{ id: "dogslicer", name: "Dogslicer" }], dropped: ["Shortbow"] } }).you; return p.climb.up.top === 20 && p.holding[0].id === "dogslicer" && p.dropped[0] === "Shortbow"; })());
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
 for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs", "ui/history.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);

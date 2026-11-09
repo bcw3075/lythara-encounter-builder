@@ -1,8 +1,8 @@
 /* A fight's turns. One named account does the work (the runner: the Claude Bridge unless the setting says otherwise), on its own page with the
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. For now it runs Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek and fleeing off the map; see claude/encounter-builder-plan.md for the rest of step 2. */
-import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, shouldSink, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract } from "./turn.mjs";
-import { FT, cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, heightWhenCut, routeWords, swimWorld, waterKinds, waterUnder } from "./move.mjs";
+import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, shouldSink, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract, nextClimb, climbResult } from "./turn.mjs";
+import { FT, cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, heightWhenCut, routeWords, swimWorld, treeTop, treesBeside, waterKinds, waterUnder } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap, partySize, suggestedLevel } from "./builder.mjs";
 import { aimArea, aimWords, alliesCaught, burstReachable, caughtBy, shapeOf, squaresNear } from "./area.mjs";
@@ -142,6 +142,7 @@ async function takeAmmo(actor, ammo) {
 }
 async function strikesOf(actor, combat = null, tok = null) {
   const out = []; for (const { id, strike: a } of strikesWithIds(actor)) {
+    if (droppedWeapon(actor, a)) continue;   /* its weapon lies on the ground (a Release): "you.dropped" says so */
     let damage = null; try { damage = await a.damage({ getFormula: true }); } catch (e) { console.warn(`${ID} | damage formula`, e); }
     out.push({ id, name: a.label, mod: strikeMods(a.variants.map(v => v.label)), reach: actor.getReach({ action: "attack", weapon: a.item }), ...(a.item?.isRanged ? { range: a.item.range?.increment ?? null, maxRange: a.item.range?.max ?? null } : {}), damage: typeof damage === "string" ? damage : null, traits: (a.traits ?? []).map(t => t.name).filter(t => t !== "attack"), effects: a.item?.system?.attackEffects?.value ?? [], ...(await ammoOf(actor, a).then(m => ammoFields(m, shotsFor(combat, tok, id, m))).catch(() => ({}))) });
   } return out;
@@ -242,6 +243,12 @@ async function buildPacket(combat, tok, turn = {}) {
   const speeds = a.system.movement?.speeds ?? {}, extra = Object.fromEntries(["fly", "swim", "climb", "burrow"].filter(k => speeds[k]?.value).map(k => [k, speeds[k].value]));
   const you = { label: labels[tok.id], name: tok.name, square, size: a.size, nextDiagonal: nextDiagonalFt(tok, scene), actionsLeft: Math.max(0, actionsOf(a, combat) - (turn.spent ?? 0)), attacksMade: turn.attacks ?? 0, hp: `${h.value}/${h.max}`, speed: speeds.land?.value ?? 0, ...(Object.keys(extra).length ? { speeds: extra } : {}), ...(heightUp(tok) ? { height: heightUp(tok) } : {}), ...(swimming ? { swimming } : {}), conditions: (a.conditions?.active ?? []).map(c => c.value ? `${c.slug} ${c.value}` : c.slug), strikes: await strikesOf(a, combat, tok), abilities: abilitiesOf(a), tactics: tacticsOf(scene, tok) };
   const book = await spellBook(a); if (book.length) you.spells = spellsOf(book);
+  /* Climb and Release (0.15.0): what it holds (a Climb needs both hands free), weapons it let go of, and the trees near it, tallest guess included */
+  const held = heldItems(a); if (held.length) you.holding = held.map(({ id, name }) => ({ id, name }));
+  const gone = [...new Set(strikesWithIds(a).filter(({ strike }) => droppedWeapon(a, strike)).map(({ strike }) => strike.label))]; if (gone.length) you.dropped = gone;
+  const up = treeUp(tok, scene), far = t => Math.max(Math.abs(t.at[0] - square[0]), Math.abs(t.at[1] - square[1]));
+  const near = treesOf(read).filter(t => far(t) <= GROUND_RADIUS).sort((x, y) => far(x) - far(y)).slice(0, 12);
+  if (up || near.length) you.climb = { trees: near, ...(up ? { up: { tree: up.at, top: up.top } } : {}) };
   const cover = visionerApi();
   if (offGrid(tok, scene)) you.offGrid = true;
   /* already Taking Cover: the cover it has now comes from that, so it isn't listed as cover to Take Cover from (it can't take it again until it moves or attacks) */
@@ -320,7 +327,7 @@ export function onCombatUpdate(combat, change) {
   if (!isRunner()) return;
   if ("turn" in change || "round" in change) leaveWaiting(combat).catch(e => console.warn(`${ID} | waiting`, e)).then(() => dropInstantAreas(combat, currentRequest(combat) ? { id: currentRequest(combat).id, pos: 0 } : null)).catch(e => console.warn(`${ID} | areas`, e));
   if ("turn" in change || "round" in change) { const prev = { ...(combat.previous ?? {}) };   /* the turn that just ended, read before anything awaits */
-    fallIfAloft(combat, prev).catch(e => console.warn(`${ID} | fall`, e)).then(() => sinkNote(combat, prev)).catch(e => console.warn(`${ID} | sink`, e)).then(() => noteWhatTheySense(combat)).catch(e => console.warn(`${ID} | memory`, e)).then(() => onTurnChange(combat)).catch(e => console.error(`${ID} | turn`, e)); }
+    fallIfAloft(combat, prev).catch(e => console.warn(`${ID} | fall`, e)).then(() => sinkNote(combat, prev)).catch(e => console.warn(`${ID} | sink`, e)).then(() => settleClimbers(combat)).catch(e => console.warn(`${ID} | climbing`, e)).then(() => noteWhatTheySense(combat)).catch(e => console.warn(`${ID} | memory`, e)).then(() => onTurnChange(combat)).catch(e => console.error(`${ID} | turn`, e)); }
   act(combat);
 }
 /* ---------- falling ---------- */
@@ -332,7 +339,7 @@ async function fallIfAloft(combat, prev) {
   if (!prev?.combatantId || prev.round == null) return;
   const c = combat.combatants.get(prev.combatantId), tok = c?.token; if (!tok?.getFlag(ID, "run") || !hostile(tok)) return;
   const fall = heightUp(tok), mine = Object.entries(turns(combat).requests ?? {}).filter(([, r]) => r.combatantId === c.id && r.round === prev.round).sort((a, b) => (a[1].at ?? 0) - (b[1].at ?? 0));
-  const what = shouldFall({ requests: mine.map(([, r]) => r), height: fall, flies: flySpeedOf(tok.actor) > 0, dead: !!tok.actor?.isDead, forward: movedOn(prev, { round: combat.round, turn: combat.turn }) });
+  const what = shouldFall({ requests: mine.map(([, r]) => r), height: fall, flies: flySpeedOf(tok.actor) > 0, dead: !!tok.actor?.isDead, forward: movedOn(prev, { round: combat.round, turn: combat.turn }), clinging: !!treeUp(tok, combat.scene) });
   if (!what) return;
   const lastId = mine.at(-1)[0];
   /* first, so a second turn change can't make it fall twice; the note says what is under way in case a reload cuts it short */
@@ -347,15 +354,21 @@ async function fallIfAloft(combat, prev) {
   }
   await watched(() => tok.update({ elevation: 0 }));
   let words = `${tok.name} didn't Fly this round, so it fell ${fall} ft`;
-  const dmg = Math.floor(fall / 2);
-  if (!saved && dmg > 0) {   /* falling damage is the monster's own, so it is applied whatever the monster-damage setting says */
-    const DamageRoll = CONFIG.Dice.rolls.find(r => r.name === "DamageRoll"), roll = await new DamageRoll(`${dmg}[bludgeoning]`).evaluate();
-    await watched(() => roll.toMessage({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), flavor: `Falling ${fall} ft` }, { rollMode: "publicroll" }));
-    await watched(() => actor.applyDamage({ damage: roll, token: tok, item: null, shieldBlockRequest: false }));
-    if (!actor.isDead) await watched(() => actor.increaseCondition?.("prone"));
-    words += `, took ${dmg} bludgeoning damage and landed prone.`;
-  } else words += saved ? `; it Arrested the Fall and took no damage.` : `.`;
+  const dmg = saved ? 0 : await fallDamage(tok, fall);
+  if (dmg > 0) words += `, took ${dmg} bludgeoning damage and landed prone.`;
+  else words += saved ? `; it Arrested the Fall and took no damage.` : `${fall <= 5 ? " (no damage from 5 ft or less)" : ""}.`;
   await save(combat, lastId, { fell: { from: fall, saved, damage: saved ? 0 : dmg }, note: words });
+}
+/** Falling damage (Player Core, Falling, Rules ID 2352): a fall of more than 5 ft deals bludgeoning damage of half the distance (at most 750), and a
+    creature that takes any lands prone. It is the monster's own, so it is applied whatever the monster-damage setting says. Returns the damage taken.
+    (0.15.0: before, a 5-ft fall dealt 2.) */
+async function fallDamage(tok, fall) {
+  const dmg = fall > 5 ? Math.min(750, Math.floor(fall / 2)) : 0, actor = tok.actor; if (!(dmg > 0)) return 0;
+  const DamageRoll = CONFIG.Dice.rolls.find(r => r.name === "DamageRoll"), roll = await new DamageRoll(`${dmg}[bludgeoning]`).evaluate();
+  await watched(() => roll.toMessage({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), flavor: `Falling ${fall} ft` }, { rollMode: "publicroll" }));
+  await watched(() => actor.applyDamage({ damage: roll, token: tok, item: null, shieldBlockRequest: false }));
+  if (!actor.isDead) await watched(() => actor.increaseCondition?.("prone"));
+  return dmg;
 }
 /** A ticked monster whose turn the module ran to the end, left in deep water without a successful Swim: the rules sink it 10 ft or let the current take
     it, as the GM decides (Player Core Swim, Actions ID 2381). Swimming is at the surface only for now (Rhea, 2026-11-08), so the module moves nothing and
@@ -415,7 +428,8 @@ export async function onRunnerReady() {
     are labels, because a refusal's reason goes back to the thinker; the card puts names in. */
 async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = true, before = null, spells = false } = {}) {
   const scene = combat.scene, tok = scene.tokens.get(req.tokenId), actor = tok.actor;
-  const strikes = await Promise.all(strikesWithIds(actor).map(async ({ id, strike: a }) => { const m = await ammoOf(actor, a).catch(() => null); return { id, name: a.label, reach: actor.getReach({ action: "attack", weapon: a.item }), ranged: !!a.item?.isRanged, maxRange: a.item?.range?.max ?? null, effects: [...(a.item?.system?.attackEffects?.value ?? [])], ...ammoFields(m, shotsFor(combat, tok, id, m)) }; }));
+  const holding = heldItems(actor);
+  const strikes = await Promise.all(strikesWithIds(actor).map(async ({ id, strike: a }) => { const m = await ammoOf(actor, a).catch(() => null), w = weaponOf(actor, a); return { id, name: a.label, weapon: holding.find(h => h.itemId === w?.id)?.id ?? null, dropped: droppedWeapon(actor, a), reach: actor.getReach({ action: "attack", weapon: a.item }), ranged: !!a.item?.isRanged, maxRange: a.item?.range?.max ?? null, effects: [...(a.item?.system?.attackEffects?.value ?? [])], ...ammoFields(m, shotsFor(combat, tok, id, m)) }; }));
   /* only what it perceived when asked, and still does: a plan can't name anything else */
   const now = new Map(sense(combat, tok, turns(combat).memory?.[tok.id] ?? {}).map(o => [o.id, o])), targets = {};
   for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && canTarget(o.state)) targets[label] = { name: label, square: o.square, ...(o.state === "hidden" ? {} : placeOf(o.token, scene)), size: sizeOf(o.token), ...heightOf(o.token), flat: flatDC(o.state), cat: o.token.actor?.size ?? null, held: !!turns(combat).grips?.[tok.id]?.[tokenId] && isHeld(o.token.actor) }; }
@@ -426,7 +440,10 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
   const vis = visionerApi(), coverFrom = {};
   if (vis) for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && SEES.includes(o.state)) { const l = coverOf(vis, o.token, tok); if (STANDARD.includes(l)) coverFrom[label] = l; } }
   return { actions: Math.max(0, actionsOf(actor, combat) - (req.spent ?? 0) - used.actions), attacksBefore: (req.attacks ?? 0) + used.attacks, strikes, targets,
-    me: { square: squareOf(tok, scene), ...placeOf(tok, scene), size: sizeOf(tok), ...heightOf(tok), cat: actor.size ?? null }, speed, flySpeed, swimSpeed, waterAt: route?.waterAt, waterIn: route?.waterIn, cantAct: cantAct(actor), cantMove: cantMove(actor), cantAttack: cantAttack(actor), prone: !!actor.hasCondition?.("prone"), route,
+    me: { square: squareOf(tok, scene), ...placeOf(tok, scene), size: sizeOf(tok), ...heightOf(tok), cat: actor.size ?? null }, speed, flySpeed, swimSpeed, waterAt: route?.waterAt, waterIn: route?.waterIn,
+    /* Climb and Release (0.15.0): its climb Speed, the trees beside a square, the tree it is up now, what it holds */
+    climbSpeed: climbSpeedOf(actor), treesAt: sq => treesBeside(sq, sizeOf(tok), route?.trees ?? []), onTree: treeUp(tok, scene), holding: holding.map(({ id, name }) => ({ id, name })),
+    cantAct: cantAct(actor), cantMove: cantMove(actor), cantAttack: cantAttack(actor), prone: !!actor.hasCondition?.("prone"), route,
     tookCover: takingCover(tok), coverFrom, nearCover: nearCoverFor(scene),
     /* Interact and Delay (0.12.0): grabbed asks a DC 5 flat check of a manipulate action; a Delay needs an untouched turn and a creature still to act this round */
     grabbed: !!actor.hasCondition?.("grabbed"), fresh: !(req.spent ?? 0) && !used.actions && !(req.done?.length) && !before, order: turnOrder(combat, tok, req),
@@ -467,7 +484,7 @@ const heightUp = tok => Math.max(0, Math.round(Number(tok?.elevation) || 0));
 /** A token's height span in feet, for an area's vertical test: from its elevation up by its depth (squares of 5 ft). at: an elevation to use instead. */
 const spanOf = (tok, at = null) => { const elev = at != null ? Number(at) || 0 : Number(tok.elevation) || 0; return { elev, top: elev + (Number(tok.depth) || sizeOf(tok)) * 5 }; };
 const heightOf = tok => ({ elev: Number(tok.elevation) || 0, depth: Number(tok.depth) || sizeOf(tok) });
-const hasMove = steps => (steps ?? []).some(isMove);
+const hasMove = steps => (steps ?? []).some(s => isMove(s) || s?.do === "climb");   /* a Climb needs the map's trees, which come with the routes */
 const hasSpell = steps => (steps ?? []).some(s => s?.do === "spell");
 /** The creatures a monster knows are there: allies (not hidden by the GM), and those it perceives well enough to know their square. Only these shape
     the routes it's told about, so a refusal never gives away a creature it can't perceive. others: what `sense` gave. */
@@ -481,6 +498,28 @@ function knownTo(combat, tok, others) {
 const landSpeed = actor => Number(actor.system.movement?.speeds?.land?.value) || 0;
 const flySpeedOf = actor => Number(actor.system.movement?.speeds?.fly?.value) || 0;
 const swimSpeedOf = actor => Number(actor.system.movement?.speeds?.swim?.value) || 0;
+const climbSpeedOf = actor => Number(actor.system.movement?.speeds?.climb?.value) || 0;
+/** The trees on a map, for climbing (0.15.0): Survey Sheet's read gives each tree's square and trunk radius, and `treeTop` guesses its height from the
+    trunk (Rhea, 2026-11-08: "height by size"). A map with no read has no trees to climb. */
+const treesOf = read => (read?.things?.trees ?? []).filter(t => Array.isArray(t?.at)).map(t => ({ at: [...t.at], top: treeTop(t.trunk) }));
+/** The tree a token is up: the one its last Climb left on its flag, while it is still off the ground and beside that tree; otherwise null (the GM
+    moved it, or it came down some other way). */
+function treeUp(tok, scene) {
+  const f = tok.getFlag(ID, "climbing"); if (!Array.isArray(f?.at) || !(heightUp(tok) > 0)) return null;
+  return treesBeside(squareOf(tok, scene), sizeOf(tok), [{ at: f.at, top: f.top }]).length ? { at: [...f.at], top: Number(f.top) || 0 } : null;
+}
+/** What it holds in its hands (a Climb needs both free; Rhea, 2026-11-08: by the rule): physical items carried "held" in one or two hands, with an
+    id a plan can name (the slug, -2 and so on when two share it). */
+function heldItems(actor) {
+  const seen = new Map();
+  return actor.items.filter(i => i.isOfType?.("physical") && i.system.equipped?.carryType === "held" && (Number(i.system.equipped.handsHeld) || 0) > 0).map(i => {
+    const base = String(i.slug ?? i.name ?? "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || i.id, k = (seen.get(base) ?? 0) + 1; seen.set(base, k);
+    return { id: k > 1 ? `${base}-${k}` : base, name: i.name, itemId: i.id }; });
+}
+/** The weapon item a Strike is made with: a PF2e NPC's attack links its weapon by flag (PF2e 8.7.0), a character's Strike is the weapon itself. */
+function weaponOf(actor, a) { const it = a?.item; if (!it) return null; if (it.type === "weapon") return it; const w = it.flags?.pf2e?.linkedWeapon; return w ? actor.items.get(w) ?? null : null; }
+/** A Strike whose weapon lies on the ground: PF2e still offers an NPC's attack after its weapon is dropped, so the module leaves it out itself. */
+const droppedWeapon = (actor, a) => weaponOf(actor, a)?.system?.equipped?.carryType === "dropped";
 /** Why it can't act at all, or null: Paralyzed, Petrified and Unconscious creatures take no actions (and a dead one none either). */
 function cantAct(actor) {
   if (actor.isDead) return "it is dead.";
@@ -531,6 +570,7 @@ async function mover(combat, tok, speed, known = null, flySpeed = 0, swimSpeed =
   };
   /* the deep water under its footprint at a square, for checkPlan: "calm", "flowing" or null */
   route.waterAt = sq => waterUnder(sq, size, kind); route.waterIn = sq => waterUnder(sq, size, kind, true);
+  route.trees = treesOf(read);   /* for a Climb: the trees beside a square */
   return route;
 }
 /** Whether a square of this scene is deep water: Survey Sheet's greater-difficult region named "Deep water" (other greater difficult terrain isn't).
@@ -817,6 +857,101 @@ async function runStride(combat, id, i, step, tok) {
   });
   await finish({ moved: { to: squareOf(tok, scene), cost: charged?.cost ?? null } });
   return "next";
+}
+/* ---------- climbing (0.15.0) ---------- */
+/** Up a tree, or back down: its flag (which tree, how tall) and, without a climb Speed, the Off-Guard the rules give a climber (Player Core Climb: "You're
+    off-guard while climbing unless you have a climb Speed"). The module removes only the Off-Guard it added itself (its id is on the flag): one from
+    another cause stays. */
+async function setClimbing(tok, tree, guard) {
+  const actor = tok.actor, f = tok.getFlag(ID, "climbing");
+  if (!tree) { if (f?.guard) await watched(() => actor.items.get(f.guard)?.delete() ?? null); if (f) await watched(() => tok.unsetFlag(ID, "climbing")); return; }
+  let id = f?.guard ?? null;
+  if (guard && !id) id = (await watched(() => actor.increaseCondition?.("off-guard")))?.id ?? null;   /* null when it was already off-guard from something else */
+  if (!guard && id) { await watched(() => actor.items.get(id)?.delete() ?? null); id = null; }
+  await watched(() => tok.setFlag(ID, "climbing", { at: [...tree.at], top: tree.top, guard: id }));
+}
+/** At each turn change: a token whose climbing flag no longer holds (the GM moved it off the tree or down, or it is dead) loses the flag and the
+    module's Off-Guard, so a monster on the ground isn't left off-guard. */
+async function settleClimbers(combat) {
+  for (const tok of combat.scene?.tokens ?? []) { if (!tok.getFlag(ID, "climbing")) continue; if (!treeUp(tok, combat.scene) || tok.actor?.isDead) await setClimbing(tok, null); }
+}
+/** A Climb (Rhea, 2026-11-08; Player Core Climb, Actions ID 2374; climb Speed, Rules ID 2349): straight up or down the tree beside it, on its own
+    square. With a climb Speed no check; without one PF2e's own Climb (an Athletics check, its card in chat) at the step's DC, rolled once (marked
+    before the roll, so a reload asks instead of rolling again): below a success no progress, and a critical failure falls from the height it had,
+    landing prone if it started on the ground (Player Core Climb) or took damage (Falling). Afterwards the flag and Off-Guard follow where it ends, and
+    the look-before baseline takes in the Off-Guard its own Climb added or removed, so it doesn't re-plan for that. */
+async function runClimb(combat, id, i, step, tok) {
+  const scene = combat.scene, record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {}, actor = tok.actor;
+  const finish = async (rec, before) => { const seen = request(combat, id).seen, change = { log: { [i]: rec } };
+    if (seen?.me && before) change.seen = { me: { conditions: absorbOwn(seen.me.conditions ?? [], before, situationOf({ me: { conditions: conditionWords(actor) } }).me.conditions, ["off-guard"]) } };
+    if (rec.moved && rec.moved.elev !== step.height) change.note = joinNote(combat, id, `${tok.name} is ${rec.moved.elev} ft up instead of ${step.height} ft.`);
+    await save(combat, id, change); };
+  for (let guard = 0; guard < 4; guard++) {
+    const now = nextClimb(get(), step, heightUp(tok));
+    if (now === "next") return "next";
+    if (now === "arrived") { const before = situationOf({ me: { conditions: conditionWords(actor) } }).me.conditions; await setClimbing(tok, step.height > 0 ? { at: step.tree, top: step.top } : null, !step.climbSpeed); await finish({ ...get(), moved: { elev: heightUp(tok) } }, before); return "next"; }
+    if (now === "ask") { await addNote(combat, id, `${tok.name}'s Climb was under way when the page reloaded: check its card and height, then move it or press Next step.`); return "ask"; }
+    if (!stepGate(now === "roll" ? "climb-roll" : "climb", id)) return "stopped";
+    if (!(await ensureScene(combat) && tok.object)) throw new Error(cantOpen());
+    if (now === "roll") {
+      await record({ climbStarted: true });
+      const res = await watched(() => game.pf2e.actions.get("climb").use({ actors: [actor], difficultyClass: { value: step.dc }, event: clickWith("showCheckDialogs") }));
+      const got = (Array.isArray(res) ? res : []).find(x => x?.outcome in DEGREE); if (!got) { await addNote(combat, id, `${tok.name}'s Climb check gave no result: check the chat.`); return "ask"; }
+      const climb = { dc: step.dc, degree: DEGREE[got.outcome], message: got.message?.id ?? null };
+      if (climb.degree === 1) { await save(combat, id, { log: { [i]: { climb } }, note: joinNote(combat, id, `${tok.name} failed its Athletics check to Climb (DC ${climb.dc}) and made no progress.`) }); return "next"; }
+      if (climb.degree === 0) {
+        /* a critical failure: it falls from the height it had; from the ground it lands prone (Player Core Climb), from higher by the falling rules */
+        const from = heightUp(tok); await record({ climb, falling: { from } });
+        if (from > 0) await watched(() => tok.update({ elevation: 0 }));
+        const dmg = await fallDamage(tok, from), prone = !actor.isDead && (dmg > 0 || from === 0);
+        if (prone && !actor.hasCondition?.("prone")) await watched(() => actor.increaseCondition?.("prone"));
+        await setClimbing(tok, null);
+        await save(combat, id, { log: { [i]: { climb, fell: { from, damage: dmg, prone } } }, note: joinNote(combat, id, `${tok.name} critically failed its Athletics check to Climb (DC ${climb.dc}) and fell${from ? ` ${from} ft${dmg ? `, taking ${dmg} bludgeoning damage` : " (no damage from 5 ft or less)"}` : ""}${prone ? " and landed prone" : ""}.`) });
+        return "next";
+      }
+      await record({ climb }); continue;
+    }
+    /* move: straight up or down on its own square, with Foundry's climb action */
+    const before = situationOf({ me: { conditions: conditionWords(actor) } }).me.conditions;
+    await record({ started: true });
+    await watched(async () => {
+      await tok.move([{ x: tok.x, y: tok.y, elevation: step.height, action: "climb" }]);
+      for (let t = 0; t < STEP_MS && tok.elevation !== step.height; t += 100) await new Promise(res => setTimeout(res, 100));
+      await within(tok.object?.movementAnimationPromise ?? Promise.resolve(), 10000, "The climb's animation didn't finish.").catch(() => {});
+    });
+    await setClimbing(tok, heightUp(tok) > 0 ? { at: step.tree, top: step.top } : null, !step.climbSpeed);
+    await finish({ ...get(), moved: { elev: heightUp(tok) } }, before);
+    return "next";
+  }
+  return "ask";
+}
+/** A Release (Player Core, Actions ID 2300): a free action that drops what it holds on its square, through PF2e's own carry type ("dropped"), with a
+    short public card so everyone sees it let go. Grabbed: a DC 5 flat check first, as for Interact (the same stages, `nextInteract`). It doesn't
+    trigger reactions. Picking the item up again is an Interact, which the GM applies. */
+async function runRelease(combat, id, i, step, tok) {
+  const record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {}, actor = tok.actor;
+  for (let guard = 0; guard < 4; guard++) {
+    const now = nextInteract(get(), { flat: step.flat ?? 0 });
+    if (now === "gm") return "next";   /* dropped */
+    if (now === "next") return "next";
+    if (now === "ask") { const item = heldItems(actor).find(h => h.id === step.item); if (!item) { await record({ dropped: true, posted: { message: null } }); return "next"; } await addNote(combat, id, `${tok.name}'s Release was under way when the page reloaded: check whether it still holds its ${step.itemName}.`); return "ask"; }
+    if (!stepGate(now === "flat" ? "flat" : "release", id)) return "stopped";
+    if (now === "flat") {
+      await record({ flatStarted: true });
+      const roll = await watched(async () => { const r = await new Roll("1d20").evaluate(); await r.toMessage({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), flavor: `Flat check, DC ${step.flat} (grabbed, a manipulate action)` }); return r; });
+      await record({ flat: { dc: step.flat, total: roll.total, ok: roll.total >= step.flat } });
+      if (roll.total < step.flat) await addNote(combat, id, `Its Release failed its DC ${step.flat} flat check (${roll.total}): it is grabbed, and still holds its ${step.itemName}.`);
+      continue;
+    }
+    await record({ started: true });
+    const h = heldItems(actor).find(x => x.id === step.item), item = h ? actor.items.get(h.itemId) : null;
+    if (!item) { await save(combat, id, { log: { [i]: { dropped: true, posted: { message: null } } }, note: joinNote(combat, id, `${tok.name} no longer holds its ${step.itemName}.`) }); return "next"; }
+    await watched(() => actor.changeCarryType(item, { carryType: "dropped", handsHeld: 0 }));
+    const message = await watched(() => ChatMessage.implementation.create({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), content: `<p><strong>Release</strong> <span class="action-glyph">F</span>: drops its ${foundry.utils.escapeHTML(item.name)}.</p>` }));
+    await record({ dropped: true, posted: { message: message?.id ?? null } });
+    return "next";
+  }
+  return "ask";
 }
 /** Stand or Drop Prone: PF2e's own action (`StandActionVariant`, `DropProneActionVariant` in PF2e 8.7.0), which posts its card and then removes or adds
     Prone, with no dialog. Never sent twice: one begun before a reload counts as done if the monster is already as the step leaves it, and the GM looks
@@ -1238,7 +1373,7 @@ async function comeOut(combat, id, tok, why, cardId = null) {
   const vis = visionerApi(); for (const t of left) await vis.setVisibility(t.id, tok.id, "observed");
   await addNote(combat, id, `${tok.name} was hidden from ${listWords(who.map(t => t.name))}, and ${why} makes it observed by them (hide it again in Visioner's manager to allow a quiet action).`);
 }
-const actWords = step => step.do === "stride" ? "its Stride" : step.do === "crawl" ? "its Crawl" : step.do === "stand" ? "standing up" : step.do === "drop-prone" ? "dropping prone" : step.do === "take-cover" ? "Taking Cover" : step.do === "interact" ? "its Interact" : step.do === "seek" ? "its Seek" : step.do === "spell" ? `casting ${step.itemName}` : step.do === "ability" ? `using ${step.itemName}` : step.do === "strike" ? `its ${step.itemName}` : "acting";
+const actWords = step => step.do === "stride" ? "its Stride" : step.do === "crawl" ? "its Crawl" : step.do === "stand" ? "standing up" : step.do === "drop-prone" ? "dropping prone" : step.do === "take-cover" ? "Taking Cover" : step.do === "interact" ? "its Interact" : step.do === "climb" ? "its Climb" : step.do === "release" ? "letting go of what it holds" : step.do === "seek" ? "its Seek" : step.do === "spell" ? `casting ${step.itemName}` : step.do === "ability" ? `using ${step.itemName}` : step.do === "strike" ? `its ${step.itemName}` : "acting";
 function savedDegree(message, tokenId) {
   for (const v of Object.values(message?.flags?.[TOOLBELT]?.targetHelper?.saveVariants ?? {})) { const s = v?.saves?.[tokenId]; if (s?.success in DEGREE) return DEGREE[s.success]; }
   return null;
@@ -1618,6 +1753,8 @@ async function runTurn(combat, requestId) {
     else if (step.do in POSTURES) work = () => runPosture(combat, requestId, i, step.do, tok);
     else if (step.do === "take-cover") work = () => runTakeCover(combat, requestId, i, tok);
     else if (step.do === "interact") work = () => runInteract(combat, requestId, i, step, tok);
+    else if (step.do === "climb") work = () => runClimb(combat, requestId, i, step, tok);
+    else if (step.do === "release") work = () => runRelease(combat, requestId, i, step, tok);
     else if (step.do === "delay") work = () => runDelay(combat, requestId, i, step, tok);
     else if (step.do === "ability") {
       const target = step.target ? combat.scene.tokens.get(r.labels[step.target]) : null; if (step.target && !target) return save(combat, requestId, { state: "stopped", note: `${step.targetName} is gone.` });

@@ -2,7 +2,7 @@
    it, in full detail (totals against AC or DC, degrees, damage, HP), with the GM's own presses, refusals, re-plans and stalls. Built afresh from the
    Combat flag every time, so nothing extra is kept while the fight runs; numbers on chat cards are read through `look`, and the record keeps what a
    card can't say (HP before and after). GM only: never sent to the thinker. Pure: no Foundry globals. */
-import { CHECK_OUTCOMES, OUTCOMES, describeChanges, describeStep, isMove } from "./turn.mjs";
+import { CHECK_OUTCOMES, OUTCOMES, climbResult, describeChanges, describeStep, isMove } from "./turn.mjs";
 
 const DEGREES = { strike: OUTCOMES, check: CHECK_OUTCOMES };
 const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
@@ -41,6 +41,8 @@ export function stepResult(step, rec = {}, look = {}, n = namer(), done = false)
     if (step.do === "sneak") { tag(rec.card?.message); text = join([text, rec.applied === "applied" ? "Visioner applied the secret result" : rec.applied === "none" ? "Visioner changed nothing" : rec.gm ? "left to you on its card" : ""]); }
   } else if (step.do === "stand" || step.do === "drop-prone") text = rec.changed || rec.stood ? (step.do === "stand" ? "stood up" : "dropped prone") : rec.started ? "started, not confirmed" : "";
   else if (step.do === "take-cover") text = rec.covered ? "took cover" : rec.gm ? "left to you" : "";
+  else if (step.do === "climb") { tag(rec.climb?.message); const c = card(rec.climb?.message); text = join([rec.climb ? `Athletics ${c?.total ?? "?"} vs DC ${rec.climb.dc}: ${CHECK_OUTCOMES[rec.climb.degree] ?? "unknown"}` : step.climbSpeed ? "its climb Speed, no check" : "", rec.moved || rec.fell || rec.climb ? climbResult(step, rec) : rec.started ? "climb started, not finished" : ""]); }
+  else if (step.do === "release") { tag(rec.posted?.message); text = join([flat, rec.dropped ? `dropped its ${step.itemName ?? "item"} on its square` : rec.started ? "started, not confirmed" : ""]); }
   else if (step.do === "interact") { tag(rec.posted?.message); text = join([flat, rec.posted ? "its card posted for you to apply" : rec.started ? "card started, not confirmed" : ""]); }
   else if (step.do === "delay") text = rec.moved ? `turn ended; back in the order right after ${n.nameOf(step.after) ?? step.after}` : rec.ended ? "turn ended; its place in the order may not have moved (check the tracker)" : "";
   else if (step.do === "hide" || step.do === "seek") { tag(rec.card?.message); const c = card(rec.card?.message); text = join([c?.total != null ? `secret roll ${c.total}` : "", rec.applied === "applied" ? "Visioner applied the result" : rec.applied === "none" ? "Visioner changed nothing" : rec.gm ? "left to you on its card" : ""]); }

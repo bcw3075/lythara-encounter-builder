@@ -190,9 +190,33 @@ export function waterUnder(at, size, kind, any = false) {
   return dry && !any ? null : out;
 }
 
+/** How tall a tree on an encounter map is, in feet, for climbing it (Rhea, 2026-11-08: "height by size"). Survey Sheet's read gives each tree's trunk
+    radius in feet, not its height, so this is Angel's guess, from the trunk: 10 ft plus 8 ft per foot of trunk radius, in 5-ft steps, at least 10 and
+    at most 40 (a birch about 15 ft, an oak or pine 20 to 25, the biggest dark trees 30 to 35). A dead tree keeps its height. */
+export function treeTop(trunk = 1) {
+  const t = Math.max(0, Number(trunk) || 0);
+  return Math.max(2 * FT, Math.min(8 * FT, FT * Math.round((10 + 8 * t) / FT)));
+}
+/** How far a Climb action goes without a climb Speed (Player Core Climb, Actions ID 2374): up to 5 ft, plus 5 ft for every 20 ft of land Speed above 20
+    once the land Speed is 40 or more; a critical success adds 5 ft. degree: 0 critical failure, 1 failure, 2 success, 3 critical success; no
+    progress below a success (and a critical failure falls). */
+export function climbDistance(landSpeed = 25, degree = 2) {
+  if (degree < 2) return 0;
+  const fast = landSpeed >= 40 ? FT * Math.floor((landSpeed - 20) / 20) : 0;
+  return FT + fast + (degree >= 3 ? FT : 0);
+}
+/** The trees a creature can climb from where it stands: a tree whose trunk square is under its footprint at [x, y] or next to it (diagonals too), so
+    it can put its hands on the trunk. trees: [{ at: [i, j], top }]. Tallest first, then nearest the footprint's top-left. */
+export function treesBeside(at, size = 1, trees = []) {
+  if (!Array.isArray(at)) return [];
+  const [x, y] = at, n = Math.max(1, size);
+  return trees.filter(t => Array.isArray(t?.at) && t.at[0] >= x - 1 && t.at[0] <= x + n && t.at[1] >= y - 1 && t.at[1] <= y + n)
+    .sort((a, b) => (b.top - a.top) || (Math.abs(a.at[0] - x) + Math.abs(a.at[1] - y)) - (Math.abs(b.at[0] - x) + Math.abs(b.at[1] - y)));
+}
+
 /** A route's failure in words, for the thinker and the card. Squares stay squares, which is what the thinker plans with. */
 export function routeWords(r, to, speed, kind = "stride") {
-  const sq = `[${to[0]}, ${to[1]}]`, word = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak", flee: "Flee", fly: "Fly", swim: "Swim" }[kind] ?? "Stride";
+  const sq = `[${to[0]}, ${to[1]}]`, word = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak", flee: "Flee", fly: "Fly", swim: "Swim", climb: "Climb" }[kind] ?? "Stride";
   switch (r.why) {
     case "same": return `it is already at ${sq}.`;
     case "off": return `${sq} is off the map.`;

@@ -1,9 +1,9 @@
 /* A monster's turn as plain data: what a plan means, whether it's legal, and where a step stands. Pure: no Foundry globals.
    The glue gathers live values first. Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek, fleeing, Interact and Delay; other speeds come as step 2 goes on. */
-import { FT, distanceBetween, headingOf, heightCost, swimDistance } from "./move.mjs";
+import { FT, climbDistance, distanceBetween, headingOf, heightCost, swimDistance } from "./move.mjs";
 import { placeable } from "./area.mjs";
 /** What each step kind costs. An ability's cost is its own (0 for a free action); 1 here is only the fallback. */
-export const COSTS = { strike: 1, stride: 1, fly: 1, swim: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, flee: 1, interact: 1, delay: 0, none: 0 };
+export const COSTS = { strike: 1, stride: 1, fly: 1, swim: 1, climb: 1, release: 0, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, flee: 1, interact: 1, delay: 0, none: 0 };
 /* Interact and Delay (0.12.0). Interact (https://2e.aonprd.com/Actions.aspx?ID=2296): 1 action, manipulate; the module can't know what a monster does
    with its hands, so it posts a card saying what, and the GM applies it, as for any ability the module can't run. Restrained bars manipulate actions;
    Grabbed asks a DC 5 flat check for them, lost on a failure. Delay (ID 2294): a free action when its turn begins, so it must be the plan's only step and
@@ -24,10 +24,13 @@ const SIZES = ["tiny", "sm", "med", "lg", "huge", "grg"];
 const MOVES = ["stride", "step", "crawl", "sneak", "flee", "fly", "swim"], ONE_SQUARE = ["step", "crawl"];
 /** Steps that change only whether the monster is prone, and what they leave it. Rules: Prone (https://2e.aonprd.com/Conditions.aspx?ID=88). */
 export const POSTURES = { stand: false, "drop-prone": true };
-export const WORD = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak", flee: "Flee", fly: "Fly", swim: "Swim" };
+export const WORD = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak", flee: "Flee", fly: "Fly", swim: "Swim", climb: "Climb" };
 /** The Athletics DC to Swim in flowing water (a river or creek channel): Player Core's sample Swim tasks put flowing water at trained, and GM Core's
     simple DC for trained is 15. Calm water (a pond or lake) is an automatic critical success and needs no roll. */
 export const SWIM_DC = 15;
+/** The Athletics DC to Climb a tree without a climb Speed: Player Core's sample Climb tasks put a typical tree at trained (a low-branched one at
+    untrained), and GM Core's simple DC for trained is 15. The maps don't say which trees are low-branched, so every tree is a typical one. */
+export const CLIMB_DC = 15;
 /* Fleeing off the map (Rhea, 2026-11-08): a `flee` step is a Stride that must end on the outermost ring of squares, the map's edge, and must be the plan's
    last step. Once the monster stands there the turn stops and the GM chooses on the card: Extend map (the monster keeps its turn and is asked again
    from a fresh packet) or Let it get away (it leaves the fight; its token stays, hidden and flagged). Ending an ordinary Stride on the ring triggers nothing. */
@@ -84,10 +87,16 @@ export const listWords = (xs = []) => xs.length < 2 ? xs.join("") : `${xs.slice(
     coverFrom too. A Sneak goes like a Stride at half Speed; a Seek must be the plan's last step (it is asked again after, with what it found).
     Interact and Delay (0.12.0): grabbed (it has the grabbed condition: a manipulate action needs a DC 5 flat check), fresh (nothing done this turn yet,
     so a Delay is still possible), order ({ label: "later" | "earlier" | "self" }: for every creature it could name, whether its turn is still to come
-    this round). */
+    this round).
+    Climb and Release (0.15.0): climbSpeed, treesAt(square) (the trees it could climb from there, `treesBeside`: [{ at, top }], tallest first), onTree
+    ({ at, top }: the tree it is up now, from the token's flag, or null), holding ([{ id, name }]: what it holds in its hands, which a Climb needs free),
+    and each Strike's `dropped` (the weapon it is made with lies on the ground) and `weapon` (that weapon's item id). */
 export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
   let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, herePos = ctx.me?.pos ?? here, hereElev = Number(ctx.me?.elev) || 0, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, fled = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {}, shots = {};
+  /* up a tree it climbed (it holds on there: no Stride, Step and the like until it climbs down), and what it holds in its hands */
+  let tree = hereElev > 0 && ctx.onTree ? ctx.onTree : null; const holding = new Map((ctx.holding ?? []).map(h => [h.id, h.name])), released = new Set();
+  const upTree = word => `it is ${Math.round(hereElev)} ft up the tree at [${tree.at[0]}, ${tree.at[1]}], so it can't ${word} there: a Climb (a "climb" step) with "height": 0 gets it down${ctx.flySpeed > 0 ? `, or it can Fly off` : ""}.`;
   /* distances from where each creature really stands (pos, fractional off the grid), as PF2e and the packet measure them; after a move, from the square it moved to */
   const distanceTo = (t, reach) => { const p = t.pos ?? t.square; return herePos && p ? distanceBetween({ x: herePos[0], y: herePos[1], size: ctx.me.span ?? ctx.me.size ?? 1, elev: hereElev, depth: ctx.me.depth }, { x: p[0], y: p[1], size: t.pos ? t.span ?? t.size ?? 1 : t.size ?? 1, elev: t.elev, depth: t.depth }, { reach }) : t.distance; };
   for (const [n, step] of plan.steps.entries()) {
@@ -196,6 +205,43 @@ export function checkPlan(plan, ctx) {
       }
       steps.push({ do: "seek", aim }); sought = true; last = { do: "seek" }; continue;
     }
+    if (step.do === "release") {
+      /* Release (Player Core, https://2e.aonprd.com/Actions.aspx?ID=2300): a free action, manipulate, that drops something held. Restrained bars manipulate
+         actions; Grabbed asks a DC 5 flat check, as for Interact. A Climb needs both hands free (Rhea, 2026-11-08: by the rule). */
+      if (ctx.cantAttack) return { ok: false, reason: `${at}: it is restrained, so it can't Release (a manipulate action).` };
+      const want = typeof step.item === "string" ? step.item.trim().toLowerCase() : "";
+      const hit = [...holding].find(([id, name]) => id.toLowerCase() === want || String(name).toLowerCase() === want);
+      if (!hit) return { ok: false, reason: `${at}: a release needs "item": the name of something it holds (${holding.size ? `it holds ${listWords([...holding.values()])}` : "it holds nothing"}).` };
+      holding.delete(hit[0]); released.add(hit[0]);
+      steps.push({ do: "release", item: hit[0], itemName: hit[1], ...(ctx.grabbed ? { flat: GRABBED_FLAT } : {}) }); last = { do: "release" }; continue;
+    }
+    if (step.do === "climb") {
+      /* Climb (Rhea, 2026-11-08: trees, height by size, hands by the rule; Player Core Climb, Actions ID 2374; climb Speed, Rules ID 2349): straight up
+         or down a tree whose trunk is beside it, from 0 to the tree's top. With a climb Speed it moves up to that Speed with no check and isn't
+         off-guard; without one, an Athletics check (CLIMB_DC) for up to 5 ft (more with a fast land Speed), which may make no progress or, on a critical
+         failure, drop it; it is off-guard while up there. Both hands must be free. */
+      if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
+      if (prone) return { ok: false, reason: `${at}: it is prone, so it has to Stand first (a "stand" step, 1 action) before it can Climb.` };
+      if (!here) return { ok: false, reason: `${at}: I can't tell where it stands.` };
+      if (!(hereElev > 0) && ctx.waterAt?.(here)) return { ok: false, reason: `${at}: it is in deep water at [${here[0]}, ${here[1]}], so it moves by Swim.` };
+      if (holding.size) return { ok: false, reason: `${at}: a Climb needs both hands free, and it holds ${listWords([...holding.values()])}. A "release" step (a free action) drops what it holds on its square first.` };
+      let on = tree;
+      if (!on) {
+        if (hereElev > 0) return { ok: false, reason: ctx.flySpeed > 0 ? `${at}: it is ${Math.round(hereElev)} ft up in the air, so it moves by Fly (a "fly" step); a Fly with "height": 0 lands it, and it can climb a tree from the ground.` : `${at}: it is ${Math.round(hereElev)} ft up on something that isn't a tree it climbed, so there is nothing to Climb there.` };
+        const near = ctx.treesAt?.(here) ?? [];
+        if (Array.isArray(step.tree)) on = near.find(t => same(t.at, step.tree)) ?? null;
+        else on = near[0] ?? null;
+        if (!on) return { ok: false, reason: Array.isArray(step.tree) ? `${at}: the tree at [${step.tree[0]}, ${step.tree[1]}] isn't beside it at [${here[0]}, ${here[1]}]${near.length ? ` (it could climb ${listWords(near.map(t => `the one at [${t.at[0]}, ${t.at[1]}]`))})` : ""}.` : `${at}: there is no tree beside it at [${here[0]}, ${here[1]}] to Climb ("you.climb.trees" lists the trees near it: Stride next to one first).` };
+      } else if (Array.isArray(step.tree) && !same(step.tree, on.at)) return { ok: false, reason: `${at}: it is up the tree at [${on.at[0]}, ${on.at[1]}], so it can only Climb that one until it is down.` };
+      const height = step.height;
+      if (!Number.isInteger(height) || height < 0 || height % FT) return { ok: false, reason: `${at}: a Climb needs "height": how high it ends up the tree, in feet above the ground: 0 or more, in steps of ${FT}.` };
+      if (height === hereElev) return { ok: false, reason: `${at}: it is already ${height} ft up; a Climb goes up or down.` };
+      if (height > on.top) return { ok: false, reason: `${at}: the tree at [${on.at[0]}, ${on.at[1]}] is about ${on.top} ft tall, so it can Climb to ${on.top} ft at most.` };
+      const climber = ctx.climbSpeed > 0, limit = climber ? ctx.climbSpeed : climbDistance(ctx.speed ?? 0, 2), far = Math.abs(height - hereElev);
+      if (far > limit) return { ok: false, reason: climber ? `${at}: climbing from ${hereElev} to ${height} ft is ${far} ft, more than its climb Speed of ${ctx.climbSpeed} ft.` : `${at}: climbing from ${hereElev} to ${height} ft is ${far} ft, and with no climb Speed a Climb goes at most ${limit} ft (on a success; an Athletics check).` };
+      steps.push({ do: "climb", tree: [...on.at], top: on.top, fromHeight: hereElev, height, ...(climber ? { climbSpeed: ctx.climbSpeed } : { dc: CLIMB_DC }) });
+      hereElev = height; tree = height > 0 ? on : null; moved = true; took = tookProne = false; last = { do: "climb" }; continue;   /* leaving its space up or down ends Take Cover, as a Fly does */
+    }
     if (step.do === "fly") {
       /* Fly (Rhea, 2026-11-08: a monster moves the way its speeds and the ground allow, by the rules; Rules ID 2344): its fly Speed, ground terrain and
          deep water no bar, height priced by heightCost. Flying to where it is, at the same height, is a hover (Fly 0 ft), which keeps it aloft. */
@@ -212,7 +258,7 @@ export function checkPlan(plan, ctx) {
       const up = heightCost(route.length - 1, height - hereElev), total = cost + up;
       if (total > ctx.flySpeed) return { ok: false, reason: `${at}: flying to [${to[0]}, ${to[1]}] at ${height} ft up takes ${total} ft (${cost} ft across${up ? `, ${up} ft for the height` : ""}), more than its fly Speed of ${ctx.flySpeed} ft. Rising costs double; dropping straight down costs half.` };
       steps.push({ do: "fly", from: [...here], to: [...to], fromHeight: hereElev, height, route, cost: total }); if (route.length > 1) routes.push(route);
-      const shifted = route.length > 1 || height !== hereElev; here = [...to]; herePos = here; hereElev = height; moved = moved || shifted; if (shifted) took = tookProne = false; last = { do: "fly" }; continue;   /* Take Cover ends on leaving its space, up or down too, not on a hover */
+      const shifted = route.length > 1 || height !== hereElev; here = [...to]; herePos = here; hereElev = height; if (shifted) tree = null; moved = moved || shifted; if (shifted) took = tookProne = false; last = { do: "fly" }; continue;   /* Take Cover ends on leaving its space, up or down too, not on a hover */
     }
     if (step.do === "swim") {
       /* Swim (Rhea, 2026-11-08: by the rules, the ground deciding; surface only for now). Player Core Swim (Actions ID 2381) and swim Speed (Rules ID
@@ -221,6 +267,7 @@ export function checkPlan(plan, ctx) {
          which may make no progress at all, and then it is asked again. Swimming to its own square treads water: a successful Swim that keeps it from
          sinking at the end of the turn. */
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
+      if (tree) return { ok: false, reason: `${at}: ${upTree("Swim")}` };
       if (hereElev > 0 && ctx.flySpeed > 0) return { ok: false, reason: `${at}: it is ${Math.round(hereElev)} ft up in the air, so it moves by Fly (a "fly" step); a Fly with "height": 0 lands it.` };
       if (prone) return { ok: false, reason: `${at}: it is prone, so it has to Stand first (a "stand" step, 1 action) before it can Swim.` };
       if (!here || !ctx.route || !ctx.waterAt || !ctx.waterIn) return { ok: false, reason: `${at}: I can't work out moves here.` };
@@ -244,6 +291,7 @@ export function checkPlan(plan, ctx) {
     if (MOVES.includes(step.do)) {
       const word = WORD[step.do], small = ONE_SQUARE.includes(step.do);
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
+      if (tree) return { ok: false, reason: `${at}: ${upTree(word)}` };
       if (hereElev > 0 && ctx.flySpeed > 0) return { ok: false, reason: `${at}: it is ${Math.round(hereElev)} ft up in the air, so it moves by Fly (a "fly" step); a Fly with "height": 0 lands it.` };
       if (!(hereElev > 0) && ctx.waterAt?.(here)) return { ok: false, reason: `${at}: it is in deep water at [${here[0]}, ${here[1]}], so it moves by Swim (a "swim" step), which can end on the bank; it can't ${word} there.` };
       if (step.do === "crawl" && !prone) return { ok: false, reason: `${at}: it isn't prone; Crawl is how a prone creature moves, so Stride or Step instead.` };
@@ -271,6 +319,7 @@ export function checkPlan(plan, ctx) {
     }
     if (ctx.cantAttack) return { ok: false, reason: `${at}: ${ctx.cantAttack}` };
     const s = ctx.strikes.find(x => x.id === step.item); if (!s) return { ok: false, reason: `${at}: it has no attack called "${step.item}".` };
+    if (s.dropped || (s.weapon && released.has(s.weapon))) return { ok: false, reason: `${at}: its ${s.name} is on the ground${s.dropped ? "" : " (released earlier in this plan)"}, so it can't Strike with it.` };
     const t = ctx.targets[step.target]; if (!t) return { ok: false, reason: `${at}: it doesn't know of "${step.target}".` };
     const where = steps.some(x => MOVES.includes(x.do)) ? ` from [${here[0]}, ${here[1]}]` : "";
     /* ammunition: shotsLeft is what the shot's own checks will let through (fight.mjs's ammoOf), counted through the plan */
@@ -474,9 +523,10 @@ export function lastAction({ step = null, rec = {}, done = null, strikes = [] } 
     turn the module ran to the end itself ("done"): one the GM played, stopped, held or ended by hand is hers, since she may have flown it by hand.
     Never after a Delay (its turn hasn't ended), a fall already made, or a turn change backwards. A dead flier's body drops with no roll. Pure.
     requests: this creature's requests this round; height: its elevation; flies: it has a fly Speed (anything else up high stands on something);
-    forward: the turn moved on, not back. Returns "fall", "drop" (dead) or null. */
-export function shouldFall({ requests = [], height = 0, flies = false, dead = false, forward = true } = {}) {
+    forward: the turn moved on, not back; clinging: it is up a tree it climbed. Returns "fall", "drop" (dead) or null. */
+export function shouldFall({ requests = [], height = 0, flies = false, dead = false, forward = true, clinging = false } = {}) {
   if (!(height > 0) || !flies || !forward || !requests.length) return null;
+  if (clinging) return null;   /* up a tree it climbed, it holds on: a flier there isn't airborne (0.15.0) */
   if (requests.some(r => r.fell)) return null;
   if (requests.some(r => (r.steps ?? []).some((s, k) => s?.do === "delay" && (r.log?.[k]?.ended || r.log?.[k]?.moved)) || r.delayed)) return null;
   if (dead) return "drop";
@@ -527,6 +577,8 @@ export function doneStep(step, rec = {}) {
   if (isMove(step)) { const got = rec.moved?.to; return { do: step.do, to: step.to, result: !got ? "unknown" : same(got, step.to) ? (step.do === "flee" ? "reached the map's edge" : "arrived") : `stopped at [${got[0]}, ${got[1]}]` }; }
   if (step.do in POSTURES) return { do: step.do, result: rec.changed || rec.stood ? (step.do === "stand" ? "stood" : "dropped") : "unknown" };
   if (step.do === "take-cover") return { do: "take-cover", result: rec.covered ? "took cover" : "unknown" };
+  if (step.do === "climb") return { do: "climb", height: step.height, result: climbResult(step, rec) };
+  if (step.do === "release") return { do: "release", item: step.itemName ?? step.item, result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.dropped ? "dropped it" : "unknown" };
   if (step.do === "interact") return { do: "interact", what: step.what, result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.posted ? "card posted for the GM to apply" : "unknown" };
   if (step.do === "delay") return { do: "delay", after: step.after, result: rec.moved ? "delayed: its turn comes back after that creature's" : rec.ended ? "turn ended; its place in the order may not have moved" : "unknown" };
   if (step.do === "ability") return { do: "ability", item: step.item, ...(step.target ? { target: step.target } : {}), result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.check ? CHECK_OUTCOMES[rec.check.degree] ?? "unknown" : rec.posted ? (step.mode === "hold" ? "kept hold" : "card posted for the GM to apply") : "unknown" };
@@ -603,6 +655,27 @@ function flyWords(s) {
   return `Flies ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}, ${h ? where : "landing there"}.`;
 }
 /** A resolved step in plain words, for the card. */
+/** A Climb in plain words: up or down which tree, and how. */
+function climbWords(s) {
+  const up = s.height > (s.fromHeight ?? 0), how = s.climbSpeed ? " (its climb Speed: no check)" : ` (an Athletics check, DC ${s.dc ?? CLIMB_DC}; on a failure it makes no progress, and on a critical failure it falls)`;
+  const where = s.height ? `to ${s.height} ft up` : "to the ground";
+  return `Climbs ${up ? "up" : "down"} the tree at [${s.tree?.[0]}, ${s.tree?.[1]}] ${where}${how}.`;
+}
+/** How a Climb came out, for the next plan and the history. */
+export function climbResult(step, rec = {}) {
+  if (rec.fell) return `fell ${rec.fell.from} ft${rec.fell.damage ? `, took ${rec.fell.damage} damage` : ""}${rec.fell.prone ? " and landed prone" : ""} (a critical failure)`;
+  if (rec.climb && rec.climb.degree < 2) return "no progress (it failed its Athletics check to Climb)";
+  if (rec.moved) return rec.moved.elev === step.height ? (step.height ? `arrived, ${step.height} ft up` : "back on the ground") : `stopped ${rec.moved.elev ?? "?"} ft up`;
+  return "unknown";
+}
+/** What to do next with a Climb step, from its record and the height it is at now: "roll" (a check it hasn't made), "move", "next" (done, or no progress,
+    or it fell), "ask" (a check or move begun with no record of how it ended: a reload), "arrived" (begun before a reload and already there). */
+export function nextClimb(rec = {}, step = {}, elev = 0) {
+  if (rec.moved || rec.fell || (rec.climb && rec.climb.degree < 2)) return "next";
+  if (rec.started) return elev === step.height ? "arrived" : "ask";
+  if (step.dc && !rec.climb) return rec.climbStarted ? "ask" : "roll";
+  return "move";
+}
 export function describeStep(s) {
   if (s.do === "none") return "Does nothing.";
   if (s.do === "fly") return flyWords(s);
@@ -631,6 +704,8 @@ export function describeStep(s) {
     return `${head}${s.targetName ? `${s.area ? " aimed at" : " at"} ${s.targetName}` : ""}${flat}: its card goes to chat for you to apply${s.area ? ` (place its ${s.area.size}-foot ${s.area.type})` : ""}${s.attack ? `, as attack ${(s.variant ?? 0) + 1}` : ""}.`;
   }
   if (s.do === "take-cover") return s.why === "prone" ? "Takes Cover while prone." : s.why === "near" ? "Takes Cover by the wall or trunk next to it." : `Takes Cover behind its cover from ${s.from}.`;
+  if (s.do === "climb") return climbWords(s);
+  if (s.do === "release") return `Releases its ${s.itemName ?? s.item}, which drops on its square${s.flat ? ` (a DC ${s.flat} flat check first, as it is grabbed)` : ""} (free action).`;
   if (s.do === "interact") return `Interacts: ${s.what}${s.flat ? ` (a DC ${s.flat} flat check first, as it is grabbed)` : ""}. Its card goes to chat for you to apply.`;
   if (s.do === "delay") return `Delays until after ${s.after}'s turn: its turn ends now, and it comes back into the order right after ${s.after} (free action).`;
   return `${s.itemName} at ${s.targetName}${s.variant ? `, attack ${s.variant + 1}` : ""}${s.flat ? `, after a DC ${s.flat} flat check` : ""}.`;

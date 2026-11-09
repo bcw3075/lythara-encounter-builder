@@ -7,7 +7,7 @@ import { PROMPT_VERSION, promptText } from "./prompt.mjs";
 
 export const PLAN_SCHEMA = 1;
 /** Every kind a plan may name. The module carries out only those in turn.mjs's COSTS so far; checkPlan turns down the rest by name. */
-export const STEP_KINDS = ["stride", "step", "crawl", "fly", "swim", "strike", "ability", "spell", "stand", "drop-prone", "seek", "hide", "sneak", "take-cover", "flee", "interact", "delay", "none"];
+export const STEP_KINDS = ["stride", "step", "crawl", "fly", "swim", "climb", "release", "strike", "ability", "spell", "stand", "drop-prone", "seek", "hide", "sneak", "take-cover", "flee", "interact", "delay", "none"];
 export const MAX_STEPS = 8, MAX_TRIES = 2, LISTEN_MS = 120000, MAX_WAIT_S = 100;   /* run_script stops at 120 s */
 const LABEL = /^[EM]\d{1,3}$/, ITEM = /^[\w-]{1,80}$/, BY = ["chat", "api", "gm"];
 
@@ -33,7 +33,9 @@ export function cleanPlan(raw) {
     if (s.target != null) { if (typeof s.target !== "string" || !LABEL.test(s.target)) return bad(`${at}: "${text(String(s.target), 30)}" isn't a label like E1.`); out.target = s.target; }
     if (s.to != null) { if (!Array.isArray(s.to) || s.to.length !== 2 || !s.to.every(v => Number.isInteger(v) && v >= 0 && v < 1000)) return bad(`${at}: "to" is a square, [x, y].`); out.to = [...s.to]; }
     /* a spell's rank (0 is never a rank, but a cantrip's own rank is given as is) and, for a spell cast with a choice of actions, how many */
-    /* a Fly's height at its end, in feet above the ground (0 lands it) */
+    /* a Climb's tree, when it names one of several beside it (0.15.0) */
+    if (s.tree != null) { if (!Array.isArray(s.tree) || s.tree.length !== 2 || !s.tree.every(v => Number.isInteger(v) && v >= 0 && v < 1000)) return bad(`${at}: "tree" is a tree's square, [x, y].`); out.tree = [...s.tree]; }
+    /* a Fly's or a Climb's height at its end, in feet above the ground (0 lands it) */
     if (s.height != null) { if (!Number.isInteger(s.height) || s.height < 0 || s.height > 1000) return bad(`${at}: "height" is feet above the ground, a whole number from 0.`); out.height = s.height; }
     if (s.rank != null) { if (!Number.isInteger(s.rank) || s.rank < 1 || s.rank > 10) return bad(`${at}: "rank" is a spell rank, 1 to 10.`); out.rank = s.rank; }
     if (s.actions != null) { if (!Number.isInteger(s.actions) || s.actions < 0 || s.actions > 3) return bad(`${at}: "actions" is 0 to 3.`); out.actions = s.actions; }
