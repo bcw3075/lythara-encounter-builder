@@ -760,7 +760,7 @@ export async function submitPlan(combat, requestId, plan, meta = {}) {
   if ((r.pos ?? 0) > 0) throw new Error("That turn is under way: its first steps are done, so a new plan can't replace them.");   /* between Next steps */
   const who = cleanMeta(meta); if (stale(brainNow(), who.generation)) return { state: r.state, ignored: true, reason: SUPERSEDED };
   if (JSON.stringify(plan ?? null).length > PLAN_BYTES) return { state: r.state, reason: "That plan is far too long to be a plan." };
-  await save(combat, requestId, { plan: whole(plan), state: "submitted", verdict: null, by: whole(who) });
+  await save(combat, requestId, { plan: whole(plan), state: "submitted", verdict: null, changeVerdict: null, by: whole(who) });   /* a new plan: an old change's refusal is about the old one */
   if (isRunner()) await judge(combat, requestId);
   for (let i = 0; i < 40; i++) { await new Promise(res => setTimeout(res, 250)); const n = request(combat, requestId); if (n.state !== "submitted") return answer(n); }
   return { state: "submitted", reason: runnerProblem() ?? `${runnerName()} hasn't answered.` };
