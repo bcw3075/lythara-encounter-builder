@@ -1,7 +1,7 @@
 /* A fight's turns. One named account does the work (the runner: the Claude Bridge unless the setting says otherwise), on its own page with the
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. It runs Strikes, Strides, Steps, Crawls, Fly, Swim, Climb, Release, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek, Interact, Delay and fleeing off the map; what is still to come is in the repo's docs/features and the project's plan doc. */
-import { settleWait, CHANGEABLE, NOTE_MAX, changeProblem, describeStep, nameWords, noteForThinker, planPrint } from "./turn.mjs";
+import { settleFrom, settleWait, CHANGEABLE, NOTE_MAX, changeProblem, describeStep, nameWords, noteForThinker, planPrint } from "./turn.mjs";
 import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, shouldSink, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract, nextClimb, climbResult } from "./turn.mjs";
 import { BURROW_DEPTH, FT, distanceBetween, burrowWorld, crossesWalls, cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, heightWhenCut, rockSquares, routeWords, swimWorld, glideWorld, treeTop, treesBeside, wallSquares, waterKinds, waterUnder } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
@@ -324,9 +324,11 @@ export function noteChange(doc) {
 }
 /** Waits for the start of the turn to settle (`settleWait` in turn.mjs) and returns how long that took, in ms, counted from the turn change. A turn
     asked for some other way (a tick during the turn, a reload) has no turn change to count from, so it waits from now. */
-async function settle(combat) {
-  const since = turnAt.get(combat.id) ?? performance.now(); turnAt.delete(combat.id);
-  for (;;) { const ms = settleWait({ since, lastChange: changedAt, now: performance.now() }); if (ms <= 0) return Math.round(performance.now() - since); await sleep(Math.min(ms, 50)); }
+async function settle(combat, combatant) {
+  const since = settleFrom(turnAt.get(combat.id) ?? null, performance.now()); turnAt.delete(combat.id);
+  /* PF2e's own turn start has arrived once the combatant's flag names this round (already true for a turn that comes back after a Delay) */
+  const begun = () => combatant.flags?.pf2e?.roundOfLastTurn === combat.round;
+  for (;;) { const ms = settleWait({ since, lastChange: changedAt, now: performance.now(), begun: begun() }); if (ms <= 0) return Math.round(performance.now() - since); await sleep(Math.min(ms, 50)); }
 }
 async function onTurnChange(combat) {
   if (!isRunner() || !combat?.started) return;
@@ -340,7 +342,7 @@ async function onTurnChange(combat) {
   if (afterDelay && combatant.getFlag(HUD, "delayed")) await combatant.unsetFlag(HUD, "delayed").catch(e => console.warn(`${ID} | HUD delayed flag`, e));   /* back in the order: the tracker's hourglass goes */
   starting.add(key);
   try {
-    const settled = await settle(combat);   /* start-of-turn effects: wait until the creatures have stopped changing (0.23.0) */
+    const settled = await settle(combat, combatant);   /* start-of-turn effects: wait until the creatures have stopped changing (0.23.0) */
     if (combat.combatant?.id !== combatant.id) return;
     const opened = await ensureScene(combat);
     const id = foundry.utils.randomID(8), base = { state: "requested", combatantId: combatant.id, tokenId: tok.id, round: combat.round, turn: combat.turn, at: Date.now(), since: clock(), settled, log: {}, ...(afterDelay ? { afterDelay: true } : {}) };
@@ -832,7 +834,8 @@ const PLAN_BYTES = 8000, SUPERSEDED = "A newer chat is thinking for the monsters
 const brainNow = () => ({ generation: game.settings.get(ID, "brain")?.generation ?? 0, at: game.settings.get(ID, "brainAt") ?? 0, launch: game.settings.get(ID, "brainLaunch") ?? "" });
 /* which launch of the world this is: the server clock restarts with each, so a listening time is only good for its own (0.23.0). The same on every page. */
 const launchNow = () => String(game.world?.lastPlayed ?? "");
-const renewBrain = async () => { if (game.settings.get(ID, "brainLaunch") !== launchNow()) await game.settings.set(ID, "brainLaunch", launchNow()); return game.settings.set(ID, "brainAt", clock()); };
+/* the time first, the launch after: between the two a new time with an old launch reads as not listening, never the other way round */
+const renewBrain = async () => { await game.settings.set(ID, "brainAt", clock()); if (game.settings.get(ID, "brainLaunch") !== launchNow()) await game.settings.set(ID, "brainLaunch", launchNow()); };
 const fights = () => game.combats.filter(c => c.started);
 const eventsOf = combat => Object.values(turns(combat).events ?? {}).map(e => ({ ...e, combatId: combat.id }));
 function eventChange(kind, requestId, tries, extra = {}) {

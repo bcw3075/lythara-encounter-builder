@@ -17,7 +17,7 @@ import { promptText } from "../../scripts/prompt.mjs";
 import { historyHTML, historyOf, journalHTML, stepResult } from "../../scripts/history.mjs";
 import { cutShort, diagonalsIn, distanceBetween, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, headingOf, heightCost, heightWhenCut, routeWords, swimDistance, swimWorld, waterKinds, waterUnder } from "../../scripts/move.mjs";
 import { SWIM_DC, movedOn, shouldFall, shouldSink } from "../../scripts/turn.mjs";
-import { SETTLE, settleWait } from "../../scripts/turn.mjs";
+import { SETTLE, settleFrom, settleWait } from "../../scripts/turn.mjs";
 import { CLIMB_DC, climbResult, nextClimb } from "../../scripts/turn.mjs";
 import { endsCover as endsCover2 } from "../../scripts/turn.mjs";
 import { groupChanges, tickGroups } from "../../scripts/ui/ticks.mjs";
@@ -216,6 +216,8 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("settle: quiet counts from the last change", settleWait({ since: 1000, lastChange: 1270, now: 1400 }) === 170 && settleWait({ since: 1000, lastChange: 1270, now: 1569 }) === 1 && settleWait({ since: 1000, lastChange: 1270, now: 1570 }) === 0);
   check("settle: a later change starts the quiet again", settleWait({ since: 1000, lastChange: 1900, now: 1950 }) === 250);
   check("settle: never past the cap", settleWait({ since: 1000, lastChange: 3950, now: 3960 }) === 40 && settleWait({ since: 1000, lastChange: 3999, now: 4000 }) === 0 && settleWait({ since: 1000, lastChange: 9000, now: 9001 }) === 0);
+  check("settle: until PF2e's turn start has arrived, it waits whatever the quiet", settleWait({ since: 1000, lastChange: 200, now: 1600, begun: false }) === 2400 && settleWait({ since: 1000, now: 3999, begun: false }) === 1 && settleWait({ since: 1000, now: 4000, begun: false }) === 0 && settleWait({ since: 1000, lastChange: 1650, now: 1700, begun: true }) === 250);
+  check("settle: counts from the turn change while there is room, from now for an old stamp or none", settleFrom(1000, 1200) === 1000 && settleFrom(1000, 3300) === 1000 && settleFrom(1000, 3301) === 3301 && settleFrom(1000, 21000) === 21000 && settleFrom(null, 500) === 500);
   check("settle: its own numbers", SETTLE.min === 400 && SETTLE.quiet === 300 && SETTLE.max === 3000 && settleWait({ since: 0, lastChange: 90, now: 100 }, { min: 0, quiet: 50, max: 1000 }) === 40);
   const rp = eventOut({ seq: 7, kind: "replan", combatId: "C", requestId: "R2" }, { ...req, why: [{ who: "E1", what: "down" }], done: [{ do: "strike", item: "jaws", target: "E1", result: "critical hit" }] });
   check("replan event says why, in labels, and what's done", rp.reason === "E1 is down." && rp.done.length === 1 && !("yourPlan" in rp) && rp.packet === req.packet);

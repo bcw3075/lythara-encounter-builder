@@ -141,7 +141,7 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
   _onRender() {
     const root = this.element, c = this.combat;
     /* the light goes grey on its own two minutes after the last ask, with nothing else changing */
-    clearTimeout(this._grey); const left = brainSeenAt() + LISTEN_MS - clock(); if (left > 0) this._grey = setTimeout(() => { if (this.rendered) this.render(); }, left + 500);
+    clearTimeout(this._grey); const left = brainListening() ? brainSeenAt() + LISTEN_MS - clock() : 0; if (left > 0) this._grey = setTimeout(() => { if (this.rendered) this.render(); }, left + 500);
     root.querySelectorAll(".leb-t[data-token] input[type=checkbox]").forEach(el => el.addEventListener("change", () => { c.scene.tokens.get(el.closest("[data-token]").dataset.token)?.setFlag(ID, el.name, el.checked); }));
     /* a group's tick: half-ticked when only some of its monsters are; one update for the tokens whose own tick differs, read again at the click */
     root.querySelectorAll(".leb-g input[type=checkbox]").forEach(el => { el.indeterminate = el.dataset.state === "some";

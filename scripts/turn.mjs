@@ -975,9 +975,16 @@ export function damageOptions(options = []) {
     2026-11-10 on the runner's page: the last change came 100 to 270 ms after the turn change, with gaps under 70 ms, whichever GM page did the work. */
 export const SETTLE = { min: 400, quiet: 300, max: 3000 };
 /** How many ms the runner still waits before it reads the monster. since: when the turn change arrived; lastChange: the last change to a creature
-    (null: none seen); now: the same clock. 0 means read it now. */
-export function settleWait({ since, lastChange = null, now }, s = SETTLE) {
+    (null: none seen); now: the same clock; begun: PF2e's turn start has reached this page (the combatant's `roundOfLastTurn` flag is this round's,
+    which PF2e writes at every turn start): until it has, quiet means nothing, because a far-off GM page's work may not have started arriving
+    (0.23.0 review). 0 means read it now. */
+export function settleWait({ since, lastChange = null, now, begun = true }, s = SETTLE) {
   const waited = now - since; if (!(waited < s.max)) return 0;
+  if (!begun) return s.max - waited;
   const need = Math.max(s.min - waited, lastChange == null ? 0 : s.quiet - (now - lastChange));
   return Math.max(0, Math.min(need, s.max - waited));
 }
+/** Where `settle` counts from. stamp: when the turn change arrived (null: none, as for a tick during the turn or a reload); entered: now. A stamp
+    is used only while enough of the cap is left for a quiet spell: an old one (a monster ticked long into its turn, or slow work before this, such
+    as a fall with its rolls) would end the wait at once, so those count from now (0.23.0 review). */
+export const settleFrom = (stamp, entered, s = SETTLE) => stamp != null && entered - stamp <= s.max - s.min - s.quiet ? stamp : entered;
