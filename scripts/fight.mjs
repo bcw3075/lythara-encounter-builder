@@ -2513,7 +2513,7 @@ async function hitGate(combat, id, i, step, tok, target, strike, get) {
    moves, chat cards, items changing hands and Prone coming off; each offer is its own request (`reaction`), run with the same Strike code as a turn's,
    so a player's Shield Block and Reactive Shield are asked as usual. The reaction comes just after the action shows (the design's first version: a
    player's drag isn't interrupted). A monster reacts once a round; its reaction comes back when its own turn begins. */
-const CARD_MS = 15000, stepCards = new Map(), standCards = new Map(), carried = new Map(), queued = new Set(), reactionIds = new Set(), offering = new Set();
+const CARD_MS = 15000, stepCards = new Map(), standCards = new Map(), castCards = new Map(), carried = new Map(), queued = new Set(), reactionIds = new Set(), offering = new Set();
 let reactionLine = Promise.resolve();
 const fightOf = tok => game.combats.find(c => c.started && c.scene?.id === tok?.parent?.id && c.combatants.some(x => x.tokenId === tok.id)) ?? null;
 const tokenIn = (combat, actor) => combat.combatants.find(c => c.token && (c.token.actor === actor || (c.token.actorLink && c.actorId === actor?.id)))?.token ?? null;
@@ -2655,6 +2655,9 @@ export async function onActionCard(message) {
   const spellAttack = c.type === "attack-roll" && opts.some(x => /(?:^|:)item:type:spell$/.test(x)), ranged = spellAttack ? !/touch/i.test(String(item?.system?.range?.value ?? "")) : opts.includes("item:ranged") || (c.domains ?? []).includes("ranged-attack-roll");
   const trig = cardTrigger({ type: c.type ?? null, ranged, spell: !!f.casting, consumable, traits: [...traits], slug, name: name ?? srcName });
   if (!trig) return;
+  /* one Cast a Spell is one trigger: its cast card (manipulate) and then its attack roll (ranged) would offer twice (seen live, 0.21.0) */
+  if (f.casting && trig.gate === "manipulate") castCards.set(tok.actor.id, clock());
+  if (spellAttack) { const at = castCards.get(tok.actor.id); castCards.delete(tok.actor.id); if (at && clock() - at < 60000) return; }
   if (slug === "stand") standCards.set(tok.actor.id, clock());
   if (trig.step) { stepCards.set(tok.actor.id, clock()); return; }
   await offerAll(combat, tok, trig);
