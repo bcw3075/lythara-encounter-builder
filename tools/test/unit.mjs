@@ -212,7 +212,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   const wordsFile = path.resolve(HERE, "../../.private-words"), words = fs.existsSync(wordsFile) ? fs.readFileSync(wordsFile, "utf8").split("\n").map(l => l.split("#")[0].trim()).filter(Boolean) : null;
   check("prompt names no campaign", words ? !words.some(w => new RegExp(`(?<![A-Za-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9])`, "i").test(h.prompt)) : (console.log("  (no .private-words: campaign-word check skipped)"), true));
   check("prompt explains the party's side", /"you\.side": "party"/.test(h.prompt) && /don't plan "flee"/.test(h.prompt));
-  check("prompt explains asking again", h.promptVersion === 21 && /The GM asks for the rest of this turn/.test(h.prompt) && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 21 && /The GM asks for the rest of this turn/.test(h.prompt) && !/someone it doesn't perceive/.test(h.prompt) && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -1247,6 +1247,8 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   const lines = h[0].turns[0].parts[0].lines.map(l => l.text);
   check("history: an edit line in names after its press", lines.length === 2 && /pressed Use my changes/.test(lines[0]) && lines[1] === "Rhea changed the plan from step 1: Jaws at Test Hero, attack 2. (Was: Jaws at Test Hero.)", JSON.stringify(lines));
   const t2 = structuredClone(t); t2.requests.q1.edits = { 6: { user: "Rhea", pos: 0, before: ["Jaws at E1."], after: [] } };
+  const t3 = structuredClone(t); t3.requests.q1.edits = { 6: { user: "Rhea", pos: 0, what: "change", refused: "Step 1: E1 is out of reach." } };
+  check("history: a refused change says why, in names", historyOf(t3, { round: 1, turn: 0, current: "c1", order: [{ id: "c1", name: "Wolf", npc: true }] }, { tokA: "Wolf", tokB: "Test Hero" })[0].turns[0].parts[0].lines.at(-1).text === "Rhea's change wasn't used: Step 1: Test Hero is out of reach.");
   check("history: the rest taken out", /took out the rest\./.test(historyOf(t2, { round: 1, turn: 0, current: "c1", order: [{ id: "c1", name: "Wolf", npc: true }] }, { tokA: "Wolf", tokB: "Test Hero" })[0].turns[0].parts[0].lines.at(-1).text));
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */

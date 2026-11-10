@@ -2211,7 +2211,7 @@ async function runChange(combat, requestId) {
   try {
     const r = request(combat, requestId); if (!r?.ask && !r?.edit) return;
     const what = r.ask ? "note" : "change", c = r.ask ?? r.edit;
-    const refuse = reason => save(combat, requestId, { ask: null, edit: null, go: false, changeVerdict: `Your ${what} wasn't used: ${reason}` });   /* a Do it pressed meanwhile doesn't run the old plan */
+    const refuse = reason => save(combat, requestId, { ask: null, edit: null, go: false, changeVerdict: `Your ${what} wasn't used: ${reason}`, edits: { [Date.now()]: { user: c.user, pos: r.pos ?? 0, what, refused: String(reason ?? "") } } });   /* the history says why */   /* a Do it pressed meanwhile doesn't run the old plan */
     const why = changeProblem({ ...r, ask: null, edit: null, go: false }); if (why) return refuse(why);
     if (c.fp !== planPrint(r)) return refuse("the plan changed after you started. Look at it again.");
     if (!await ensureScene(combat)) return refuse(cantOpen());
