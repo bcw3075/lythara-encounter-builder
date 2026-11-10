@@ -116,6 +116,7 @@ Record every id below in the release's change record when this feature, or a fea
 
 ## Traps
 - **Settle time leans on PF2e writing `roundOfLastTurn` on the combatant at every turn start** (seen on 8.7.0 for every creature, 50 to 120 ms after the turn change). If a PF2e update stops writing it, nothing breaks but every monster turn waits the whole 3 s: tl-8's `settled` numbers show it. Without that signal the quiet rule alone can't cover a far-off GM page whose first change arrives after the 400 ms minimum (0.23.0 review).
+- **Test trap: a world relaunch leaves the game paused, and Auto waits on the pause** (0.23.0 live test: a plan on an Auto monster sat `ready` for 20 s after an install; it ran on the unpause). Read `game.paused` before judging an Auto test.
 - **Test trap: Workbench puts Prone and Wounded on a character coming out of Dying** (0.18.0 live test): a restored test character is still prone, and every move is refused for that first. Remove them before testing moves.
 - Hooks and the caller can both reach `judge` and `doIt`: keep the per-request guards. That double run only showed with Auto, so test every route, not just the button.
 - `pf2e.startTurn` fires on Foundry's active GM only, so the runner watches `updateCombat` itself. In PF2 Test AI is the active GM over the Bridge, which makes AI's tab a stand-in for Rhea's browser.
