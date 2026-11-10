@@ -213,7 +213,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   const wordsFile = path.resolve(HERE, "../../.private-words"), words = fs.existsSync(wordsFile) ? fs.readFileSync(wordsFile, "utf8").split("\n").map(l => l.split("#")[0].trim()).filter(Boolean) : null;
   check("prompt names no campaign", words ? !words.some(w => new RegExp(`(?<![A-Za-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9])`, "i").test(h.prompt)) : (console.log("  (no .private-words: campaign-word check skipped)"), true));
   check("prompt explains the party's side", /"you\.side": "party"/.test(h.prompt) && /don't plan "flee"/.test(h.prompt));
-  check("prompt explains asking again", h.promptVersion === 22 && /Players are asked for their reactions/.test(h.prompt) && !/doesn't ask players for reactions yet/.test(h.prompt) && /The GM asks for the rest of this turn/.test(h.prompt) && !/someone it doesn't perceive/.test(h.prompt) && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 23 && /Release doesn't count/.test(h.prompt) && /Players are asked for their reactions/.test(h.prompt) && !/doesn't ask players for reactions yet/.test(h.prompt) && /The GM asks for the rest of this turn/.test(h.prompt) && !/someone it doesn't perceive/.test(h.prompt) && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */

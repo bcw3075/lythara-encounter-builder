@@ -2008,7 +2008,7 @@ async function runTurn(combat, requestId) {
       if (pre === "held") return save(combat, requestId, { state: "held", hold: false, note: `Held before step ${i + 1}, after the reactions to it.` });
       if (pre === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} hasn't been done. Check the reactions in chat, then press Do it to carry on or play the rest yourself.`.trim() });
       if (pre === "down") { await save(combat, requestId, { pos: i, state: "done", note: joinNote(combat, requestId, `${tok.name} went down to a reaction before it could act.`) }); return endAfter(combat, requestId); }
-      if (pre === "disrupted") { await save(combat, requestId, { log: { [i]: { disrupted: true } }, note: joinNote(combat, requestId, `A critical Reactive Strike disrupted ${tok.name}'s ${actWords(step)}: the action is spent (any spell slot or use it costs is your call).`) }); work = null; }
+      if (pre === "disrupted") { await save(combat, requestId, { log: { [i]: { disrupted: true } }, note: joinNote(combat, requestId, `A critical Reactive Strike disrupted ${tok.name}'s ${actWords(step).replace(/^its /, "")}: the action is spent (any spell slot or use it costs is your call).`) }); work = null; }
     }
     const stayFrom = ["stand", "drop-prone", "climb"].includes(step.do) && tok.object ? { at: placeOf(tok, combat.scene).pos, elev: heightUp(tok) } : null;   /* a Climb is asked from where it was (review finding 16) */
     if (work) {
@@ -2355,7 +2355,7 @@ export function noteReactionRoll(message) {
   const r = { actor: message.actor?.id ?? message.speaker?.actor ?? null, target: String(message.flags.pf2e.context.target?.token ?? ""), outcome: message.flags.pf2e.context.outcome ?? null };
   for (const w of rxWatch.values()) w.push(r);
 }
-const strip = ({ users, words, pos, span, elev, reach, ...x }) => x;
+const strip = ({ users, words, gmWords, pos, span, elev, reach, ...x }) => x;
 /** Ask the reactions in `list` and wait: players by a prompt in their browser, the GM on the card. key names the gate within step i ("before",
     "move:<route index>", "stay", "hit"). Returns { done, list (each with its answer), rolls (attack rolls made meanwhile), held } once everyone has
     answered, passed, run out of time, the GM pressed Continue or Hold, or the monster went down; "manual" when the GM took the turn; "gone" when the
@@ -2372,7 +2372,7 @@ async function askReactions(combat, id, i, key, gate, tok, list, kind = "") {
     return { done: true, list: final, rolls: [], reloaded: true };
   }
   const secs = reactionTimer(), until = secs ? clock() + secs * 1000 : 0, who = moverName(tok), start = request(combat, id), watchKey = `${combat.id}.${id}.${i}.${key}`, rolls = [];
-  const asked = list.map(x => { const users = answerersOf(game.actors.get(x.actor)); return { id: x.id, token: x.token, actor: x.actor, name: x.name, reaction: x.reaction, slug: x.slug, to: users.length ? "player" : "gm", users, words: gateWords(x.slug === "nimble-dodge" ? "attack" : gate, who, { kind, reaction: x.reaction }) }; });
+  const asked = list.map(x => { const users = answerersOf(game.actors.get(x.actor)); return { id: x.id, token: x.token, actor: x.actor, name: x.name, reaction: x.reaction, slug: x.slug, to: users.length ? "player" : "gm", users, words: gateWords(x.slug === "nimble-dodge" ? "attack" : gate, who, { kind, reaction: x.reaction }), gmWords: gateWords(x.slug === "nimble-dodge" ? "attack" : gate, tok.name, { kind, reaction: x.reaction }) }; });   /* the GM's card names the monster (seen live: "A creature" on her own card) */
   /* `since` moves on: waiting for a reaction is a wait on a person for the stall check (brain.mjs stallOf, review finding 9) */
   await save(combat, id, { react: whole({ key, step: i, gate, list: asked, until, answers: {}, cont: false }), since: clock(), gates: { [i]: { [key]: { asked: clock() } } } });
   rxWatch.set(watchKey, rolls);
