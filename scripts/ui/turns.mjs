@@ -1,6 +1,7 @@
 /* The Monster Turns window: GM only. Who's ticked, and the plan card for the turn in hand. PF2e HUD's tracker is left alone. */
 import { CHANGEABLE, NOTE_MAX, SIDES, WORD, applyEdits, changeProblem, planPrint, describeChanges, describeStep, editableParts, isMove, listWords } from "../turn.mjs";
 import { esc } from "../journal.mjs";
+import { countingDown } from "../react.mjs";
 import { describeKnows } from "../perceive.mjs";
 import { ID } from "../builder.mjs";
 import { askAngel, cancelChange, changePlan, previewNote, applySetting, partyMember, runnable, brainListening, bringBack, runnerName, escapedList, extendMap, extendProblem, letGo, notePress, brainSeenAt, clock, currentRequest, doIt, hold, lastNote, playMyself, rollFor, runnerProblem, answerReaction, continueReactions, otherReactions } from "../fight.mjs";
@@ -50,12 +51,12 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
       const waiting = r.state === "saves" ? (r.log?.[pos]?.waiting ?? []).map(tid => { const t = c.scene.tokens.get(tid), player = t?.actor?.hasPlayerOwner && game.users.some(u => !u.isGM && u.active && t.actor.testUserPermission(u, "OWNER"));
         return `<p>Waiting for ${esc(t?.name ?? "a creature")}'s save${player ? " (their row on the spell's card)" : ": I rolled it on the card and no result has come yet"}. <button type="button" data-do="rollfor" data-for="${esc(tid)}"><i class="fa-solid fa-dice-d20"></i> Roll it for them</button></p>`; }).join("") : "";
       /* player reactions (0.20.0): who is asked, the GM's own (no player online, or a party member she plays) with React and Pass, and Continue */
-      const rx = r.react, reacting = rx ? (() => { const ans = rx.answers ?? {}, left = rx.until ? Math.max(0, Math.ceil((rx.until - clock()) / 1000)) : null;
+      const rx = r.react, reacting = rx ? (() => { const ans = rx.answers ?? {}, left = countingDown(rx.list, ans, rx.until, clock()) ? Math.ceil((rx.until - clock()) / 1000) : null;   /* only while a player still has time to answer */
         const rows = rx.list.map(x => { const a = ans[x.id], gm = x.to === "gm";
           const state = a === "done" ? "used it" : a === "react" ? "is rolling it" : a === "pass" ? "passed" : a === "timeout" ? "didn't answer in time" : a === "continue" ? "skipped" : gm ? "yours to answer" : "asked in their window";
           const btns = gm && !a ? `<button type="button" data-rx="react" data-row="${esc(x.id)}">React</button><button type="button" data-rx="pass" data-row="${esc(x.id)}">Pass</button>` : gm && a === "react" ? `<button type="button" data-rx="done" data-row="${esc(x.id)}">Done</button>` : "";
           return `<p>${esc(x.name)}: ${esc(x.reaction)}, ${state}. ${btns}</p>`; }).join("");
-        return `<div class="leb-react"><p><b>Reactions</b>: ${esc(String(rx.list[0]?.gmWords ?? rx.list[0]?.words ?? "").replace(/\s*React with .*$/, ""))}${left != null ? ` They pass in about ${left} s.` : ""}</p>${rows}<div class="leb-btns"><button type="button" data-rx="cont" title="Skip any reaction not answered yet and carry on"><i class="fa-solid fa-forward"></i> Continue</button></div></div>`; })() : "";
+        return `<div class="leb-react"><p><b>Reactions</b>: ${esc(String(rx.list[0]?.gmWords ?? rx.list[0]?.words ?? "").replace(/\s*React with .*$/, ""))}${left != null ? ` ${rx.list.some(x => x.to === "gm") ? "Players' answers pass" : "They pass"} in about ${left} s.` : ""}</p>${rows}<div class="leb-btns"><button type="button" data-rx="cont" title="Skip any reaction not answered yet and carry on"><i class="fa-solid fa-forward"></i> Continue</button></div></div>`; })() : "";
       /* reactions the module doesn't know: shown with their trigger, never asked (Rhea, 2026-11-09: prompted only for the right one) */
       const others = ["ready", "requested", "running"].includes(r.state) ? otherReactions(c, tok) : [], otherLine = others.length ? `<p class="leb-other">Not asked by the module: ${others.map(o => `${esc(o.name)}'s ${esc(o.reaction)}${o.trigger ? ` (${esc(o.trigger)})` : ""}`).join("; ")}.</p>` : "";
       /* a stall (the runner's check, Rhea 2026-11-08): amber while the turn is still stuck at the point it was marked */
@@ -130,7 +131,7 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
       const x = rx.list.find(y => y.id === el.dataset.row), answer = a === "react" && !["reactive-strike", "attack-of-opportunity"].includes(x?.slug) ? "done" : a;
       answerReaction(c.id, id, rx.key, el.dataset.row, answer).catch(e => ui.notifications.error(e.message)); }));
     /* the countdown: only the turn in hand, only while it runs (review finding 3) */
-    clearTimeout(this._rxTick); const cur = c ? currentRequest(c) : null; if (cur?.react?.until && cur.react.until > clock()) this._rxTick = setTimeout(() => { if (this.rendered) this.render(); }, 1000);
+    clearTimeout(this._rxTick); const cur = c ? currentRequest(c) : null; if (cur?.react && countingDown(cur.react.list, cur.react.answers ?? {}, cur.react.until, clock())) this._rxTick = setTimeout(() => { if (this.rendered) this.render(); }, 1000);
     root.querySelectorAll('.leb-esc [data-do="bringback"]').forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); const tid = el.closest("[data-token]").dataset.token; el.disabled = true;
       bringBack(c, tid).then(r => { ui.notifications.info(`${r.name} is back in the fight${r.initiative != null ? ` at initiative ${r.initiative}` : ""}.`); }).catch(e => { el.disabled = false; ui.notifications.error(e.message); }); }));
     /* the Change panel's fields go into the draft as they change, so a redraw (any fight update) keeps them */

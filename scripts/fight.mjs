@@ -7,7 +7,7 @@ import { BURROW_DEPTH, FT, distanceBetween, burrowWorld, crossesWalls, cutShort,
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap, partySize, suggestedLevel } from "./builder.mjs";
 import { aimArea, aimWords, alliesCaught, burstReachable, caughtBy, shapeOf, squaresNear } from "./area.mjs";
-import { answerWords, degreeAgainst, finished, fits, gateWords, reactionsOf, routeGates } from "./react.mjs";
+import { answerWords, degreeAgainst, finished, fits, gateWords, reactionsOf, routeGates, untilFor } from "./react.mjs";
 import { MAX_TRIES, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, stallOf, text, waitSeconds } from "./brain.mjs";
 
 const ID = "lythara-encounter-builder", WORKBENCH = "xdy-pf2e-workbench", TOOLBELT = "pf2e-toolbelt", VISIONER = "pf2e-visioner", HUD = "pf2e-hud", GROUND_RADIUS = 10, STEP_MS = 20000, SETTLE_MS = 400, SCENE_MS = 30000, RESUMABLE = ["ready", "running", "held", "stopped", "saves"];
@@ -2371,8 +2371,10 @@ async function askReactions(combat, id, i, key, gate, tok, list, kind = "") {
     emitSocket({ t: "close", combat: combat.id, request: id, key });
     return { done: true, list: final, rolls: [], reloaded: true };
   }
-  const secs = reactionTimer(), until = secs ? clock() + secs * 1000 : 0, who = moverName(tok), start = request(combat, id), watchKey = `${combat.id}.${id}.${i}.${key}`, rolls = [];
+  const who = moverName(tok), start = request(combat, id), watchKey = `${combat.id}.${id}.${i}.${key}`, rolls = [];
   const asked = list.map(x => { const users = answerersOf(game.actors.get(x.actor)); return { id: x.id, token: x.token, actor: x.actor, name: x.name, reaction: x.reaction, slug: x.slug, to: users.length ? "player" : "gm", users, words: gateWords(x.slug === "nimble-dodge" ? "attack" : gate, who, { kind, reaction: x.reaction }), gmWords: gateWords(x.slug === "nimble-dodge" ? "attack" : gate, tok.name, { kind, reaction: x.reaction }) }; });   /* the GM's card names the monster (seen live: "A creature" on her own card) */
+  /* the countdown is for players' windows only: a row the GM answers on her card waits for React, Pass or Continue (Rhea, 2026-11-09, 0.20.1) */
+  const until = untilFor(asked, reactionTimer(), clock());
   /* `since` moves on: waiting for a reaction is a wait on a person for the stall check (brain.mjs stallOf, review finding 9) */
   await save(combat, id, { react: whole({ key, step: i, gate, list: asked, until, answers: {}, cont: false }), since: clock(), gates: { [i]: { [key]: { asked: clock() } } } });
   rxWatch.set(watchKey, rolls);
@@ -2388,7 +2390,7 @@ async function askReactions(combat, id, i, key, gate, tok, list, kind = "") {
       if (!rx || rx.key !== key) break;
       if (n.hold) { held = true; await skip(n, "continue"); break; }
       if (rx.cont) { await skip(n, "continue"); break; }
-      if (until && clock() >= until) for (const x of asked) if (!rx.answers?.[x.id]) await save(combat, id, { [`react.answers.${x.id}`]: "timeout" });
+      if (until && clock() >= until) for (const x of asked) if (x.to === "player" && !rx.answers?.[x.id]) await save(combat, id, { [`react.answers.${x.id}`]: "timeout" });
       if (finished(asked.map(x => ({ answer: request(combat, id)?.react?.answers?.[x.id] })))) break;
       if (downNow(tok)) { await skip(n, "continue"); break; }
     }

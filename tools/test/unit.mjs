@@ -23,7 +23,7 @@ import { climbDistance, treeTop, treesBeside } from "../../scripts/move.mjs";
 import { verticalGap } from "../../scripts/area.mjs";
 import { BURROW_DEPTH, burrowVertical, burrowWorld, crossesWalls, glideWorld, rockSquares, wallSquares } from "../../scripts/move.mjs";
 import { cleanGround, cleanWalls } from "../../scripts/brain.mjs";
-import { KNOWN, answerWords, degreeAgainst, finished, fits, gateWords, reactionsOf, routeGates, triggerOf } from "../../scripts/react.mjs";
+import { KNOWN, countingDown, untilFor, answerWords, degreeAgainst, finished, fits, gateWords, reactionsOf, routeGates, triggerOf } from "../../scripts/react.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
 
@@ -1281,6 +1281,8 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("rx: words", gateWords("move", "The Sod Hound", { reaction: "Reactive Strike" }) === "The Sod Hound is moving out of a square in your reach. React with Reactive Strike?" && gateWords("stay", "A creature", { kind: "stands up", reaction: "Reactive Strike" }) === "A creature stands up in your reach. React with Reactive Strike?" && /attacks you/.test(gateWords("attack", "X", { reaction: "Nimble Dodge" })));
   check("rx: finished", finished([{ answer: "pass" }, { answer: "done" }, { answer: "timeout" }]) && !finished([{ answer: "react" }]) && !finished([{ answer: null }]) && finished([]));
   check("rx: waiting for a reaction is a person wait", stallOf({ state: "running", since: 0, react: { key: "move:2" } }, { now: 61000 }) === null && stallOf({ state: "running", since: 0, react: { key: "move:2" } }, { now: 181000 })?.state === "reacting" && stallOf({ state: "running", since: 0 }, { now: 61000 })?.kind === "machine" && /waiting for a reaction/.test(stallWords({ state: "reacting", waited: 190000 })));
+  check("rx: countdown for players' rows only (0.20.1)", untilFor([{ to: "gm" }], 20, 1000) === 0 && untilFor([{ to: "gm" }, { to: "player" }], 20, 1000) === 21000 && untilFor([{ to: "player" }], 0, 1000) === 0 && untilFor([], 20, 1000) === 0);
+  check("rx: the card counts down only while a player can still answer", countingDown([{ id: "a", to: "player" }, { id: "b", to: "gm" }], {}, 5000, 1000) && !countingDown([{ id: "a", to: "player" }, { id: "b", to: "gm" }], { a: "pass" }, 5000, 1000) && !countingDown([{ id: "a", to: "player" }], {}, 5000, 6000) && !countingDown([{ id: "b", to: "gm" }], {}, 5000, 1000));
   check("rx: answer words", answerWords([{ token: "a", reaction: "Reactive Strike", answer: "done" }, { token: "b", reaction: "Shield Block", answer: "timeout" }], { a: "Valeros", b: "Kyra" }).join("|") === "Valeros used Reactive Strike|Kyra didn't answer in time (Shield Block passed)");
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */

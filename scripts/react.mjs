@@ -77,6 +77,11 @@ export function gateWords(gate, who, { kind = "", reaction = "" } = {}) {
 /** What a reaction asked on the card or the prompt resolved to, from the answers: "react" (and the reactor finished: "done"), "pass", "timeout",
     "continue" (the GM went on). A list is finished when no one is left to answer. */
 export function finished(list = []) { return list.every(x => ["done", "pass", "timeout", "continue"].includes(x.answer)); }
+/** When a question's countdown ends (server-clock ms), or 0 for none: only rows a player answers in their own window count down; rows the GM answers
+    on her card wait (Rhea, 2026-11-09, 0.20.1). secs 0 is no countdown. */
+export function untilFor(rows = [], secs = 0, now = 0) { return secs > 0 && rows.some(x => x.to === "player") ? now + secs * 1000 : 0; }
+/** Whether the card shows the countdown: time is left and a player row is still unanswered. */
+export function countingDown(rows = [], answers = {}, until = 0, now = 0) { return until > now && rows.some(x => x.to === "player" && !answers[x.id]); }
 /** The answers as plain words for the card and the history ("Valeros: Reactive Strike", "Test Hero passed"). names: token id → name. */
 export function answerWords(list = [], names = {}) {
   return list.map(x => { const n = names[x.token] ?? x.name ?? "Someone";
