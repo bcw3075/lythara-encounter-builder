@@ -111,7 +111,7 @@ export function historyOf(t = {}, fight = {}, names = {}, look = {}) {
     const c = order.find(x => x.id === r.combatantId);
     /* a monster's reaction on someone else's turn (0.21.0) is its own entry, where that turn sits in the round */
     if (r.reaction) { const key = `${r.round}.react.${id}`, on = order.find(x => x.id === r.turnOf)?.name ?? "another creature";
-      turns.set(key, { key, combatantId: r.combatantId, name: `${c?.name ?? names[r.tokenId] ?? "A monster"}: a Reactive Strike on ${on}'s turn (${names[r.reaction.by] ?? "a creature"} ${r.reaction.kind ?? "acted"})${r.skipped ? ", skipped" : r.lapsed ? ", not taken" : ""}`, angel: !!r.reaction.auto, reaction: true, parts: [partOf(id, r, look, n)], idx: at(r.turnOf) + 0.4 }); continue; }
+      turns.set(key, { key, combatantId: null, name: `${c?.name ?? names[r.tokenId] ?? "A monster"}: a Reactive Strike on ${on}'s turn (${names[r.reaction.by] ?? "a creature"} ${r.reaction.kind ?? "acted"})${r.skipped ? ", skipped" : r.lapsed ? ", not taken" : ""}`, angel: true, reaction: true, parts: [partOf(id, r, look, n)], idx: at(r.turnOf) + 0.4 }); continue; }
     const key = `${r.round}.${r.combatantId}${r.afterDelay ? ".back" : ""}`;
     const turn = turns.get(key) ?? { key, combatantId: r.combatantId, name: `${c?.name ?? names[r.tokenId] ?? "A monster"}${r.afterDelay ? " (back after delaying)" : ""}`, angel: true, parts: [], idx: r.delayed && Number.isFinite(r.turn) ? r.turn : at(r.combatantId) + (r.afterDelay ? 0.5 : 0), delayedOn: !!r.delayed };   /* the turn it delayed on sits where it was then, not where it is now */
     turn.parts.push(partOf(id, r, look, n)); turns.set(key, turn);

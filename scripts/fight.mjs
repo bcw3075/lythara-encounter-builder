@@ -7,7 +7,7 @@ import { BURROW_DEPTH, FT, distanceBetween, burrowWorld, crossesWalls, cutShort,
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap, partySize, suggestedLevel } from "./builder.mjs";
 import { aimArea, aimWords, alliesCaught, burstReachable, caughtBy, shapeOf, squaresNear } from "./area.mjs";
-import { MONSTER_REACTIONS, answerWords, cardTrigger, degreeAgainst, equipTrigger, finished, fits, gateWords, moveTrigger, proneOffTrigger, reactionStrike, reactionsOf, routeGates, squaresAlong, untilFor } from "./react.mjs";
+import { MONSTER_REACTIONS, answerWords, readCard, cardTrigger, degreeAgainst, equipTrigger, finished, fits, gateWords, moveTrigger, proneOffTrigger, reactionStrike, reactionsOf, routeGates, squaresAlong, untilFor } from "./react.mjs";
 import { MAX_TRIES, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, stallOf, text, waitSeconds } from "./brain.mjs";
 
 const ID = "lythara-encounter-builder", WORKBENCH = "xdy-pf2e-workbench", TOOLBELT = "pf2e-toolbelt", VISIONER = "pf2e-visioner", HUD = "pf2e-hud", GROUND_RADIUS = 10, STEP_MS = 20000, SETTLE_MS = 400, SCENE_MS = 30000, RESUMABLE = ["ready", "running", "held", "stopped", "saves"];
@@ -465,6 +465,7 @@ export async function onRunnerReady() {
     for (const [id, x] of Object.entries(turns(combat).requests ?? {})) { const s = x.steps?.[x.pos ?? 0]; if (x.state === "running" && s?.do === "delay" && x.log?.[x.pos ?? 0]?.ended && !x.log[x.pos ?? 0].moved && !running.has(id)) await save(combat, id, { state: "done", delayed: true, note: joinNote(combat, id, `${game.user.name}'s page reloaded as it delayed: its turn ended, but its place in the order may not have moved. Check the tracker and drag it to just after ${s.after} if it isn't.`) }); }
     /* a monster's reaction cut off by the reload (0.21.0): never repeated; the chat and HP say how far it got */
     for (const [id, x] of Object.entries(turns(combat).requests ?? {})) if (x.reaction && x.state === "running" && !running.has(id)) await save(combat, id, { state: "done", go: false, note: joinNote(combat, id, `${game.user.name}'s page reloaded during this Reactive Strike. Check the chat and HP: it may not have finished.`) });
+    noteCarried(combat);
     await onTurnChange(combat); act(combat);
     if (r?.state === "saves") doIt(combat, r.id).catch(e => console.error(`${ID} | turn`, e));   /* a save rolled while this page was away */
   }
@@ -1915,6 +1916,8 @@ export async function doIt(combat, requestId) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
   if (!isRunner()) { const why = runnerProblem(); if (why) throw new Error(why); return save(combat, requestId, { go: true }); }
   if (running.has(requestId)) return;
+  await reactionsClear(requestId);   /* a monster's reaction mid-Strike (0.21.0) finishes first: one roller at a time */
+  if (running.has(requestId)) return;
   running.add(requestId); try { await runTurn(combat, requestId); } finally { running.delete(requestId); stopAiming(); }
   /* a save that landed between reading the card and writing "saves" fired no hook this page would act on: look once more */
   const n = request(combat, requestId); if (n?.state === "saves" && saveArrived(combat, n)) setTimeout(() => doIt(combat, requestId).catch(e => console.error(`${ID} | turn`, e)), 0);
@@ -2510,7 +2513,8 @@ async function hitGate(combat, id, i, step, tok, target, strike, get) {
    moves, chat cards, items changing hands and Prone coming off; each offer is its own request (`reaction`), run with the same Strike code as a turn's,
    so a player's Shield Block and Reactive Shield are asked as usual. The reaction comes just after the action shows (the design's first version: a
    player's drag isn't interrupted). A monster reacts once a round; its reaction comes back when its own turn begins. */
-const CARD_MS = 15000, stepCards = new Map(), standCards = new Map(), carried = new Map();
+const CARD_MS = 15000, stepCards = new Map(), standCards = new Map(), carried = new Map(), queued = new Set(), reactionIds = new Set(), offering = new Set();
+let reactionLine = Promise.resolve();
 const fightOf = tok => game.combats.find(c => c.started && c.scene?.id === tok?.parent?.id && c.combatants.some(x => x.tokenId === tok.id)) ?? null;
 const tokenIn = (combat, actor) => combat.combatants.find(c => c.token && (c.token.actor === actor || (c.token.actorLink && c.actorId === actor?.id)))?.token ?? null;
 /** The reaction requests of a fight that aren't finished: [{ id, ...request }]. */
@@ -2526,13 +2530,18 @@ function monsterReactors(combat, by) {
   const t0 = turns(combat), open = new Set(openReactions(combat).map(r => r.tokenId)), out = [];
   for (const c of combat.combatants) {
     const t = c.token, a = t?.actor;
-    if (!t || t.id === by.id || c.defeated || !a?.isOfType?.("npc") || !a.isEnemyOf?.(by.actor) || t.getFlag(ID, "escaped") || isBelow(t) || isDown(a)) continue;
+    if (!t || t.id === by.id || c.defeated || t.hidden || !a?.isOfType?.("npc") || !a.isEnemyOf?.(by.actor) || t.getFlag(ID, "escaped") || isBelow(t) || isDown(a)) continue;   /* a GM-hidden monster stays hidden (review finding 6) */
     if (cantAct(a) || cantAttack(a) || ["stunned", "confused"].some(k => a.hasCondition?.(k))) continue;
-    if (t0.reacted?.[t.id] || open.has(t.id)) continue;
+    if (t0.reacted?.[t.id] || open.has(t.id) || offering.has(t.id)) continue;   /* `offering`: two triggers in the same moment make one offer (review finding 3) */
     if (!reactionsFor(a).some(x => MONSTER_REACTIONS.includes(x.slug))) continue;
-    if (!perceivesNow(t, by)) continue;
+    /* what the monster perceives, as its turns work it out (sight, light, its senses, then Visioner's record): Visioner alone answers "observed"
+       for a pair with no record (review finding 5). Off the fight map the runner can't tell, so Visioner's record is all there is. */
+    let state = null;
+    if (onFightScene(combat) && t.object && by.object) { try { state = sense(combat, t, t0.memory?.[t.id] ?? {}).find(o => o.id === by.id)?.state ?? "unnoticed"; } catch (e) { console.warn(`${ID} | reaction sight`, e); } }
+    if (state == null) { if (!perceivesNow(t, by)) continue; try { state = visionerApi()?.getVisibility(t.id, by.id) ?? "observed"; } catch { state = "observed"; } }
+    if (!["observed", "concealed"].includes(state)) continue;
     const melee = meleeOf(a); if (!melee.list.length) continue;
-    out.push({ c, t, a, melee });
+    out.push({ c, t, a, melee, state });
   }
   return out;
 }
@@ -2542,9 +2551,10 @@ async function offerReaction(combat, m, by, trig, from = null) {
   const scene = combat.scene, me = placeOf(m.t, scene), there = from ? { pos: from.at, span: sizeOf(by) } : placeOf(by, scene);
   const dist = distanceBetween({ x: there.pos[0], y: there.pos[1], size: there.span, elev: from?.elev ?? heightUp(by) }, { x: me.pos[0], y: me.pos[1], size: me.span, elev: heightUp(m.t) }, { reach: m.melee.reach });
   const pick = reactionStrike(m.melee.list, dist); if (!pick) return null;
-  let state = "observed"; try { state = visionerApi()?.getVisibility(m.t.id, by.id) ?? "observed"; } catch { /* no record: observed */ }
+  const state = m.state ?? "observed";
   const id = foundry.utils.randomID(8), auto = !!trig.sure && !!m.t.getFlag(ID, "run") && !!m.t.getFlag(ID, "auto");
   const step = { do: "strike", item: pick.id, itemName: pick.name, target: "T", targetName: by.name, variant: 0, flat: flatDC(state) };   /* variant 0: a reaction takes no multiple attack penalty */
+  reactionIds.add(id);
   await saveTurns(combat, { [`requests.${id}`]: { state: "ready", reaction: whole({ by: by.id, gate: trig.gate, sure: !!trig.sure, kind: trig.kind ?? "", why: trig.why ?? null, strike: pick.name, auto }), combatantId: m.c.id, tokenId: m.t.id, turnOf: combat.combatant?.id ?? null, round: combat.round, turn: combat.turn, at: Date.now(), since: clock(), log: {}, labels: { T: by.id }, steps: [step], pos: 0, tries: 0, note: null } });
   if (auto) (async () => {
     const moving = by.object?.movementAnimationPromise; if (moving) await Promise.race([moving, sleep(5000)]).catch(() => {});   /* let the move be seen first */
@@ -2555,22 +2565,32 @@ async function offerReaction(combat, m, by, trig, from = null) {
 }
 /** Offer every monster that the trigger reaches. route: the squares of a move (reach is tested for each square left), or null. */
 async function offerAll(combat, by, trig, route = null, elev = null) {
-  if (!trig?.gate || !isRunner() || !combat?.started || !by?.actor || by.hidden && !by.actor.hasPlayerOwner) return;
+  if (!trig?.gate || !isRunner() || !combat?.started || !by?.actor || isDown(by.actor) || (by.hidden && !by.actor.hasPlayerOwner)) return;   /* a body dragged past a monster triggers nothing */
   const scene = combat.scene, here = placeOf(by, scene);
   for (const m of monsterReactors(combat, by)) {
     const p = placeOf(m.t, scene); let from = null;
     if (route) { const g = routeGates(route, { size: sizeOf(by), elev: elev ?? heightUp(by) }, [{ id: m.t.id, pos: p.pos, span: p.span, elev: heightUp(m.t), reach: m.melee.reach }])[0]; if (!g) continue; from = { at: route[g.k], elev: elev ?? heightUp(by) }; }
     else if (distanceBetween({ x: here.pos[0], y: here.pos[1], size: here.span, elev: heightUp(by) }, { x: p.pos[0], y: p.pos[1], size: p.span, elev: heightUp(m.t) }, { reach: m.melee.reach }) > m.melee.reach) continue;
-    await offerReaction(combat, m, by, trig, from).catch(e => console.error(`${ID} | reaction offer`, e));
+    offering.add(m.t.id);
+    try { await offerReaction(combat, m, by, trig, from); } catch (e) { console.error(`${ID} | reaction offer`, e); } finally { offering.delete(m.t.id); }
   }
 }
 /** Do it on a monster's reaction (or its own start, with Auto): the runner makes the Strike. From another GM's browser it asks the runner. */
 export async function doReaction(combat, id) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
   if (!isRunner()) { const why = runnerProblem(); if (why) throw new Error(why); return save(combat, id, { go: true }); }
-  if (running.has(id)) return;
-  running.add(id); try { await runReaction(combat, id); } finally { running.delete(id); stopAiming(); }
+  if (running.has(id) || queued.has(id)) return;
+  /* one roller at a time: a Strike's cards are matched by a single waiter (`pending`), so a reaction waits for whatever is running (a turn's
+     action, another reaction) and reactions go in the order they were asked (review finding 1) */
+  queued.add(id);
+  const mine = reactionLine = reactionLine.catch(() => {}).then(async () => {
+    for (let t = 0; t < 600 && running.size; t++) await sleep(200);
+    queued.delete(id); running.add(id); try { await runReaction(combat, id); } finally { running.delete(id); stopAiming(); }
+  });
+  try { await mine; } finally { queued.delete(id); }
 }
+/** A turn's action waits while a monster's reaction is mid-Strike or queued (at most a minute). */
+async function reactionsClear(butId) { for (let t = 0; t < 300 && ([...running].some(x => x !== butId && reactionIds.has(x)) || queued.size); t++) await sleep(200); }
 /** Skip: the offer ends and the monster keeps its reaction. */
 export async function skipReaction(combat, id) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
@@ -2588,6 +2608,7 @@ async function runReaction(combat, id) {
   let result; try { result = await runStrike(combat, id, 0, r.steps[0], tok, target); } catch (e) { console.error(e); result = "ask"; await save(combat, id, { note: e.message }); }
   if (request(combat, id)?.state === "manual") return;
   const rec = request(combat, id)?.log?.[0] ?? {}, degree = rec.attack?.degree, words = [];
+  if (!rec.started && !rec.flatStarted && !rec.attack) await saveTurns(combat, { [`reacted.${tok.id}`]: null });   /* nothing was rolled: the reaction isn't spent (review finding 10) */
   if (rec.flat && !rec.flat.ok) words.push(`${tok.name}'s Reactive Strike failed its flat check.`);
   else if (degree != null) words.push(`${tok.name}'s Reactive Strike at ${target.name}: ${OUTCOMES[degree] ?? "rolled"}.`);
   /* a critical hit disrupts a manipulate action (the rule): the action already shows, so undoing it is the GM's call */
@@ -2603,13 +2624,15 @@ async function turnReactions(combat) {
   for (const r of openReactions(combat)) if (r.state === "ready" && !running.has(r.id)) { change[`requests.${r.id}.state`] = "done"; change[`requests.${r.id}.lapsed`] = true; change[`requests.${r.id}.go`] = false; }
   const now = combat.combatant?.tokenId; if (now && turns(combat).reacted?.[now]) change[`reacted.${now}`] = null;
   if (Object.keys(change).length) await saveTurns(combat, change);
-  const a = combat.combatant?.actor; if (a) for (const it of a.items ?? []) if (it.system?.equipped) carried.set(it.uuid, { carry: it.system.equipped.carryType, hands: it.system.equipped.handsHeld ?? 0 });   /* what the creature on turn holds, for items changing hands */
+  noteCarried(combat);
 }
+/** What everyone in the fight holds now, for items changing hands (read on every turn change; an item never seen is not guessed at). */
+function noteCarried(combat) { for (const c of combat.combatants) for (const it of c.actor?.items ?? []) if (it.system?.equipped && !carried.has(it.uuid)) carried.set(it.uuid, { carry: it.system.equipped.carryType, hands: it.system.equipped.handsHeld ?? 0 }); }
 /** A token moved (the runner's `moveToken` hook): a move action out of a monster's reach. */
 export function onTokenMoved(doc, movement) {
   if (!isRunner() || !movement || ["undo", "config", "paste"].includes(movement.method)) return;
   const combat = fightOf(doc); if (!combat || !doc.actor?.isOfType?.("creature")) return;
-  const scene = combat.scene, px = scene.grid.size, d = scene.dimensions, sq = w => [Math.round((w.x - d.sceneX) / px), Math.round((w.y - d.sceneY) / px)];
+  const scene = combat.scene, px = scene.grid.size, d = scene.dimensions, near = (doc.width ?? 1) < 1 ? Math.floor : Math.round, sq = w => [near((w.x - d.sceneX) / px), near((w.y - d.sceneY) / px)];   /* a Tiny token counts as the square holding its corner, as placeOf has it */
   const way = movement.passed?.waypoints ?? [], route = squaresAlong([sq(movement.origin), ...way.map(sq)]); if (route.length < 2) return;
   const action = way.find(w => w.action)?.action ?? doc.movementAction ?? "walk", at = stepCards.get(doc.actor.id), stepped = !!at && clock() - at < CARD_MS; if (stepped) stepCards.delete(doc.actor.id);
   let trig = moveTrigger({ action, squares: route.length - 1, ownTurn: combat.combatant?.tokenId === doc.id, stepped });
@@ -2621,13 +2644,16 @@ export async function onActionCard(message) {
   if (!isRunner()) return;
   const tok = message.speaker?.token ? game.scenes.get(message.speaker.scene)?.tokens.get(message.speaker.token) : null, combat = tok && fightOf(tok); if (!combat) return;
   const f = message.flags?.pf2e ?? {}, c = f.context ?? {}, o = f.origin ?? null, html = `${message.flavor ?? ""} ${message.content ?? ""}`;
-  const opts = [...(c.options ?? []), ...(o?.rollOptions ?? [])], traits = new Set([...(c.traits ?? []).map(x => x?.name ?? x), ...opts.map(x => /(?:^|:)item:trait:([a-z-]+)$/.exec(x)?.[1]).filter(Boolean), ...[...html.matchAll(/class="tag[^"]*"[^>]*data-slug="([a-z-]+)"/g)].map(x => x[1]), ...[...html.matchAll(/data-slug="([a-z-]+)"[^>]*class="tag/g)].map(x => x[1])]);
+  const opts = [...(c.options ?? []), ...(o?.rollOptions ?? [])], read = readCard(html, opts, (c.traits ?? []).map(x => x?.name ?? x)), traits = new Set(read.traits);
   let item = null; if (o?.uuid) { try { item = fromUuidSync(o.uuid); } catch { item = null; } }
-  const title = /<h4 class="action">\s*<strong>([^<]+)<\/strong>/.exec(html)?.[1]?.trim() ?? null, name = item?.name ?? title ?? null;
-  const slug = opts.map(x => /(?:^|:)(?:origin:)?item:slug:([a-z0-9-]+)$/.exec(x)?.[1]).find(Boolean) ?? (name ? game.pf2e.system.sluggify(name) : null);
+  const name = item?.name ?? read.title ?? null, slug = read.slug ?? (name ? game.pf2e.system.sluggify(name) : null);
   let consumable = null, srcName = null;
-  if (o?.type === "consumable") { let src = item; if (!src && o.sourceId) src = await fromUuid(o.sourceId).catch(() => null); consumable = src?.system?.category ?? true; srcName = src?.name ?? null; for (const x of src?.system?.traits?.value ?? []) traits.add(x); }
-  const trig = cardTrigger({ type: c.type ?? null, ranged: opts.includes("item:ranged") || (c.domains ?? []).includes("ranged-attack-roll"), spell: !!f.casting, consumable, traits: [...traits], slug, name: name ?? srcName });
+  if (o?.type === "consumable") {
+    if (read.itemCard) return;   /* an item shown in chat, not used (review finding 4) */
+    let src = item; if (!src && o.sourceId) src = await fromUuid(o.sourceId).catch(() => null); consumable = src?.system?.category ?? true; srcName = src?.name ?? null; for (const x of src?.system?.traits?.value ?? []) traits.add(x); }
+  /* a ranged attack: a ranged weapon's roll, or a spell attack whose spell isn't touch (review finding 9) */
+  const spellAttack = c.type === "attack-roll" && opts.some(x => /(?:^|:)item:type:spell$/.test(x)), ranged = spellAttack ? !/touch/i.test(String(item?.system?.range?.value ?? "")) : opts.includes("item:ranged") || (c.domains ?? []).includes("ranged-attack-roll");
+  const trig = cardTrigger({ type: c.type ?? null, ranged, spell: !!f.casting, consumable, traits: [...traits], slug, name: name ?? srcName });
   if (!trig) return;
   if (slug === "stand") standCards.set(tok.actor.id, clock());
   if (trig.step) { stepCards.set(tok.actor.id, clock()); return; }
@@ -2635,8 +2661,9 @@ export async function onActionCard(message) {
 }
 /** An item changed hands with no card (the runner's `updateItem` hook): drawing, stowing or picking up is an Interact, if it was an action. */
 export function onItemHands(item, change) {
-  if (!isRunner() || !foundry.utils.hasProperty(change, "system.equipped") || !item.actor) return;
-  const now = { carry: item.system.equipped?.carryType, hands: item.system.equipped?.handsHeld ?? 0 }, before = carried.get(item.uuid) ?? { carry: now.carry === "held" ? "worn" : "held", hands: 0 }; carried.set(item.uuid, now);
+  const eq = change?.system?.equipped; if (!isRunner() || !eq || !("carryType" in eq || "handsHeld" in eq) || !item.actor) return;   /* invested and the like are not hands (review finding 7) */
+  const now = { carry: item.system.equipped?.carryType, hands: item.system.equipped?.handsHeld ?? 0 }, before = carried.get(item.uuid) ?? null; carried.set(item.uuid, now);
+  if (!before) return;   /* never seen (picked up new, or the page reloaded this turn): no guessing which way it went */
   const combat = game.combats.find(c => c.started && tokenIn(c, item.actor)), tok = combat && tokenIn(combat, item.actor); if (!tok) return;
   const trig = equipTrigger(before, now, item.name); if (trig) offerAll(combat, tok, trig).catch(e => console.error(`${ID} | reactions`, e));
 }

@@ -114,6 +114,19 @@ const MOVERS = ["stride", "crawl", "leap", "fly", "swim", "climb", "burrow", "sn
 const STAYS = { stand: "stood up", "drop-prone": "dropped prone" };
 /* Consumables whose activation is an Interact (manipulate) by their own rules: drinking, applying, injecting. Others vary (a talisman is usually free). */
 const HAND_CONSUMABLES = ["potion", "elixir", "oil", "mutagen", "drug"];
+/** What a chat card says of its action, from its HTML (flavor and content) and roll options. PF2e's own action cards (Interact, Stand, Step) carry no
+    flags: the title is in `<h4 class="action"><strong>`, the traits in `class="tag" data-slug`. A check rolled for an action names it in the option
+    `action:<slug>`; an item's card names its traits and slug in `item:trait:<x>` and `item:slug:<x>` (with or without `origin:`). itemCard: an item
+    shown in chat, not used. Returns { traits, title, slug, itemCard }. */
+export function readCard(html = "", options = [], traits = []) {
+  const h = String(html), out = new Set(traits.filter(Boolean));
+  for (const x of options) { const m = /(?:^|:)item:trait:([a-z0-9-]+)$/.exec(x); if (m) out.add(m[1]); }
+  for (const m of h.matchAll(/<[^>]*class="tag[^"]*"[^>]*>/g)) { const s = /data-slug="([a-z0-9-]+)"/.exec(m[0]); if (s) out.add(s[1]); }
+  for (const m of h.matchAll(/<[^>]*data-slug="([a-z0-9-]+)"[^>]*class="tag[^"]*"[^>]*>/g)) out.add(m[1]);
+  const title = /<h4 class="action">\s*<strong>([^<]+)<\/strong>/.exec(h)?.[1]?.trim() ?? null;
+  const slug = options.map(x => /^action:([a-z0-9-]+)$/.exec(x)?.[1] ?? /(?:^|:)item:slug:([a-z0-9-]+)$/.exec(x)?.[1]).find(Boolean) ?? (title ? title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") : null);
+  return { traits: [...out], title, slug, itemCard: /class="[^"]*\bitem-card\b/.test(h) };
+}
 /** A chat card as a trigger. card: { type (PF2e's context type or null), ranged, spell (it is a cast card), consumable (its category, or true when
     unknown), traits ([] of slugs from the card's tags, its origin and its context), slug (the action's, sluggified), name }. Returns null,
     { step: true } (a Step: the next one-square move is no trigger), or { gate, sure, kind, why }. */
