@@ -1,12 +1,12 @@
 /* The Monster Turns window: GM only. Who's ticked, and the plan card for the turn in hand. PF2e HUD's tracker is left alone. */
-import { SIDES, WORD, describeChanges, describeStep, isMove, listWords } from "../turn.mjs";
+import { CHANGEABLE, NOTE_MAX, SIDES, WORD, applyEdits, changeProblem, describeChanges, describeStep, editableParts, isMove, listWords } from "../turn.mjs";
 import { esc } from "../journal.mjs";
 import { describeKnows } from "../perceive.mjs";
 import { ID } from "../builder.mjs";
-import { applySetting, partyMember, runnable, brainListening, bringBack, runnerName, escapedList, extendMap, extendProblem, letGo, notePress, brainSeenAt, clock, currentRequest, doIt, hold, lastNote, playMyself, rollFor, runnerProblem } from "../fight.mjs";
+import { askAngel, changePlan, applySetting, partyMember, runnable, brainListening, bringBack, runnerName, escapedList, extendMap, extendProblem, letGo, notePress, brainSeenAt, clock, currentRequest, doIt, hold, lastNote, playMyself, rollFor, runnerProblem } from "../fight.mjs";
 import { LISTEN_MS, stallWords } from "../brain.mjs";
 
-const STYLE = `.leb-turns .window-content{overflow-y:auto;padding:8px 12px}.leb-turns .leb-t{display:grid;grid-template-columns:1fr 58px 44px;gap:4px;align-items:center}.leb-turns .leb-cur{font-weight:700}.leb-turns .leb-card{border:1px solid #0006;padding:6px 8px;margin-top:8px}.leb-turns .leb-warn{color:#e07050}.leb-turns .leb-card.leb-stall{border-color:#e0a030;background:#e0a03022}.leb-turns .leb-stallw{color:#e0a030;font-weight:700}.leb-turns .leb-btns{display:flex;gap:6px;margin-top:6px}.leb-turns .leb-btns button{flex:1}.leb-turns .leb-listen{margin:0 0 6px;opacity:.8}.leb-turns .leb-listen i{color:#888}.leb-turns .leb-listen.on i{color:#4caf50}.leb-turns li.leb-done{opacity:.6}.leb-turns li.leb-next{font-weight:700}.leb-turns .leb-esc{margin-top:8px}.leb-turns .leb-esc .leb-t{grid-template-columns:1fr 110px}.leb-turns .leb-edge{font-weight:700}`;
+const STYLE = `.leb-turns .window-content{overflow-y:auto;padding:8px 12px}.leb-turns .leb-t{display:grid;grid-template-columns:1fr 58px 44px;gap:4px;align-items:center}.leb-turns .leb-cur{font-weight:700}.leb-turns .leb-card{border:1px solid #0006;padding:6px 8px;margin-top:8px}.leb-turns .leb-warn{color:#e07050}.leb-turns .leb-card.leb-stall{border-color:#e0a030;background:#e0a03022}.leb-turns .leb-stallw{color:#e0a030;font-weight:700}.leb-turns .leb-btns{display:flex;gap:6px;margin-top:6px}.leb-turns .leb-btns button{flex:1}.leb-turns .leb-listen{margin:0 0 6px;opacity:.8}.leb-turns .leb-listen i{color:#888}.leb-turns .leb-listen.on i{color:#4caf50}.leb-turns li.leb-done{opacity:.6}.leb-turns li.leb-next{font-weight:700}.leb-turns .leb-esc{margin-top:8px}.leb-turns .leb-esc .leb-t{grid-template-columns:1fr 110px}.leb-turns .leb-edge{font-weight:700}.leb-turns .leb-edit{border-top:1px solid #0004;margin-top:6px;padding-top:6px}.leb-turns .leb-er{margin:4px 0;padding:4px;border:1px solid #0002}.leb-turns .leb-er.leb-out .leb-et{text-decoration:line-through;opacity:.6}.leb-turns .leb-ef{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:3px}.leb-turns .leb-ef input[type=number]{width:52px}.leb-turns .leb-ef select{flex:1;min-width:120px}.leb-turns .leb-edit textarea{width:100%;min-height:44px}`;
 export class TurnsApp extends foundry.applications.api.ApplicationV2 {
   static DEFAULT_OPTIONS = { id: "leb-turns", classes: ["leb-turns"], window: { title: "Monster Turns", resizable: true }, position: { width: 400, height: 420, left: 110, top: 60 } };
   get combat() { return game.combat?.scene?.id === canvas.scene?.id ? game.combat : game.combats.find(c => c.scene?.id === canvas.scene?.id) ?? null; }
@@ -31,12 +31,23 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
         return rest.length ? ` Also in the area: ${listWords(rest)}.` : ""; };
       const steps = r.steps ? `<ol>${r.steps.map((s, i) => `<li class="${i < pos ? "leb-done" : i === pos && r.state !== "requested" ? "leb-next" : ""}">${i < pos ? "✓ " : ""}${esc(named(describeStep(s)) + also(s))}</li>`).join("")}</ol>` : "";
       const go = pos ? `<i class="fa-solid fa-forward-step"></i> Next step` : `<i class="fa-solid fa-play"></i> Do it`;
+      /* the Change button (Rhea, 2026-11-09: "Note and step edits"): the steps still to come, each with what can be changed, and a note to Angel */
+      const canChange = !changeProblem(r), editing = canChange && this._draft?.id === r.id;
+      if (!editing && this._draft?.id === r.id) this._draft = null;   /* the plan moved on under the draft */
+      const choices = [...(r.packet?.perceived ?? []), ...(r.packet?.allies ?? [])].map(x => x?.label).filter((l, i, a) => l && a.indexOf(l) === i);
+      const editPanel = editing ? `<div class="leb-edit"><p><b>Change the plan</b> from step ${pos + 1}. Each change is checked like Angel's plans.</p>${(r.plan?.steps ?? []).slice(pos).map((raw, k) => { const e = this._draft.edits[k] ?? {}, parts = editableParts(raw), val = f => e[f] !== undefined ? e[f] : raw[f];
+        const sel = f => `<select data-f="${f}">${choices.map(l => `<option value="${esc(l)}" ${val(f) === l ? "selected" : ""}>${esc(nameOf(l) ?? l)} (${esc(l)})</option>`).join("")}${choices.includes(val(f)) ? "" : `<option value="${esc(val(f))}" selected>${esc(val(f))}</option>`}</select>`;
+        const sq = f => `<span>${f === "to" ? "Square" : f === "at" ? "From corner" : "Toward"} <input type="number" min="0" data-f="${f}" data-i="0" value="${val(f)?.[0] ?? ""}"> , <input type="number" min="0" data-f="${f}" data-i="1" value="${val(f)?.[1] ?? ""}"> <button type="button" data-pick="${f}" title="Click a square on the map"><i class="fa-solid fa-crosshairs"></i> Pick</button></span>`;
+        const fields = parts.map(f => f === "target" || f === "after" ? `<label>${f === "after" ? "After" : "Target"} ${sel(f)}</label>` : f === "height" ? `<label>Height <input type="number" min="0" step="5" data-f="height" value="${val("height") ?? ""}"> ft</label>` : sq(f)).join("");
+        return `<div class="leb-er${e.remove ? " leb-out" : ""}" data-k="${k}"><div class="leb-et">${pos + k + 1}. ${esc(named(describeStep(r.steps[pos + k] ?? raw)))}</div><div class="leb-ef"><label><input type="checkbox" data-f="remove" ${e.remove ? "checked" : ""}> Leave out</label>${e.remove ? "" : fields}</div></div>`; }).join("")}
+        <p><textarea data-f="note" maxlength="${NOTE_MAX}" placeholder="Or tell Angel what you want for the rest of this turn (names are fine: Angel gets labels)">${esc(this._draft.note ?? "")}</textarea></p>
+        <div class="leb-btns"><button type="button" data-do="useedit"><i class="fa-solid fa-check"></i> Use my changes</button><button type="button" data-do="sendnote"><i class="fa-solid fa-paper-plane"></i> Send to Angel</button><button type="button" data-do="cancel"><i class="fa-solid fa-xmark"></i> Cancel</button></div></div>` : "";
       /* a save the player rolls from their row on the spell's card; the GM can roll it for them */
       const waiting = r.state === "saves" ? (r.log?.[pos]?.waiting ?? []).map(tid => { const t = c.scene.tokens.get(tid), player = t?.actor?.hasPlayerOwner && game.users.some(u => !u.isGM && u.active && t.actor.testUserPermission(u, "OWNER"));
         return `<p>Waiting for ${esc(t?.name ?? "a creature")}'s save${player ? " (their row on the spell's card)" : ": I rolled it on the card and no result has come yet"}. <button type="button" data-do="rollfor" data-for="${esc(tid)}"><i class="fa-solid fa-dice-d20"></i> Roll it for them</button></p>`; }).join("") : "";
       /* a stall (the runner's check, Rhea 2026-11-08): amber while the turn is still stuck at the point it was marked */
       const stalled = r.stall && r.stall.since === r.since ? `<p class="leb-stallw"><i class="fa-solid fa-triangle-exclamation"></i> ${esc(stallWords(r.stall))} Angel has been asked to look into it.</p>` : "";
-      card = `<div class="leb-card${stalled ? " leb-stall" : ""}" data-request="${r.id}">${stalled}<b>${esc(tok?.name)}</b>: ${esc(words)}${r.why ? `<p class="leb-warn">${esc(named(describeChanges(r.why, nameOf, tok?.name ?? "It")))}</p>` : ""}${done ? `<p>Done this turn: ${esc(done)}.</p>` : ""}${knows ? `<p>${esc(knows)}</p>` : ""}${r.plan?.reason ? `<p>${esc(r.plan.reason)}</p>` : ""}${steps}${waiting}${r.verdict ? `<p class="leb-warn">${esc(named(r.verdict))}</p>` : ""}${deaf}${game.paused && tok?.getFlag(ID, "auto") && ["ready", "running", "done"].includes(r.state) ? `<p class="leb-warn">The game is paused: Auto waits until you unpause.</p>` : ""}${r.note ? `<p class="leb-warn">${esc(named(r.note))}</p>` : ""}${r.state === "fled" ? (r.fled?.sides ?? []).map(x => extendProblem(c.scene, x)).filter(Boolean).map(w => `<p class="leb-warn">${esc(w)}</p>`).join("") : ""}<div class="leb-btns">${r.state === "fled" ? (r.extend ? "" : (r.fled?.sides ?? []).filter(x => SIDES.includes(x)).map(x => { const why = extendProblem(c.scene, x) ?? problem; return `<button type="button" data-do="extend" data-side="${x}" ${why ? `disabled title="${esc(why)}"` : ""}><i class="fa-solid fa-up-right-and-down-left-from-center"></i> Extend map ${x}</button>`; }).join("")) + `<button type="button" data-do="letgo"><i class="fa-solid fa-person-running"></i> Let it get away</button>` : ""}${["ready", "held", "stopped"].includes(r.state) && !r.go ? `<button type="button" data-do="doit" ${problem ? "disabled" : ""}>${go}</button>` : ""}${r.state === "running" ? `<button type="button" data-do="hold"><i class="fa-solid fa-hand"></i> Hold</button>` : ""}<button type="button" data-do="manual"><i class="fa-solid fa-user"></i> Play it myself</button></div></div>`; }
+      card = `<div class="leb-card${stalled ? " leb-stall" : ""}" data-request="${r.id}">${stalled}<b>${esc(tok?.name)}</b>: ${esc(words)}${r.why ? `<p class="leb-warn">${esc(named(describeChanges(r.why, nameOf, tok?.name ?? "It")))}</p>` : ""}${done ? `<p>Done this turn: ${esc(done)}.</p>` : ""}${knows ? `<p>${esc(knows)}</p>` : ""}${r.plan?.reason ? `<p>${esc(r.plan.reason)}</p>` : ""}${editing ? editPanel : steps}${waiting}${r.changeVerdict && CHANGEABLE.includes(r.state) ? `<p class="leb-warn">${esc(named(r.changeVerdict))}</p>` : ""}${r.verdict ? `<p class="leb-warn">${esc(named(r.verdict))}</p>` : ""}${deaf}${game.paused && tok?.getFlag(ID, "auto") && ["ready", "running", "done"].includes(r.state) ? `<p class="leb-warn">The game is paused: Auto waits until you unpause.</p>` : ""}${r.note ? `<p class="leb-warn">${esc(named(r.note))}</p>` : ""}${r.state === "fled" ? (r.fled?.sides ?? []).map(x => extendProblem(c.scene, x)).filter(Boolean).map(w => `<p class="leb-warn">${esc(w)}</p>`).join("") : ""}<div class="leb-btns">${r.state === "fled" ? (r.extend ? "" : (r.fled?.sides ?? []).filter(x => SIDES.includes(x)).map(x => { const why = extendProblem(c.scene, x) ?? problem; return `<button type="button" data-do="extend" data-side="${x}" ${why ? `disabled title="${esc(why)}"` : ""}><i class="fa-solid fa-up-right-and-down-left-from-center"></i> Extend map ${x}</button>`; }).join("")) + `<button type="button" data-do="letgo"><i class="fa-solid fa-person-running"></i> Let it get away</button>` : ""}${["ready", "held", "stopped"].includes(r.state) && !r.go && !editing ? `<button type="button" data-do="doit" ${problem ? "disabled" : ""}>${go}</button>` : ""}${canChange && !editing ? `<button type="button" data-do="change" title="Change the plan, or tell Angel what you want"><i class="fa-solid fa-pen"></i> Change</button>` : ""}${r.state === "running" ? `<button type="button" data-do="hold"><i class="fa-solid fa-hand"></i> Hold</button>` : ""}<button type="button" data-do="manual"><i class="fa-solid fa-user"></i> Play it myself</button></div></div>`; }
     const left = !r && lastNote(c); if (left) card = `<div class="leb-card"><p class="leb-warn">${esc(named(left.note))}</p></div>`;
     const history = `<p class="leb-btns"><button type="button" data-do="history"><i class="fa-solid fa-clock-rotate-left"></i> History</button></p>`;
     /* escaped monsters (Rhea, 2026-11-08): hidden on this scene, out of the fight; Bring back shows the token where it stands now and rolls initiative */
@@ -44,17 +55,53 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     return `<div>${listen}${rows || "<p>No monsters in this fight.</p>"}${problem ? `<p class="leb-warn">${esc(problem)}</p>` : ""}${card}${escaped}${applySetting() ? "" : "<p><em>Damage is rolled, not applied: use the card's Damage button.</em></p>"}${history}</div>`;
   }
   _replaceHTML(html, content) { content.innerHTML = html; }
+  /** A field of the Change panel into the draft (this browser only, until sent). */
+  _field(el) {
+    const d = this._draft; if (!d) return; const f = el.dataset.f;
+    if (f === "note") { d.note = el.value; return; }
+    const k = Number(el.closest("[data-k]")?.dataset.k), e = d.edits[k] ??= {};
+    if (f === "remove") { e.remove = el.checked; return this.render(); }
+    if (f === "height") { e.height = el.value === "" ? undefined : Math.max(0, Math.round(Number(el.value))); return; }
+    if (el.dataset.i != null) { const row = el.closest("[data-k]"), xy = [...row.querySelectorAll(`[data-f="${f}"]`)].map(x => Math.round(Number(x.value))); e[f] = xy.every(Number.isFinite) && xy.every(v => v >= 0) ? xy : undefined; return; }
+    e[f] = el.value;
+  }
+  /** Pick: the window steps aside, the next click on the map gives the square (its top-left corner, for a burst's "at"). Escape or a right-click cancels. */
+  _pick(k, f) {
+    const d = this._draft; if (!d || !canvas.ready) return;
+    this.minimize(); ui.notifications.info("Click a square on the map (right-click to cancel).");
+    const stop = () => { canvas.stage.off("pointerdown", on); this.maximize(); this.render(); };
+    const on = ev => { if (ev.button === 2) return stop(); const p = ev.getLocalPosition(canvas.stage), dim = canvas.scene.dimensions;
+      (d.edits[k] ??= {})[f] = [Math.floor((p.x - dim.sceneX) / dim.size), Math.floor((p.y - dim.sceneY) / dim.size)]; stop(); };
+    canvas.stage.on("pointerdown", on);
+  }
+  /** The Change panel's buttons. Sending never waits for Angel: the card follows the request as usual. */
+  async _change(a, c, id, r, el) {
+    if (a === "change") { this._draft = { id, edits: [], note: "" }; return this.render(); }
+    if (a === "cancel") { this._draft = null; return this.render(); }
+    const d = this._draft; if (!d || d.id !== id) return;
+    try {
+      if (a === "sendnote") { if (!String(d.note ?? "").trim()) return ui.notifications.warn("Write what you want Angel to do first."); el.disabled = true; notePress(c, id, "Send to Angel"); await askAngel(c, id, d.note); }
+      else { const raw = (r?.plan?.steps ?? []).slice(r?.pos ?? 0), steps = applyEdits(raw, d.edits);
+        if (JSON.stringify(steps) === JSON.stringify(raw)) return ui.notifications.warn("Nothing is changed yet.");
+        el.disabled = true; notePress(c, id, "Use my changes"); await changePlan(c, id, steps); }
+      this._draft = null; this.render();
+    } catch (e) { el.disabled = false; ui.notifications.error(e.message); }
+  }
   _onRender() {
     const root = this.element, c = this.combat;
     /* the light goes grey on its own two minutes after the last ask, with nothing else changing */
     clearTimeout(this._grey); const left = brainSeenAt() + LISTEN_MS - clock(); if (left > 0) this._grey = setTimeout(() => { if (this.rendered) this.render(); }, left + 500);
     root.querySelectorAll("input[type=checkbox]").forEach(el => el.addEventListener("change", () => c.scene.tokens.get(el.closest("[data-token]").dataset.token)?.setFlag(ID, el.name, el.checked)));
     root.querySelectorAll("[data-request] [data-do]").forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); const id = el.closest("[data-request]").dataset.request, a = el.dataset.do; const r = c.getFlag(ID, "turns")?.requests?.[id];
+      if (["change", "useedit", "sendnote", "cancel"].includes(a)) return this._change(a, c, id, r, el);
       if (a === "letgo" || a === "extend") el.disabled = true;   /* one press: a second GM's click lands on a disabled button */
       notePress(c, id, a === "doit" ? ((r?.pos ?? 0) ? "Next step" : "Do it") : a === "hold" ? "Hold" : a === "rollfor" ? "Roll it for them" : a === "extend" ? `Extend map ${el.dataset.side}` : a === "letgo" ? "Let it get away" : "Play it myself", a === "rollfor" ? { for: el.dataset.for } : {});   /* for the history window */
       (a === "doit" ? doIt(c, id) : a === "hold" ? hold(c, id) : a === "rollfor" ? rollFor(c, id, el.dataset.for) : a === "extend" ? extendMap(c, id, el.dataset.side) : a === "letgo" ? letGo(c, id) : playMyself(c, id)).catch(e => ui.notifications.error(e.message)); }));
     root.querySelectorAll('.leb-esc [data-do="bringback"]').forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); const tid = el.closest("[data-token]").dataset.token; el.disabled = true;
       bringBack(c, tid).then(r => { ui.notifications.info(`${r.name} is back in the fight${r.initiative != null ? ` at initiative ${r.initiative}` : ""}.`); }).catch(e => { el.disabled = false; ui.notifications.error(e.message); }); }));
+    /* the Change panel's fields go into the draft as they change, so a redraw (any fight update) keeps them */
+    root.querySelectorAll(".leb-edit [data-f]").forEach(el => el.addEventListener(el.tagName === "TEXTAREA" ? "input" : "change", () => this._field(el)));
+    root.querySelectorAll(".leb-edit [data-pick]").forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); this._pick(Number(el.closest("[data-k]").dataset.k), el.dataset.pick); }));
     root.querySelector('[data-do="history"]')?.addEventListener("click", ev => { ev.preventDefault(); Hooks.callAll(`${ID}.openHistory`); });
   }
 }

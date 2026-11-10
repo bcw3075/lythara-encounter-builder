@@ -212,7 +212,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   const wordsFile = path.resolve(HERE, "../../.private-words"), words = fs.existsSync(wordsFile) ? fs.readFileSync(wordsFile, "utf8").split("\n").map(l => l.split("#")[0].trim()).filter(Boolean) : null;
   check("prompt names no campaign", words ? !words.some(w => new RegExp(`(?<![A-Za-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9])`, "i").test(h.prompt)) : (console.log("  (no .private-words: campaign-word check skipped)"), true));
   check("prompt explains the party's side", /"you\.side": "party"/.test(h.prompt) && /don't plan "flee"/.test(h.prompt));
-  check("prompt explains asking again", h.promptVersion === 20 && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 21 && /The GM asks for the rest of this turn/.test(h.prompt) && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -1199,6 +1199,45 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("glide: walls judgment", cleanWalls({ stone: "all" }).walls.stone === "all" && JSON.stringify(cleanWalls({ stone: [[3, 4, 1, 2]] }).walls.stone) === "[[1,2,3,4]]" && !cleanWalls({ soil: "all" }).ok && /"walls.stone"/.test(cleanWalls({ stone: 3 }).reason));
   check("glide: cleanPlan keeps walls", cleanPlan({ steps: [{ do: "none" }], walls: { stone: "none" } }).plan.walls.stone === "none" && !cleanPlan({ steps: [{ do: "none" }], walls: { stone: "x" } }).ok);
   check("glide: the prompt", /you\.burrow\.glides/.test(promptText()) && /judgeWalls/.test(promptText()) && /"stone": "none"/.test(promptText()) && /doors never count/.test(promptText()));
+}
+/* ---- the Change button (0.19.0) ---- */
+{
+  const { CHANGEABLE, NOTE_MAX, applyEdits, changeProblem, editableParts, noteForThinker } = await import("../../scripts/turn.mjs");
+  const two = [{ do: "stride", to: [3, 4] }, { do: "strike", item: "jaws", target: "E1" }];
+  check("ch: a ready plan can change", changeProblem({ state: "ready", steps: two, pos: 0 }) === null && changeProblem({ state: "held", steps: two, pos: 1 }) === null && changeProblem({ state: "stopped", steps: two, pos: 1, log: { 0: { started: true } } }) === null);
+  check("ch: not while running", /Hold first/.test(changeProblem({ state: "running", steps: two })));
+  check("ch: not without a plan", /no plan/.test(changeProblem({ state: "requested" })) && /no plan/.test(changeProblem({ state: "done", steps: two })) && /no plan/.test(changeProblem({ state: "saves", steps: two })) && /no turn/.test(changeProblem(null)));
+  check("ch: nothing left", /Nothing is left/.test(changeProblem({ state: "ready", steps: two, pos: 2 })));
+  check("ch: next step begun", /Step 2 was begun/.test(changeProblem({ state: "stopped", steps: two, pos: 1, log: { 1: { started: true } } })));
+  check("ch: one change at a time", /already on its way/.test(changeProblem({ state: "ready", steps: two, ask: { text: "x" } })) && /already/.test(changeProblem({ state: "ready", steps: two, go: true })) && /already/.test(changeProblem({ state: "ready", steps: two, edit: { steps: [] } })));
+  check("ch: changeable states", CHANGEABLE.join() === "ready,held,stopped");
+  check("ch: parts", editableParts({ do: "strike", item: "jaws", target: "E1" }).join() === "target" && editableParts({ do: "stride", to: [1, 2] }).join() === "to"
+    && editableParts({ do: "fly", to: [1, 2], height: 10 }).join() === "to,height" && editableParts({ do: "climb", height: 5 }).join() === "height"
+    && editableParts({ do: "seek", at: [1, 2] }).join() === "at" && editableParts({ do: "spell", item: "s", toward: [1, 2] }).join() === "toward"
+    && editableParts({ do: "delay", after: "M2" }).join() === "after" && editableParts({ do: "stand" }).length === 0 && editableParts({ do: "ability", item: "a" }).length === 0);
+  const ed = applyEdits([{ do: "stride", to: [3, 4], why: "close in" }, { do: "strike", item: "jaws", target: "E1", why: "bite" }, { do: "strike", item: "jaws", target: "E1", why: "again" }], [{ to: [5, 6] }, { remove: true }, { target: "E2", to: [9, 9] }]);
+  check("ch: edits applied", ed.length === 2 && ed[0].to.join() === "5,6" && ed[0].why === "changed by the GM" && ed[1].target === "E2" && ed[1].to === undefined && ed[1].why === "changed by the GM", JSON.stringify(ed));
+  const same = applyEdits([{ do: "stride", to: [3, 4], why: "close in" }], [{ to: [3, 4] }]);
+  check("ch: an unchanged step keeps its why", same[0].why === "close in" && applyEdits([{ do: "stand" }], []).length === 1 && applyEdits([{ do: "stand" }], [{ remove: true }]).length === 0);
+  const src = [{ do: "stride", to: [3, 4] }]; applyEdits(src, [{ to: [7, 7] }]); check("ch: edits don't touch the plan they read", src[0].to.join() === "3,4");
+  const people = [{ names: ["Test Hero"], label: "E1" }, { names: ["Valeros", "Valeros (Level 7)"], label: null }, { names: ["Hero"], label: "E9" }, { names: ["Sod Hound"], label: "M2" }, { names: ["Ankhrav"], label: "M1" }];
+  const nt = noteForThinker("  Ankhrav: go for test hero, not Valeros; help the Sod Hound.  Valeros again. ", people);
+  check("ch: names become labels", nt.text === "M1: go for E1, not someone it doesn't perceive; help the M2. someone it doesn't perceive again." && nt.unknown.join() === "Valeros", JSON.stringify(nt));
+  check("ch: whole words only", noteForThinker("Heroes and Hero", people).text === "Heroes and E9" && noteForThinker("Sod Hounds", people).text === "Sod Hounds");
+  check("ch: note trimmed to its limit", noteForThinker("x".repeat(NOTE_MAX + 50)).text.length === NOTE_MAX && noteForThinker("", people).text === "");
+  check("ch: names with brackets", noteForThinker("Valeros (Level 7) is near", people).text === "someone it doesn't perceive is near");
+  check("ch: the note in words", describeChange({ who: "gm", what: "note", text: "go for E1" }) === 'The GM asks for the rest of this turn: "go for E1"' && describeChanges([{ who: "gm", what: "note", text: "flee" }], l => "X", "Wolf").includes('"flee"'));
+}
+/* the history shows the GM's edits with the presses (0.19.0) */
+{
+  const t = { labels: { tokA: "M1", tokB: "E1" }, requests: { q1: { round: 1, combatantId: "c1", tokenId: "tokA", at: 1, state: "ready", pos: 0,
+    plan: { reason: "bite", steps: [{ do: "strike", item: "jaws", target: "E1" }] }, steps: [{ do: "strike", item: "jaws", itemName: "Jaws", target: "E1", targetName: "E1" }],
+    presses: { 5: { do: "Use my changes", user: "Rhea", pos: 0 } }, edits: { 6: { user: "Rhea", pos: 0, before: ["Jaws at E1."], after: ["Jaws at E1, attack 2."] } } } } };
+  const h = historyOf(t, { round: 1, turn: 0, current: "c1", order: [{ id: "c1", name: "Wolf", npc: true }] }, { tokA: "Wolf", tokB: "Test Hero" });
+  const lines = h[0].turns[0].parts[0].lines.map(l => l.text);
+  check("history: an edit line in names after its press", lines.length === 2 && /pressed Use my changes/.test(lines[0]) && lines[1] === "Rhea changed the plan from step 1: Jaws at Test Hero, attack 2. (Was: Jaws at Test Hero.)", JSON.stringify(lines));
+  const t2 = structuredClone(t); t2.requests.q1.edits = { 6: { user: "Rhea", pos: 0, before: ["Jaws at E1."], after: [] } };
+  check("history: the rest taken out", /took out the rest\./.test(historyOf(t2, { round: 1, turn: 0, current: "c1", order: [{ id: "c1", name: "Wolf", npc: true }] }, { tokA: "Wolf", tokB: "Test Hero" })[0].turns[0].parts[0].lines.at(-1).text));
 }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
 for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs", "ui/history.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);

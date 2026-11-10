@@ -72,7 +72,11 @@ function partOf(id, r, look, n) {
   /* a refused plan stays in r.plan until the next one lands: while the turn waits for that, it isn't the plan */
   const asking = r.state === "requested" || r.state === "submitted" && !r.steps, plan = r.plan && typeof r.plan === "object" && !asking ? r.plan : null, steps = r.steps ?? [], pos = r.pos ?? 0, lines = [];
   const presses = Object.entries(r.presses ?? {}).map(([at, p]) => ({ at: Number(at), ...p })).sort((a, b) => a.at - b.at);
-  const pressLine = p => ({ kind: "press", at: p.at, text: `${p.user ?? "A GM"} pressed ${p.do}${p.for ? ` for ${look.name?.(p.for) ?? "someone"}` : ""}.` });
+  /* the GM's own edits from the Change button (0.19.0) sit with the presses, at the step they changed from */
+  for (const [at, e] of Object.entries(r.edits ?? {})) presses.push({ at: Number(at), pos: e?.pos ?? 0, edit: e });
+  presses.sort((a, b) => a.at - b.at);
+  const pressLine = p => p.edit ? { kind: "press", at: p.at, text: n.named(`${p.edit.user ?? "A GM"} changed the plan from step ${(p.edit.pos ?? 0) + 1}: ${p.edit.after?.length ? p.edit.after.join(" ") : "took out the rest."} (Was: ${(p.edit.before ?? []).join(" ")})`) }
+    : { kind: "press", at: p.at, text: `${p.user ?? "A GM"} pressed ${p.do}${p.for ? ` for ${look.name?.(p.for) ?? "someone"}` : ""}.` };
   for (const [k, ref] of Object.entries(r.refused ?? {}).sort((a, b) => a[0] - b[0])) lines.push({ kind: "refused", text: `${Number(k) >= 2 ? "Turned down again" : "Turned down"}: ${n.named(ref.reason)}`, plan: ref.plan ? { reason: n.named(ref.plan.reason), steps: (ref.plan.steps ?? []).map(s => n.named(`${s.do}${s.item ? ` ${s.item}` : ""}${s.target ? ` at ${s.target}` : ""}${s.to ? ` to ${sq(s.to)}` : ""}`)) } : null });
   steps.forEach((s, i) => {
     for (const p of presses.filter(p => (p.pos ?? 0) === i)) lines.push(pressLine(p));

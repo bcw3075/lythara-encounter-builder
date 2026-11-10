@@ -1,6 +1,6 @@
 /* The thinker's instructions. One file, whoever thinks: a chat gets it in `hello`, and the API route will send it as the system prompt. It starts the
    same every time, which suits caching. Generic on purpose: the repo is public, so no campaign words here. Pure: no Foundry globals. */
-export const PROMPT_VERSION = 20;
+export const PROMPT_VERSION = 21;
 export function promptText({ canDo = [], stepKinds = [], maxSteps = 8, tries = 2 } = {}) {
   return `You decide what one monster does on its turn in a Pathfinder 2e (Remastered) fight. Rules: https://2e.aonprd.com/.
 
@@ -44,6 +44,8 @@ What you send back: one plan as JSON.
 - "you.side": "party" means this creature fights on the party's side: a party member the GM plays (its "name" is its ancestry and class) or an NPC fighting with them. Everything above still applies, with its enemies being the monsters: help its allies, play it as a sensible adventurer would, and don't plan "flee" (leaving the fight is the GM's call for the party's side).
 
 The module carries a plan out one action at a time and looks again before each action. If anything changed since your plan was made (a creature it perceived went down, moved, got up, vanished or changed how well it's perceived; the monster was hurt, moved, or its conditions or actions changed; or the next step is no longer possible), it drops the rest and sends a "replan" event for the same turn, with a fresh packet and the reason. Plan only what is left. A plan for the whole turn is still right: most turns never change.
+
+A "replan" event can also come from the GM: its reason then starts "The GM asks for the rest of this turn:", with the GM's words (names already turned into labels; "someone it doesn't perceive" stands for a creature this monster doesn't perceive, so it can't be targeted). Do what the GM asks as far as the rules and what the monster perceives allow: the GM's wish comes before the monster's own tactics. If part of it can't be done, plan the nearest legal thing and say why in "reason". The GM can also change steps of your plan directly; you aren't told, and later packets show what was done.
 
 The module checks every plan before anything happens. If it turns one down you get a "retry" event with the reason, once: fix the plan and send it again. A second refusal goes to the GM, who plays the turn. If you can't make a plan at all, report the failure with a short reason instead. You have ${tries} tries per turn.
 

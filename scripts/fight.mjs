@@ -1,6 +1,7 @@
 /* A fight's turns. One named account does the work (the runner: the Claude Bridge unless the setting says otherwise), on its own page with the
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. It runs Strikes, Strides, Steps, Crawls, Fly, Swim, Climb, Release, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek, Interact, Delay and fleeing off the map; what is still to come is in the repo's docs/features and the project's plan doc. */
+import { CHANGEABLE, NOTE_MAX, changeProblem, describeStep, noteForThinker } from "./turn.mjs";
 import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, shouldSink, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract, nextClimb, climbResult } from "./turn.mjs";
 import { BURROW_DEPTH, FT, burrowWorld, crossesWalls, cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, heightWhenCut, rockSquares, routeWords, swimWorld, glideWorld, treeTop, treesBeside, wallSquares, waterKinds, waterUnder } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
@@ -432,6 +433,7 @@ function act(combat) {
   const r = currentRequest(combat); if (!r) return;
   if (r.state === "submitted") judge(combat, r.id).catch(e => console.error(`${ID} | plan`, e));
   else if (r.state === "saves" && Object.values(r.rollFor ?? {}).some(Boolean)) doIt(combat, r.id).catch(e => console.error(`${ID} | turn`, e));   /* Roll it for them */
+  else if ((r.ask || r.edit) && CHANGEABLE.includes(r.state)) runChange(combat, r.id).catch(e => console.error(`${ID} | change`, e));   /* the Change button (0.19.0), before a press */
   else if (r.go && RESUMABLE.includes(r.state)) doIt(combat, r.id).catch(e => console.error(`${ID} | turn`, e));
   else if (r.state === "fled" && r.extend) runExtend(combat, r.id).catch(e => console.error(`${ID} | extend`, e));
 }
@@ -1927,7 +1929,7 @@ async function runTurn(combat, requestId) {
   const r = request(combat, requestId); if (!RESUMABLE.includes(r?.state)) throw new Error("That turn isn't ready.");
   if (!await ensureScene(combat)) return save(combat, requestId, { state: "stopped", go: false, note: cantOpen() });
   /* pressing Do it means go, whatever was held. A note about why it stopped goes; one from an earlier step (a PC at 0 HP) stays with the turn. */
-  await save(combat, requestId, { state: "running", go: false, hold: false, gmWait: false, ...(r.state === "held" || r.state === "stopped" ? { note: null } : {}) });
+  await save(combat, requestId, { state: "running", go: false, hold: false, gmWait: false, changeVerdict: null, ...(r.state === "held" || r.state === "stopped" ? { note: null } : {}) });
   const tok = combat.scene.tokens.get(r.tokenId);
   await dropInstantAreas(combat, { id: requestId, pos: r.pos ?? 0 }).catch(e => console.warn(`${ID} | areas`, e));   /* an instant area the GM resolved from its card */
   await settleCover(combat, requestId, r.pos ?? 0, tok);   /* a reload between a step and ending its Take Cover */
@@ -2158,6 +2160,63 @@ export const hold = (combat, id) => save(combat, id, { hold: true });
 export const playMyself = (combat, id) => save(combat, id, { state: "manual" });
 /** A GM's press on the card (Do it, Next step, Hold, Play it myself, Roll it for them), for the history window. Keyed by time so two browsers never
     write over each other. Only real presses: Auto's own runs don't come here. */
+/* ---------- the Change button (Rhea, 2026-11-09: "Note and step edits") ---------- */
+/** A note to Angel from the card: the rest of the turn is planned again with the GM's words (names become labels on the runner). Any GM may call it;
+    the runner carries it out. It never counts as one of the turn's re-plans: the GM asked. */
+export async function askAngel(combat, requestId, note) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  const why = changeProblem(request(combat, requestId)); if (why) throw new Error(why);
+  const words = String(note ?? "").replace(/\s+/g, " ").trim().slice(0, NOTE_MAX); if (!words) throw new Error("Write what you want Angel to do first.");
+  await save(combat, requestId, { ask: whole({ text: words, user: game.user.name, at: Date.now() }), changeVerdict: null });
+  if (isRunner()) await runChange(combat, requestId);
+}
+/** The GM's own edits from the card: `steps` is the plan from the current step on, written as the thinker writes steps (the card makes it with
+    applyEdits). Checked on the runner by the same rules as any plan; refused, the old plan stays and the card says why. An empty list ends the plan. */
+export async function changePlan(combat, requestId, steps) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  const why = changeProblem(request(combat, requestId)); if (why) throw new Error(why);
+  if (!Array.isArray(steps) || JSON.stringify(steps).length > 8000) throw new Error("That isn't a list of steps.");
+  await save(combat, requestId, { edit: whole({ steps, user: game.user.name, at: Date.now() }), changeVerdict: null });
+  if (isRunner()) await runChange(combat, requestId);
+}
+/* one change at a time per request: the updateCombat hook and the GM's own call on the runner's page can both arrive here */
+const changing = new Set();
+async function runChange(combat, requestId) {
+  if (!isRunner() || changing.has(requestId) || running.has(requestId)) return;
+  changing.add(requestId);
+  try {
+    const r = request(combat, requestId); if (!r?.ask && !r?.edit) return;
+    const what = r.ask ? "note" : "change", refuse = reason => save(combat, requestId, { ask: null, edit: null, changeVerdict: `Your ${what} wasn't used: ${reason}` });
+    const why = changeProblem({ ...r, ask: null, edit: null }); if (why) return refuse(why);
+    if (!await ensureScene(combat)) return refuse(cantOpen());
+    const tok = combat.scene.tokens.get(r.tokenId); if (!tok) return refuse("its token is gone.");
+    return r.ask ? await sendNote(combat, requestId, r, tok) : await useEdit(combat, requestId, r, tok, refuse);
+  } finally { changing.delete(requestId); }
+}
+/** Who the GM's note can name, for noteForThinker: every token on the scene by its token and actor names, with its label when the monster perceives it
+    (or knows it as an ally), its own label for itself, and null for anyone else (GM-hidden, unseen, not in the fight). */
+function peopleFor(combat, r, tok) {
+  const labels = turns(combat).labels ?? {}, known = new Set([...Object.keys(r.labels ?? {}), ...(r.packet?.allies ?? []).map(a => a?.label)].filter(Boolean)), me = r.packet?.you?.label ?? "it";
+  return combat.scene.tokens.contents.map(t => ({ names: [t.name, t.actor?.name].filter(Boolean), label: t.id === tok.id ? me : known.has(labels[t.id]) ? labels[t.id] : null }));
+}
+async function sendNote(combat, requestId, r, tok) {
+  const { text: words, unknown } = noteForThinker(r.ask.text, peopleFor(combat, r, tok));
+  await save(combat, requestId, { ask: null });
+  await replan(combat, { ...request(combat, requestId), id: requestId }, r.pos ?? 0, [{ who: "gm", what: "note", text: words, user: r.ask.user }], tok, { counted: false });
+  const next = request(combat, requestId)?.replanned;
+  if (next && unknown.length) await addNote(combat, next, `${listWords(unknown)} ${unknown.length === 1 ? "isn't someone" : "aren't creatures"} ${tok.name} perceives, so Angel was told "someone it doesn't perceive".`);
+}
+async function useEdit(combat, requestId, r, tok, refuse) {
+  const i = r.pos ?? 0, steps = r.edit.steps ?? [], user = r.edit.user, before = r.steps.slice(i).map(s => describeStep(s)), at = Date.now();
+  if (!steps.length) {   /* the rest taken out: the plan ends here, and ending the turn is the GM's (Auto doesn't end a turn the GM cut short) */
+    await save(combat, requestId, { ask: null, edit: null, changeVerdict: null, state: "done", gmEnded: true, plan: whole({ ...(r.plan ?? {}), steps: (r.plan?.steps ?? []).slice(0, i) }), steps: r.steps.slice(0, i), edits: { [at]: { user, pos: i, before, after: [] } } });
+    return addNote(combat, requestId, "You took out the rest of the plan: end the turn when you're ready.");
+  }
+  const clean = cleanPlan({ steps, reason: r.plan?.reason }); if (!clean.ok) return refuse(clean.reason);
+  const left = clean.plan.steps, rest = checkPlan({ steps: left }, await gather(combat, r, spentBy(r.steps.slice(0, i)), { moves: hasMove(left), spells: hasSpell(left), before: i > 0 ? { step: r.steps[i - 1], rec: r.log?.[i - 1] ?? {} } : null }));
+  if (!rest.ok) return refuse(rest.reason);
+  await save(combat, requestId, { ask: null, edit: null, changeVerdict: null, verdict: null, plan: whole({ ...(r.plan ?? {}), steps: [...(r.plan?.steps ?? []).slice(0, i), ...left] }), steps: [...r.steps.slice(0, i), ...rest.steps], edits: { [at]: { user, pos: i, before, after: rest.steps.map(s => describeStep(s)) } } });
+}
 export const notePress = (combat, id, what, extra = {}) => save(combat, id, { presses: { [Date.now()]: { do: what, user: game.user.name, pos: request(combat, id)?.pos ?? 0, ...extra } } }).catch(e => console.warn(`${ID} | history`, e));
 
 /** A party member's Angel and Auto ticks last one fight (Rhea: "always have the default be unticked"): cleared when the fight is deleted, on the runner

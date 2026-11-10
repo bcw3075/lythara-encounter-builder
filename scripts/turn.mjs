@@ -665,6 +665,7 @@ export function changesSince(was, now) {
 /** A change in plain words. Labels stay labels unless nameOf says otherwise, so the same words can go to the thinker; `self` is how the monster is named. */
 export function describeChange(c, nameOf = l => l, self = "It") {
   if (c.who === "plan") return String(c.reason ?? "").replace(/^Step \d+: /, "");
+  if (c.who === "gm") return `The GM asks for the rest of this turn: "${c.text ?? ""}"`;   /* the Change button's note (0.19.0), already in labels */
   const who = c.who === "me" ? self : nameOf(c.who) ?? c.who, its = c.who === "me" ? (self === "It" ? "Its" : `${self}'s`) : `${who}'s`;
   switch (c.what) {
     case "moved": return `${who} moved.`;
@@ -686,6 +687,58 @@ export function describeChange(c, nameOf = l => l, self = "It") {
   }
 }
 export const describeChanges = (list = [], nameOf, self) => list.map(c => describeChange(c, nameOf, self)).join(" ");
+
+/* ---------- the Change button (Rhea, 2026-11-09: "Note and step edits") ---------- */
+export const NOTE_MAX = 300, CHANGEABLE = ["ready", "held", "stopped"];
+/** Why the GM can't change this turn's plan now, or null. r: a request. Only a plan that waits (ready, held, stopped), with steps left, and never with
+    the next step begun (a reload or a stop part-way: what it did isn't known, so it can't be replaced). */
+export function changeProblem(r) {
+  if (!r) return "There's no turn to change.";
+  if (r.state === "running") return "It's carrying out a step: press Hold first.";
+  if (!CHANGEABLE.includes(r.state) || !Array.isArray(r.steps) || !r.steps.length) return "There's no plan to change yet.";
+  const pos = r.pos ?? 0;
+  if (pos >= r.steps.length) return "Nothing is left of the plan.";
+  if (Object.keys(r.log?.[pos] ?? {}).length) return `Step ${pos + 1} was begun, so it can't be changed: check it and play the rest yourself.`;
+  if (r.go || r.ask || r.edit) return "A change or a press is already on its way.";
+  return null;
+}
+/** Which parts of a plan step (as the thinker gave it) the GM can change: a creature ("target", or "after" for a Delay), a square ("to", "at" or
+    "toward") and a height. Anything else (which Strike, which spell) is the thinker's: a note asks for that. */
+export function editableParts(s) {
+  const out = [];
+  if (s?.target != null) out.push("target");
+  if (s?.do === "delay") out.push("after");
+  if (s?.to != null) out.push("to");
+  for (const k of ["at", "toward"]) if (s?.[k] != null) out.push(k);
+  if (s?.do === "fly" || s?.do === "climb") out.push("height");
+  return out;
+}
+/** The steps still to come with the GM's edits applied. raw: the plan's steps from the current one on; edits: one entry per step,
+    { remove: true } or the parts changed ({ target: "E2" }, { to: [x, y] }, { height: 10 }). Only parts the step has are taken; a changed step's
+    "why" says so, for the history. Pure: the result goes through the same check as any plan. */
+export function applyEdits(raw = [], edits = []) {
+  const out = [];
+  raw.forEach((s, i) => {
+    const e = edits[i] ?? {}; if (e.remove) return;
+    const parts = editableParts(s), next = { ...s }; let changed = false;
+    for (const k of parts) if (e[k] !== undefined && JSON.stringify(e[k]) !== JSON.stringify(s[k])) { next[k] = Array.isArray(e[k]) ? [...e[k]] : e[k]; changed = true; }
+    if (changed) next.why = "changed by the GM";
+    out.push(next);
+  });
+  return out;
+}
+/** The GM's note in the thinker's words (the module's rule: no PC's name reaches the thinker). people: [{ names: [...], label }], label null for a
+    creature the monster doesn't perceive. Each whole-word name becomes its label, or "someone it doesn't perceive"; the longest names first, so "Test
+    Hero" wins over "Hero". Returns { text, unknown: names that were swapped out because it doesn't perceive them }. */
+export function noteForThinker(note, people = []) {
+  const clean = String(note ?? "").replace(/\s+/g, " ").trim().slice(0, NOTE_MAX), unknown = [], byName = new Map();
+  for (const p of people) for (const n of p.names ?? []) { const k = String(n ?? "").trim(); if (k.length >= 2 && !byName.has(k.toLowerCase())) byName.set(k.toLowerCase(), { name: k, label: p.label ?? null }); }
+  const names = [...byName.keys()].sort((a, b) => b.length - a.length);
+  if (!names.length || !clean) return { text: clean, unknown };
+  const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), re = new RegExp(`(?<![\\p{L}\\p{N}])(${names.map(esc).join("|")})(?![\\p{L}\\p{N}])`, "giu");
+  const text = clean.replace(re, m => { const p = byName.get(m.toLowerCase()); if (p.label) return p.label; if (!unknown.includes(p.name)) unknown.push(p.name); return "someone it doesn't perceive"; });
+  return { text, unknown };
+}
 
 /** A Fly in plain words: across, up, down, a hover or a landing. */
 function flyWords(s) {
