@@ -53,6 +53,7 @@ Build choices (Angel, 2026-11-08, within the design; Rhea can change them):
 - (fl-9) {live} Smoke test as regression (the project's smoke-test doc): an ordinary Stride-and-Strike turn still runs, and a Stride ending on the ring triggers nothing.
 
 ## Traps
+- **Test trap: the dungeon test scene's middle has no reachable edge** (0.20.1 close-out): from the Sod Hound's square no Stride then flee reaches the outer ring, so test flees on an outdoor map.
 - **A hidden token is still a creature to the move code (review, 2026-11-08):** `runStride` cut every later Stride short at an escaped token's square (it was "someone it didn't know was there"), and `buildPacket` listed it among the allies with its square and health. Both now skip escaped and hidden allies; `knownTo` already did.
 - **Don't pass through a button state while finishing work:** going back to `fled` for a moment before `replan` closed the request let a Let it get away orphan a fresh request for a monster that had left the fight. The request stays `extending` until `replan` closes it.
 - **Don't advance the turn before deleting the current combatant (live, 2026-11-08):** `nextTurn()` then `deleteEmbeddedDocuments` skipped the next creature's turn (round 1 → 2 with Test Hero's turn lost). Core moves the turn on by itself when the current combatant is deleted; the module just deletes.
