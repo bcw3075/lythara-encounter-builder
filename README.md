@@ -8,6 +8,6 @@ Open an encounter map and use the **Encounters** group in the left bar:
 - **Journal**: opens the build's GM journal. The Tactics page is yours to edit.
 - **Clear**: removes what the build made.
 
-It reads maps made by Lythara Survey Sheet. Without that module it still works from walls and regions, and says the read is partial. Monster turns are being built: for now it carries out Strikes from a plan, on the account named in its settings, and nothing decides yet.
+It reads maps made by Lythara Survey Sheet. Without that module it still works from walls and regions, and says the read is partial. Monster turns: for each monster ticked in the Monster Turns window, a thinker (a chat through the bridge) plans from what the monster perceives, and the module checks each plan against the rules and carries it out one action at a time on the account named in its settings, with Do it, Change and Play it myself for the GM. What is built so far is listed per feature in `docs/features/`.
 
 How the code works: `docs/DEVELOPING.md`.
