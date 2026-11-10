@@ -19,6 +19,7 @@ import { cutShort, diagonalsIn, distanceBetween, featureNear, findRoute, findSte
 import { SWIM_DC, movedOn, shouldFall, shouldSink } from "../../scripts/turn.mjs";
 import { CLIMB_DC, climbResult, nextClimb } from "../../scripts/turn.mjs";
 import { endsCover as endsCover2 } from "../../scripts/turn.mjs";
+import { groupChanges, tickGroups } from "../../scripts/ui/ticks.mjs";
 import { climbDistance, treeTop, treesBeside } from "../../scripts/move.mjs";
 import { verticalGap } from "../../scripts/area.mjs";
 import { BURROW_DEPTH, burrowVertical, burrowWorld, crossesWalls, glideWorld, rockSquares, wallSquares } from "../../scripts/move.mjs";
@@ -1326,6 +1327,20 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("mrx: a reaction is never the turn's request", currentOf({ a: { state: "ready", round: 2, combatantId: "c1", reaction: { by: "t" } } }, 2, "c1") === null && currentOf({ a: { state: "ready", round: 2, combatantId: "c1" } }, 2, "c1")?.id === "a");
   check("mrx: a reaction's note isn't the last turn's note", latestNote({ a: { state: "done", at: 1, note: "turn" }, b: { state: "done", at: 2, note: "reaction", reaction: { by: "t" } } })?.note === "turn");
 }
+/* the group ticks (0.22.0) */
+{ const R = (id, kind, o = {}) => ({ id, name: `${kind} ${id}`, kind, party: false, run: false, auto: false, ...o });
+  const pack = [R("a", "Wolf", { run: true }), R("b", "Wolf"), R("c", "Goblin Warrior", { run: true, auto: true }), R("d", "Goblin Warrior", { run: true, auto: true }), R("e", "Ogre"), R("p", "Fighter", { party: true, run: true })];
+  const g = tickGroups(pack), by = k => g.find(x => x.key === k);
+  check("group tick: all first, then kinds of two or more", g.map(x => x.key).join("|") === "all|kind:Wolf|kind:Goblin Warrior");
+  check("group tick: the party member is in no group", by("all").ids.join("") === "abcde" && !g.some(x => x.ids.includes("p")));
+  check("group tick: states", by("all").run === "some" && by("all").auto === "some" && by("kind:Wolf").run === "some" && by("kind:Wolf").auto === "none" && by("kind:Goblin Warrior").run === "all" && by("kind:Goblin Warrior").auto === "all");
+  check("group tick: labels", by("all").label === "All monsters" && by("kind:Wolf").label === "Wolf");
+  check("group tick: one kind only gives the all row", tickGroups([R("a", "Wolf"), R("b", "Wolf")]).map(x => x.key).join() === "all");
+  check("group tick: one monster gives no row", !tickGroups([R("a", "Wolf")]).length && !tickGroups([R("a", "Wolf"), R("p", "Fighter", { party: true })]).length && !tickGroups(null).length);
+  check("group tick: every kind single gives only the all row", tickGroups([R("a", "Wolf"), R("b", "Ogre")]).map(x => x.key).join() === "all");
+  check("group tick: a kind falls back to the name", tickGroups([{ id: "a", name: "Rat" }, { id: "b", name: "Rat" }, { id: "c", name: "Bat" }]).map(x => x.key).join("|") === "all|kind:Rat");
+  check("group tick: changes only the ones that differ", groupChanges(by("all").ids, pack, "run", true).join("") === "be" && groupChanges(by("all").ids, pack, "run", false).join("") === "acd" && !groupChanges(by("kind:Goblin Warrior").ids, pack, "auto", true).length);
+  check("group tick: never a party member or a stranger", !groupChanges(["p", "zz"], pack, "run", false).length && !groupChanges(null, pack, "run", true).length); }
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
 for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs", "ui/history.mjs", "ui/react.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\(["`]([^"`]+)["`],\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);
 fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts.json"), JSON.stringify(out));

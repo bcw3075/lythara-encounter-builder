@@ -1,6 +1,6 @@
 ---
 feature: card-ui
-files: [scripts/ui/turns.mjs]
+files: [scripts/ui/turns.mjs, scripts/ui/ticks.mjs]
 functions: [fight.mjs:onPreCreateMessage, fight.mjs:onCreateMessage, fight.mjs:waitFor, fight.mjs:waitForAny, fight.mjs:clickWith, fight.mjs:openWindows, fight.mjs:isPrompt, fight.mjs:watched, fight.mjs:cardEl, fight.mjs:cardButton, fight.mjs:boundPanel, fight.mjs:freshButton, fight.mjs:press, fight.mjs:applyOnCard, fight.mjs:redrawn]
 dependsOn: []
 since: 0.10.0
@@ -8,11 +8,13 @@ since: 0.10.0
 The Monster Turns window and plan card (`ui/turns.mjs`), and driving chat cards: finding buttons, pressing them, waiting for cards and prompts.
 
 ## Decisions
+- **The group tick (0.22.0; Rhea, 2026-11-09: "All, plus one per kind").** Asked how one tick should set Angel and Auto for several monsters at once, she chose a top row for every monster plus a row per kind, with each monster keeping its own ticks. A party member the GM plays is in no group, because her rule for it is that its ticks start unticked and are hers to set one by one (0.18.0). A kind's row shows only when there are two or more of that kind and more than one kind in the fight, and the top row only with two or more monsters, so no row repeats another.
 **Design-era decisions (from the 2026-11-05/06 plan; the lines above are the skill's summary of the same choices):**
 - **Rhea stays in charge:** an "Angel runs this" checkbox per monster; a private plan card with Do it / Change / Play it myself; optional auto-act per monster. If the thinking route is unavailable, she plays the turn herself, so a fight never gets stuck.
 Its own GM-only window, **Monster Turns**, listing NPC combatants: "Angel runs this", auto-act, model (stored now, used at step 5), and a light showing whether a thinker is listening. **PF2e HUD's tracker is not modified,** because its markup can change with any update and mods surviving updates is Rhea's main worry. No whispered chat cards: the panel holds the plan, and the public chat shows only the real roll cards.
 
 ## How it works
+- **Group ticks (0.22.0):** above the monsters' own rows, in italics: "All monsters (n)", then one row per kind with two or more (a kind is the creature a token was made from: its base actor's name, so numbered or renamed tokens of one creature stay together, and an Elite or Weak copy is its own kind). `tickGroups` (pure, `ui/ticks.mjs`) builds the rows from the same list the window shows (`tickRows`) and says whether all, some or none of a group are ticked; some shows as a half-ticked box, and clicking it ticks the rest. A click writes one `updateEmbeddedDocuments` for the tokens whose own tick differs (`groupChanges`, read again at the click), so each token gets the same `run` or `auto` flag its own box would write and everything downstream is unchanged: the runner's `onTokenFlag` asks for the current monster's turn when Angel is ticked, and Auto ticked on a waiting plan starts it.
 - **Monsters' reactions (0.21.0):** below the plan card, one box per offered Reactive Strike on a player's turn: the line (`offerWords`), "Not certain." with the reason when the module isn't sure, Do it and Skip (Do it greyed with the runner's problem), "It takes it by itself (Auto)" or the pause note for an Auto monster, the players' question while its hit waits for Shield Block (`rxHtml`, shared with the plan card), and what came of it until the turn moves on. A line at the foot lists the monsters' other reactions as the GM's to play. Details: `docs/features/reactions.md`.
 - **Reactions (0.20.0):** while a step waits on reactions the card shows "Reactions:" with the sentence, each reactor's state, React / Pass (then Done for a Reactive Strike) for one the GM answers (no player online, or a party member she plays), Continue, and the countdown (redrawn each second, only while a player row can still be answered: 0.20.1, `countingDown`; the GM's own rows have none); and "Not asked by the module: …" for reactions the module doesn't know, with their trigger. The player's own window is `ui/react.mjs` (`docs/features/reactions.md`).
 - **Change (0.19.0):** beside Do it / Next step while the plan can be changed (`changeProblem`); its panel replaces the steps list until sent or cancelled, and a refused change shows as a warning line (`changeVerdict`). The draft is kept on the window (`_draft`), so the many redraws during a fight keep what she typed; it goes when the window closes. Angel's plan reason is shown in names (until 0.19.0 it showed labels). Details: `docs/features/change.md`.
@@ -29,6 +31,8 @@ Record every id below in the release's change record when this feature, or a fea
 **The Monster Turns window** (any change to `ui/turns.mjs` or its hooks in `main.mjs`):
 - (cu-1) {live,shared:module} as AI open it on a scene with no fight, view the fight's map and back, start a fight while it's open: it follows each change without being reopened.
 - (cu-2) {live} Prompts: flip `window.MouseEvent`'s `shiftKey` on the Bridge's page at a chosen stage through the `.step` hook to make a real dialog open: it must stop within a second, close it, name it on the card and repeat nothing.
+
+- (cu-3) {live} The group ticks, by real clicks as AI in a fight with two kinds of two or more monsters, a single one and a party member the GM plays: the rows shown and their counts; All monsters' Angel ticks every monster and not the party member; a kind's Auto ticks only that kind and the top row goes half-ticked; a click on a half-ticked box ticks the rest; unticking; the flags on the tokens after each; with the current monster's plan waiting, the group's Auto starts it; Test Player has no Encounters group and no window.
 
 ## Traps
 - **The Monster Turns window object is reused when reopened** (`main.mjs` keeps one `TurnsApp`): anything kept on it (the Change draft) survives a close unless `_onClose` clears it (seen in 0.19.0's first test build: the panel came back open).
