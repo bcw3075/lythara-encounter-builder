@@ -967,3 +967,17 @@ export function damageOptions(options = []) {
   const origin = options.filter(o => o.startsWith("self:")).map(o => o.replace(/^self\b/, "origin"));
   return { origin, keep: options.filter(o => !/^(?:self|target)(?::|$)/.test(o)) };
 }
+
+/* ---------- the start of a turn settles ---------- */
+/** Start-of-turn work (PF2e's turn events on the active GM's page, Workbench's Stunned and persistent damage, effects running out) reaches the runner
+    as a burst of changes to the creatures, and nothing says when it is over. So the runner waits until they have been quiet for `quiet` ms, never
+    less than `min` after the turn change and never more than `max` (a fight where something keeps changing must still get its turn). Measured
+    2026-11-10 on the runner's page: the last change came 100 to 270 ms after the turn change, with gaps under 70 ms, whichever GM page did the work. */
+export const SETTLE = { min: 400, quiet: 300, max: 3000 };
+/** How many ms the runner still waits before it reads the monster. since: when the turn change arrived; lastChange: the last change to a creature
+    (null: none seen); now: the same clock. 0 means read it now. */
+export function settleWait({ since, lastChange = null, now }, s = SETTLE) {
+  const waited = now - since; if (!(waited < s.max)) return 0;
+  const need = Math.max(s.min - waited, lastChange == null ? 0 : s.quiet - (now - lastChange));
+  return Math.max(0, Math.min(need, s.max - waited));
+}

@@ -4,7 +4,7 @@ import { BuildApp, askClear, askReplace } from "./ui/build.mjs";
 import { TurnsApp } from "./ui/turns.mjs";
 import { HistoryApp, onPreDeleteCombat, saveHistory } from "./ui/history.mjs";
 import { onReactionPrompt } from "./ui/react.mjs";
-import { doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, currentRequest, doIt, fightState, hold, onCombatUpdate, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
+import { doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
 
 const CONTROL = "encounters", apps = new Map(); let turnsApp = null, historyApp = null, historyTimer = null;
 /* the history window fills in live; many flag writes come in a burst during a turn, so one redraw per quarter second */
@@ -23,6 +23,8 @@ Hooks.once("init", () => {
   /* when the thinker last asked, on the server clock: its own setting, so a wait renewing it never writes the generation back (a page's copy of
      "brain" can be a moment old, and an old chat renewing it just after a new chat's hello would undo the takeover) */
   game.settings.register(ID, "brainAt", { scope: "world", config: false, type: Number, default: 0, onChange: () => { redrawTurns(); } });
+  /* the world launch that time was written in: the server clock restarts at every launch, so a time from another launch never counts (0.23.0) */
+  game.settings.register(ID, "brainLaunch", { scope: "world", config: false, type: String, default: "", onChange: () => { redrawTurns(); } });
   game.settings.register(ID, "treasure", { scope: "world", config: false, type: Object, default: { manual: {}, builds: {} } });
 });
 function openBuild() { const scene = canvas.scene; if (!scene) return; apps.get(scene.id)?.close?.(); const app = new BuildApp(scene); apps.set(scene.id, app); app.render(true); }
@@ -62,11 +64,14 @@ Hooks.on("preCreateChatMessage", message => { onPreCreateMessage(message); });
 Hooks.on("createChatMessage", message => { onCreateMessage(message); noteReactionRoll(message); onActionCard(message).catch(e => console.warn(`${ID} | reactions`, e)); });
 /* monsters reacting on players' turns (0.21.0): the runner watches moves, cards, items changing hands and Prone coming off. Block bodies: no handler returns anything. */
 Hooks.on("moveToken", (doc, movement) => { onTokenMoved(doc, movement); });
-Hooks.on("updateItem", (item, change) => { onItemHands(item, change); });
-Hooks.on("deleteItem", item => { onConditionGone(item); });
+Hooks.on("updateItem", (item, change) => { onItemHands(item, change); noteChange(item); });
+Hooks.on("deleteItem", item => { onConditionGone(item); noteChange(item); });
+/* the start of a turn settles (0.23.0): the runner notes every change to a creature in a fight, and reads a monster only once they have stopped */
+Hooks.on("createItem", item => { noteChange(item); });
+Hooks.on("updateActor", actor => { noteChange(actor); });
 Hooks.on("updateChatMessage", (message, change) => { onMessageUpdate(message, change); });
 Hooks.on("preUpdateCombatant", (combatant, change, options) => { keepTurn(combatant, change, options); });
-Hooks.on("updateCombatant", (combatant, change, options, userId) => { saveTurn(combatant, options, userId); });
+Hooks.on("updateCombatant", (combatant, change, options, userId) => { saveTurn(combatant, options, userId); noteChange(combatant); });
 Hooks.on("renderChatMessageHTML", (message, html) => { onRenderMessage(message, html); });
 Hooks.on("pauseGame", () => { redrawTurns(); });   /* the card says when Auto is waiting on the pause */
 Hooks.on("updateCombat", (combat, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}`) || "turn" in change || "round" in change) redrawHistory(); if (turnsApp?.rendered && (foundry.utils.hasProperty(change, `flags.${ID}`) || "turn" in change || "round" in change)) turnsApp.render(); onCombatUpdate(combat, change); });

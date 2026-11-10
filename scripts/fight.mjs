@@ -1,7 +1,7 @@
 /* A fight's turns. One named account does the work (the runner: the Claude Bridge unless the setting says otherwise), on its own page with the
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. It runs Strikes, Strides, Steps, Crawls, Fly, Swim, Climb, Release, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek, Interact, Delay and fleeing off the map; what is still to come is in the repo's docs/features and the project's plan doc. */
-import { CHANGEABLE, NOTE_MAX, changeProblem, describeStep, nameWords, noteForThinker, planPrint } from "./turn.mjs";
+import { settleWait, CHANGEABLE, NOTE_MAX, changeProblem, describeStep, nameWords, noteForThinker, planPrint } from "./turn.mjs";
 import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, shouldSink, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract, nextClimb, climbResult } from "./turn.mjs";
 import { BURROW_DEPTH, FT, distanceBetween, burrowWorld, crossesWalls, cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, heightWhenCut, rockSquares, routeWords, swimWorld, glideWorld, treeTop, treesBeside, wallSquares, waterKinds, waterUnder } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
@@ -315,7 +315,19 @@ export async function perceived(tokenId, combat = game.combat) {
 /* ---------- a turn starts ---------- */
 /* pf2e.startTurn fires on Foundry's active GM only, which the runner may not be, so the runner watches the Combat itself. The guard is by round and
    combatant, not turn number: Workbench moves a PC's initiative at 0 HP, which changes the turn number in the middle of a monster's turn. */
-const starting = new Set();
+const starting = new Set(), turnAt = new Map(); let changedAt = null;
+/** A creature in a fight changed (its actor, an item on it, its combatant): the runner notes when, for `settle`. Called from the hooks in main.mjs. */
+export function noteChange(doc) {
+  if (!isRunner()) return;
+  const actor = doc?.documentName === "Actor" ? doc : doc?.documentName === "Combatant" ? doc.actor : doc?.parent?.documentName === "Actor" ? doc.parent : null; if (!actor) return;
+  if (game.combats.some(c => c.started && c.combatants.some(x => x.actor === actor))) changedAt = performance.now();
+}
+/** Waits for the start of the turn to settle (`settleWait` in turn.mjs) and returns how long that took, in ms, counted from the turn change. A turn
+    asked for some other way (a tick during the turn, a reload) has no turn change to count from, so it waits from now. */
+async function settle(combat) {
+  const since = turnAt.get(combat.id) ?? performance.now(); turnAt.delete(combat.id);
+  for (;;) { const ms = settleWait({ since, lastChange: changedAt, now: performance.now() }); if (ms <= 0) return Math.round(performance.now() - since); await sleep(Math.min(ms, 50)); }
+}
 async function onTurnChange(combat) {
   if (!isRunner() || !combat?.started) return;
   const combatant = combat.combatant, tok = tokenOf(combat, combatant); if (!tok?.getFlag(ID, "run") || !runnable(tok)) return;
@@ -328,10 +340,10 @@ async function onTurnChange(combat) {
   if (afterDelay && combatant.getFlag(HUD, "delayed")) await combatant.unsetFlag(HUD, "delayed").catch(e => console.warn(`${ID} | HUD delayed flag`, e));   /* back in the order: the tracker's hourglass goes */
   starting.add(key);
   try {
-    await new Promise(r => setTimeout(r, SETTLE_MS));   /* start-of-turn effects; how long is enough is still to be measured */
+    const settled = await settle(combat);   /* start-of-turn effects: wait until the creatures have stopped changing (0.23.0) */
     if (combat.combatant?.id !== combatant.id) return;
     const opened = await ensureScene(combat);
-    const id = foundry.utils.randomID(8), base = { state: "requested", combatantId: combatant.id, tokenId: tok.id, round: combat.round, turn: combat.turn, at: Date.now(), since: clock(), log: {}, ...(afterDelay ? { afterDelay: true } : {}) };
+    const id = foundry.utils.randomID(8), base = { state: "requested", combatantId: combatant.id, tokenId: tok.id, round: combat.round, turn: combat.turn, at: Date.now(), since: clock(), settled, log: {}, ...(afterDelay ? { afterDelay: true } : {}) };
     if (!opened || !tok.object) return await save(combat, id, { ...base, labels: {}, note: cantOpen() });   /* no map, no packet: words instead of silent wrong answers */
     let built; try { built = await buildPacket(combat, tok); } catch (e) { console.error(`${ID} | packet`, e); return await save(combat, id, { ...base, labels: {}, note: `I couldn't work out what ${tok.name} perceives (${e.message}). Play this turn yourself.` }); }
     await saveTurns(combat, { [`requests.${id}`]: { ...base, labels: built.labels, packet: built.packet, seen: situationNow(combat, tok, built.labels, built.others), note: null, tries: 0, pos: 0 }, ...eventChange("turn", id, 0), ...packetExtras(combat, tok, built) });
@@ -358,6 +370,7 @@ function situationNow(combat, tok, labels = {}, others = null) {
 /** The runner's answer to any change on the Combat. */
 export function onCombatUpdate(combat, change) {
   if (!isRunner()) return;
+  if ("turn" in change || "round" in change) turnAt.set(combat.id, performance.now());   /* when the turn change arrived: `settle` counts from here */
   if ("turn" in change || "round" in change) turnReactions(combat).catch(e => console.warn(`${ID} | reactions`, e));   /* monsters' reactions (0.21.0): open offers lapse, the new creature's reaction comes back */
   if ("turn" in change || "round" in change) leaveWaiting(combat).catch(e => console.warn(`${ID} | waiting`, e)).then(() => dropInstantAreas(combat, currentRequest(combat) ? { id: currentRequest(combat).id, pos: 0 } : null)).catch(e => console.warn(`${ID} | areas`, e));
   if ("turn" in change || "round" in change) { const prev = { ...(combat.previous ?? {}) };   /* the turn that just ended, read before anything awaits */
@@ -816,8 +829,10 @@ async function reject(combat, requestId, reason) {
 const whole = v => v && typeof v === "object" ? foundry.data.operators.ForcedReplacement.create(v) : v;
 const PLAN_BYTES = 8000, SUPERSEDED = "A newer chat is thinking for the monsters now, so this was ignored.";
 /* the generation lives in "brain" and is written only by a hello; when the thinker last asked lives in "brainAt", which every wait renews */
-const brainNow = () => ({ generation: game.settings.get(ID, "brain")?.generation ?? 0, at: game.settings.get(ID, "brainAt") ?? 0 });
-const renewBrain = () => game.settings.set(ID, "brainAt", clock());
+const brainNow = () => ({ generation: game.settings.get(ID, "brain")?.generation ?? 0, at: game.settings.get(ID, "brainAt") ?? 0, launch: game.settings.get(ID, "brainLaunch") ?? "" });
+/* which launch of the world this is: the server clock restarts with each, so a listening time is only good for its own (0.23.0). The same on every page. */
+const launchNow = () => String(game.world?.lastPlayed ?? "");
+const renewBrain = async () => { if (game.settings.get(ID, "brainLaunch") !== launchNow()) await game.settings.set(ID, "brainLaunch", launchNow()); return game.settings.set(ID, "brainAt", clock()); };
 const fights = () => game.combats.filter(c => c.started);
 const eventsOf = combat => Object.values(turns(combat).events ?? {}).map(e => ({ ...e, combatId: combat.id }));
 function eventChange(kind, requestId, tries, extra = {}) {
@@ -875,7 +890,7 @@ export async function waitForEvent(cursor = 0, maxSeconds = 90, { generation = n
 /** Foundry's server clock: the same in every browser, so the light means the same on Rhea's computer as on the server PC. */
 export const clock = () => game.time.serverTime;
 /** Is the thinker there? For the Monster Turns window. */
-export const brainListening = () => listening(brainNow(), clock());
+export const brainListening = () => listening(brainNow(), clock(), launchNow());
 export const brainSeenAt = () => brainNow().at ?? 0;
 /** Legality only: what the runner would say, with nothing written. Needs the fight open on this page. */
 export async function checkOnly(combat, requestId, plan) {
@@ -1340,8 +1355,9 @@ async function runDelay(combat, id, i, step, tok) {
   if (!(otherAt > mineAt)) { await addNote(combat, id, `${step.after}'s turn this round has passed, so delaying until after it would only lose this turn. Play the turn yourself.`); return "stopped"; }
   if (!stepGate("delay", id)) return "stopped";
   if (combat.combatant?.id !== me.id) { await addNote(combat, id, "It isn't this monster's turn any more. Play the turn yourself."); return "stopped"; }
-  /* Rules: the effects of the start of its turn happened when the turn began; PF2e will run them again when it comes back this round */
-  await addNote(combat, id, "Its start-of-turn effects (persistent damage and the like) already happened this round: if they are applied again when it comes back, undo them.");
+  /* Rules: start- and end-of-turn effects happen when it Delays, and not again when it comes back. PF2e does the same: it runs a creature's turn start
+     and turn end once a round (the combatant's `roundOfLastTurn` and `roundOfLastTurnEnd` flags), so the returned turn fires neither (seen live
+     2026-11-10 with persistent damage on the monster). Until 0.23.0 a note here told the GM to undo a second application that never comes. */
   /* right after `other` among ties: a priority just above its own (lower goes first) */
   const priority = (other.overridePriority?.(other.initiative) ?? other.actor?.initiative?.tiebreakPriority ?? 3) + 0.5;
   await record({ ended: true, after: { id: other.id, initiative: other.initiative, priority } });

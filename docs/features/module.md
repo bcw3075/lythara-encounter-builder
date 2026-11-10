@@ -11,6 +11,7 @@ The module's glue: settings, the Encounters left-bar group, hooks and the `api` 
 (none recorded yet)
 
 ## How it works
+- **Settle time and the launch (0.23.0):** `main.mjs` adds the runner's hooks `updateActor` and `createItem` and a call to `noteChange` in `updateItem`, `deleteItem` and `updateCombatant` (block bodies), for the wait at the start of a turn (`docs/features/turn-loop.md`); and one hidden world setting, `brainLaunch` (the world launch the thinker's listening time was written in; `docs/features/brain.md`). 9 settings now, 5 in the menu.
 - **Monsters' reactions (0.21.0):** `main.mjs` adds the runner's hooks `moveToken`, `updateItem`, `deleteItem` and a third reader of `createChatMessage` (`onActionCard`), all with block bodies, and the API's `fight.reactions`, `fight.doReaction`, `fight.skipReaction`. No new setting.
 - **Reactions (0.20.0):** the world setting `reactionTimer` ("Time to answer a reaction", 0 to 60 in steps of 5, default 20, 0 = no countdown; since 0.20.1 its hint says the GM's own rows have none), `"socket": true` in `module.json`, `game.socket.on("module.<id>")` in `ready` handing messages to `onSocket`, and the `<id>.reactionPrompt` hook for the player's window (`docs/features/reactions.md`).
 - **`deleteCombat` (0.18.0):** besides redrawing Monster Turns, the runner clears a party member's Angel and Auto ticks (`untickParty`, `docs/features/turn-loop.md`).

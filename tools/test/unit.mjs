@@ -17,6 +17,7 @@ import { promptText } from "../../scripts/prompt.mjs";
 import { historyHTML, historyOf, journalHTML, stepResult } from "../../scripts/history.mjs";
 import { cutShort, diagonalsIn, distanceBetween, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, headingOf, heightCost, heightWhenCut, routeWords, swimDistance, swimWorld, waterKinds, waterUnder } from "../../scripts/move.mjs";
 import { SWIM_DC, movedOn, shouldFall, shouldSink } from "../../scripts/turn.mjs";
+import { SETTLE, settleWait } from "../../scripts/turn.mjs";
 import { CLIMB_DC, climbResult, nextClimb } from "../../scripts/turn.mjs";
 import { endsCover as endsCover2 } from "../../scripts/turn.mjs";
 import { groupChanges, tickGroups } from "../../scripts/ui/ticks.mjs";
@@ -205,6 +206,17 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("event out", out.monster === "M1" && out.triesLeft === MAX_TRIES - 1 && out.reason === "too far" && out.yourPlan && out.packet === req.packet && out.round === 2); check("turn event has no reason", !("reason" in eventOut({ seq: 1, kind: "turn" }, req)));
   check("listening", listening({ at: 1000 }, 1000 + 119000) && !listening({ at: 1000 }, 1000 + 121000) && !listening({}, 5) && !listening(null, 5));
   check("a time from before a server restart isn't listening", !listening({ at: 1794013714665 }, 3568220));
+  /* 0.23.0: the server clock restarts at every launch, so an old time can fall inside a later launch's window (seen: 63465 kept, the light on from 63 s) */
+  check("a time kept from another launch isn't listening even inside the window", listening({ at: 63465 }, 74000) && !listening({ at: 63465, launch: "Mon 20:10" }, 74000, "Mon 21:02") && !listening({ at: 63465 }, 74000, "Mon 21:02"));
+  check("a time from this launch is listening", listening({ at: 63465, launch: "Mon 21:02" }, 74000, "Mon 21:02") && !listening({ at: 63465, launch: "Mon 21:02" }, 63465 + 121000, "Mon 21:02"));
+  check("with no launch known on either side it falls back to the clock alone", listening({ at: 63465, launch: "" }, 74000, ""));
+  /* settle time (0.23.0): quiet for 300 ms, never under 400 ms after the turn change, never over 3 s */
+  check("settle: nothing changed, the minimum", settleWait({ since: 1000, now: 1000 }) === 400 && settleWait({ since: 1000, now: 1250 }) === 150 && settleWait({ since: 1000, now: 1400 }) === 0);
+  check("settle: a change long before the turn doesn't count", settleWait({ since: 1000, lastChange: 200, now: 1400 }) === 0);
+  check("settle: quiet counts from the last change", settleWait({ since: 1000, lastChange: 1270, now: 1400 }) === 170 && settleWait({ since: 1000, lastChange: 1270, now: 1569 }) === 1 && settleWait({ since: 1000, lastChange: 1270, now: 1570 }) === 0);
+  check("settle: a later change starts the quiet again", settleWait({ since: 1000, lastChange: 1900, now: 1950 }) === 250);
+  check("settle: never past the cap", settleWait({ since: 1000, lastChange: 3950, now: 3960 }) === 40 && settleWait({ since: 1000, lastChange: 3999, now: 4000 }) === 0 && settleWait({ since: 1000, lastChange: 9000, now: 9001 }) === 0);
+  check("settle: its own numbers", SETTLE.min === 400 && SETTLE.quiet === 300 && SETTLE.max === 3000 && settleWait({ since: 0, lastChange: 90, now: 100 }, { min: 0, quiet: 50, max: 1000 }) === 40);
   const rp = eventOut({ seq: 7, kind: "replan", combatId: "C", requestId: "R2" }, { ...req, why: [{ who: "E1", what: "down" }], done: [{ do: "strike", item: "jaws", target: "E1", result: "critical hit" }] });
   check("replan event says why, in labels, and what's done", rp.reason === "E1 is down." && rp.done.length === 1 && !("yourPlan" in rp) && rp.packet === req.packet);
   check("generations", !stale({ generation: 3 }, 3) && stale({ generation: 3 }, 2) && !stale({ generation: 3 }, null) && stale({}, 1));

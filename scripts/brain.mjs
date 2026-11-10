@@ -133,8 +133,10 @@ export function eventOut(ev, req) {
 
 /* ---------- who is listening ---------- */
 /** The light on the Monster Turns window: a thinker asked for an event within the last two minutes. Times are Foundry's server clock, which every
-    browser shares; it starts again when the server does, so a time ahead of now is from before a restart and counts as not listening. */
-export const listening = (brain, now) => !!brain?.at && now >= brain.at && now - brain.at < LISTEN_MS;
+    browser shares; it starts again at every world launch, so a time is only good for the launch it was written in (`launch`, kept beside it since
+    0.23.0): a time kept from an earlier launch turned the light on by itself for two minutes once the new launch's clock reached it (seen 2026-11-10).
+    A time ahead of now counts as not listening either way. With no `launch` given the launch isn't compared. */
+export const listening = (brain, now, launch) => !!brain?.at && (launch === undefined || (brain.launch ?? "") === launch) && now >= brain.at && now - brain.at < LISTEN_MS;
 /** A newer chat takes over: plans and waits from an older generation are refused, so two chats never both play a monster. No generation means a GM by hand. */
 export const stale = (brain, generation) => generation != null && generation !== (brain?.generation ?? 0);
 /** The first answer a new thinker gets. */
