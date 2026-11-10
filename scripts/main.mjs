@@ -3,7 +3,8 @@ import { ID, build, clear, findCreatures, markDrawn, markReady, nextToParty, pla
 import { BuildApp, askClear, askReplace } from "./ui/build.mjs";
 import { TurnsApp } from "./ui/turns.mjs";
 import { HistoryApp, onPreDeleteCombat, saveHistory } from "./ui/history.mjs";
-import { askAngel, changePlan, busy, untickParty, checkOnly, keepTurn, saveTurn, currentRequest, doIt, fightState, hold, onCombatUpdate, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
+import { onReactionPrompt } from "./ui/react.mjs";
+import { askAngel, changePlan, onSocket, busy, untickParty, checkOnly, keepTurn, saveTurn, currentRequest, doIt, fightState, hold, onCombatUpdate, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
 
 const CONTROL = "encounters", apps = new Map(); let turnsApp = null, historyApp = null, historyTimer = null;
 /* the history window fills in live; many flag writes come in a burst during a turn, so one redraw per quarter second */
@@ -15,6 +16,7 @@ Hooks.once("init", () => {
   game.settings.register(ID, "partySize", { name: "Party size for balance", hint: "How many PCs threat is worked out for. The campaign's rules say how many; PF2e's Low budget differs from the published one away from 4.", scope: "world", config: true, type: Number, default: 4 });
   game.settings.register(ID, "applyMonsterDamage", { name: "Apply monster damage automatically", hint: "A monster's hit changes HP at once, with PF2e's undo card. Off: damage is rolled and you apply it from the card.", scope: "world", config: true, type: Boolean, default: true });
   game.settings.register(ID, "autoPause", { name: "Pause between a monster's actions (seconds)", hint: "With a monster's Auto ticked, how long to wait after each action before the next, so each roll can be followed. Without Auto, Do it does one action and then shows Next step.", scope: "world", config: true, type: Number, range: { min: 0, max: 15, step: 0.5 }, default: 3 });
+  game.settings.register(ID, "reactionTimer", { name: "Time to answer a reaction (seconds)", hint: "When a monster's action lets a player react (Reactive Strike and the like), how long their React / Pass window waits before the reaction passes. 0: no countdown; the turn waits for them or your Continue.", scope: "world", config: true, type: Number, range: { min: 0, max: 60, step: 5 }, default: 20 });
   game.settings.register(ID, "runner", { name: "Account that runs monster turns", hint: "The GM account whose page carries out monster turns: its name, exactly. It targets for real on its own account, so yours are never touched. If it's offline, turns wait and the card says so.", scope: "world", config: true, type: String, default: "Claude Bridge" });
   /* who is thinking for the monsters: the chat's generation and when it last asked for an event. A newer chat retires an older one. */
   game.settings.register(ID, "brain", { scope: "world", config: false, type: Object, default: { generation: 0, at: 0 }, onChange: () => { redrawTurns(); } });
@@ -69,9 +71,12 @@ Hooks.on("userConnected", () => { redrawTurns(); });
 /* the history: opened from Monster Turns; at End Encounter a GM is asked Save or Discard. This pre-hook returns false only to cancel that one delete
    (it then deletes again once asked); otherwise it returns nothing, like every other handler here. */
 Hooks.on(`${ID}.openHistory`, () => { openHistory(); });
+/* player reactions (0.20.0): the runner's questions and the players' answers go through the module's socket */
+Hooks.on(`${ID}.reactionPrompt`, data => { onReactionPrompt(data); });
 Hooks.on("preDeleteCombat", (combat, options, userId) => { if (onPreDeleteCombat(combat, options, userId) === false) return false; });
 Hooks.once("ready", () => {
   onRunnerReady().catch(e => console.error(`${ID} | runner`, e));
   watchStalls();
+  game.socket.on(`module.${ID}`, (data, senderId) => { onSocket(data, senderId); });
   game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty, fight: { current: currentRequest, busy, perceived, submitPlan, doIt, hold, playMyself, askAngel, changePlan, rollFor, waitForEvent, checkPlan: checkOnly, reportFailure, state: fightState, saveHistory, openHistory } };
 });

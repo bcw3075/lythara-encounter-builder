@@ -64,5 +64,5 @@ Build choices (Angel, 2026-11-08, within the design; Rhea can change them):
 - The thinker gets no hint that the edge is in reach beyond the map's size and its square; it works it out.
 - Extend's effect on other hidden tokens: the Survey Sheet shifts every token, hidden ones too; not yet watched live.
 - Each escaped token's flag names its combat, so a later fight doesn't list it (the window shows no fight after End Encounter, so Bring back is unreachable then).
-- Reactions to a monster's move (Reactive Strike as it flees) are not built, as for every move.
+- Players' reactions as it flees are asked like any Stride's (0.20.0, `docs/features/reactions.md`).
 - A Stride's diagonal count for the rest of the turn is lost when an extension's shift was recorded as movement (the history is cleared): a 5 ft difference at most.

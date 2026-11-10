@@ -23,6 +23,7 @@ import { climbDistance, treeTop, treesBeside } from "../../scripts/move.mjs";
 import { verticalGap } from "../../scripts/area.mjs";
 import { BURROW_DEPTH, burrowVertical, burrowWorld, crossesWalls, glideWorld, rockSquares, wallSquares } from "../../scripts/move.mjs";
 import { cleanGround, cleanWalls } from "../../scripts/brain.mjs";
+import { KNOWN, answerWords, degreeAgainst, finished, fits, gateWords, reactionsOf, routeGates, triggerOf } from "../../scripts/react.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
 let bad = 0, good = 0; const check = (name, ok, extra = "") => { if (ok) good++; else { bad++; console.log("FAIL", name, extra); } };
 
@@ -212,7 +213,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   const wordsFile = path.resolve(HERE, "../../.private-words"), words = fs.existsSync(wordsFile) ? fs.readFileSync(wordsFile, "utf8").split("\n").map(l => l.split("#")[0].trim()).filter(Boolean) : null;
   check("prompt names no campaign", words ? !words.some(w => new RegExp(`(?<![A-Za-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9])`, "i").test(h.prompt)) : (console.log("  (no .private-words: campaign-word check skipped)"), true));
   check("prompt explains the party's side", /"you\.side": "party"/.test(h.prompt) && /don't plan "flee"/.test(h.prompt));
-  check("prompt explains asking again", h.promptVersion === 21 && /The GM asks for the rest of this turn/.test(h.prompt) && !/someone it doesn't perceive/.test(h.prompt) && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 22 && /Players are asked for their reactions/.test(h.prompt) && !/doesn't ask players for reactions yet/.test(h.prompt) && /The GM asks for the rest of this turn/.test(h.prompt) && !/someone it doesn't perceive/.test(h.prompt) && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -1253,7 +1254,35 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("history: a refused change says why, in names", historyOf(t3, { round: 1, turn: 0, current: "c1", order: [{ id: "c1", name: "Wolf", npc: true }] }, { tokA: "Wolf", tokB: "Test Hero" })[0].turns[0].parts[0].lines.at(-1).text === "Rhea's change wasn't used: Step 1: Test Hero is out of reach.");
   check("history: the rest taken out", /took out the rest\./.test(historyOf(t2, { round: 1, turn: 0, current: "c1", order: [{ id: "c1", name: "Wolf", npc: true }] }, { tokA: "Wolf", tokB: "Test Hero" })[0].turns[0].parts[0].lines.at(-1).text));
 }
+/* ---- player reactions (0.20.0) ---- */
+{
+  const items = [{ slug: "reactive-strike", name: "Reactive Strike", actionType: "reaction", description: "<p><strong>Trigger</strong> A creature within your reach uses a manipulate action.</p>" },
+    { slug: "attack-of-opportunity", name: "Attack of Opportunity", actionType: "reaction" }, { slug: "shield-block", name: "Shield Block", actionType: "reaction" },
+    { slug: "opportune-backstab", name: "Opportune Backstab", actionType: "reaction", description: "<p><strong>Trigger</strong> A creature in your melee reach is hit by an ally.</p><hr>" }, { slug: "power-attack", name: "Power Attack", actionType: "action" }];
+  const rx = reactionsOf(items);
+  check("rx: known and unknown, one Reactive Strike, actions left out", rx.length === 3 && rx.filter(x => x.name === "Reactive Strike").length === 1 && rx.find(x => x.slug === "opportune-backstab")?.known === false && rx.find(x => x.slug === "opportune-backstab").trigger === "A creature in your melee reach is hit by an ally.", JSON.stringify(rx));
+  check("rx: trigger text", triggerOf("<p><strong>Trigger</strong> An enemy hits you with a melee Strike.</p>") === "An enemy hits you with a melee Strike." && triggerOf("<p>No trigger here</p>") === null);
+  check("rx: Reactive Strike gates", ["move", "stay", "manipulate", "ranged"].every(g => fits("reactive-strike", g, { inReach: true })) && !fits("reactive-strike", "move", { inReach: false }) && !fits("reactive-strike", "attack", { inReach: true, isTarget: true }) && !fits("reactive-strike", "hit", { inReach: true, isTarget: true }));
+  check("rx: Shield Block needs a raised shield and physical damage", fits("shield-block", "hit", { isTarget: true, shieldRaised: true }, { damageTypes: ["piercing"] }) && !fits("shield-block", "hit", { isTarget: true, shieldRaised: false }) && !fits("shield-block", "hit", { isTarget: true, shieldRaised: true }, { damageTypes: ["fire"] }) && fits("shield-block", "hit", { isTarget: true, shieldRaised: true }, {}) && !fits("shield-block", "hit", { isTarget: false, shieldRaised: true }));
+  check("rx: Reactive Shield: melee, a shield not yet raised, the target", fits("reactive-shield", "hit", { isTarget: true, hasShield: true }, { melee: true }) && !fits("reactive-shield", "hit", { isTarget: true, hasShield: true }, { melee: false }) && !fits("reactive-shield", "hit", { isTarget: true, hasShield: true, shieldRaised: true }, { melee: true }) && !fits("reactive-shield", "hit", { isTarget: true, hasShield: false }, { melee: true }));
+  check("rx: Nimble Dodge before the attack, the target only", fits("nimble-dodge", "attack", { isTarget: true }) && !fits("nimble-dodge", "attack", { isTarget: false }) && !fits("nimble-dodge", "hit", { isTarget: true }) && KNOWN["nimble-dodge"].ac === 2);
+  check("rx: an unknown reaction never fits", !fits("opportune-backstab", "move", { inReach: true, isTarget: true }));
+  /* a reactor at [5, 5] with 5-ft reach, and Medium movers walking past it */
+  const R = [{ id: "a", pos: [5, 5], span: 1, elev: 0, reach: 5 }];
+  check("rx: gate before leaving the first square in reach", JSON.stringify(routeGates([[2, 5], [3, 5], [4, 5], [4, 4], [4, 3], [4, 2]], { size: 1 }, R)) === JSON.stringify([{ k: 2, ids: ["a"] }]));
+  check("rx: starting in reach asks before the first square", JSON.stringify(routeGates([[4, 5], [3, 5], [2, 5]], { size: 1 }, R)) === JSON.stringify([{ k: 0, ids: ["a"] }]));
+  check("rx: ending in reach asks nothing (that square isn't left)", routeGates([[1, 5], [2, 5], [3, 5], [4, 5]], { size: 1 }, R).length === 0);
+  check("rx: once per reactor per move", routeGates([[4, 4], [4, 5], [4, 6], [4, 7]], { size: 1 }, R).length === 1 && routeGates([[4, 4], [4, 5], [4, 6], [4, 7]], { size: 1 }, R, { done: ["a"] }).length === 0);
+  check("rx: 10-ft reach two squares off", routeGates([[3, 5], [2, 5], [1, 5]], { size: 1 }, [{ id: "b", pos: [5, 5], span: 1, reach: 10 }])[0]?.k === 0 && routeGates([[2, 5], [1, 5]], { size: 1 }, [{ id: "b", pos: [5, 5], span: 1, reach: 10 }]).length === 0);
+  check("rx: height counts (a flier 15 ft up is out of 5-ft reach)", routeGates([[4, 5], [3, 5]], { size: 1, elev: 15 }, R).length === 0 && routeGates([[4, 5], [3, 5]], { size: 1, elev: 5 }, R).length === 1);
+  check("rx: two reactors, each at its own square", JSON.stringify(routeGates([[2, 2], [3, 2], [4, 2], [5, 2], [6, 2], [7, 2]], { size: 1 }, [{ id: "a", pos: [3, 3], reach: 5 }, { id: "b", pos: [6, 3], reach: 5 }])) === JSON.stringify([{ k: 0, ids: ["a"] }, { k: 3, ids: ["b"] }]));
+  check("rx: degrees", degreeAgainst(20, 10, 20) === 2 && degreeAgainst(19, 10, 20) === 1 && degreeAgainst(30, 10, 20) === 3 && degreeAgainst(10, 5, 20) === 0 && degreeAgainst(19, 20, 20) === 2 && degreeAgainst(22, 1, 20) === 1 && degreeAgainst(31, 20, 20) === 3 && degreeAgainst(5, 1, 30) === 0);
+  check("rx: Nimble Dodge turns a bare hit into a miss", degreeAgainst(22, 12, 20) === 2 && degreeAgainst(22, 12, 22 + 1) === 1);
+  check("rx: words", gateWords("move", "The Sod Hound", { reaction: "Reactive Strike" }) === "The Sod Hound is moving out of a square in your reach. React with Reactive Strike?" && gateWords("stay", "A creature", { kind: "stands up", reaction: "Reactive Strike" }) === "A creature stands up in your reach. React with Reactive Strike?" && /attacks you/.test(gateWords("attack", "X", { reaction: "Nimble Dodge" })));
+  check("rx: finished", finished([{ answer: "pass" }, { answer: "done" }, { answer: "timeout" }]) && !finished([{ answer: "react" }]) && !finished([{ answer: null }]) && finished([]));
+  check("rx: answer words", answerWords([{ token: "a", reaction: "Reactive Strike", answer: "done" }, { token: "b", reaction: "Shield Block", answer: "timeout" }], { a: "Valeros", b: "Kyra" }).join("|") === "Valeros used Reactive Strike|Kyra didn't answer in time (Shield Block passed)");
+}
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
-for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs", "ui/history.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);
+for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs", "ui/history.mjs", "ui/react.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\("([^"]+)",\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);
 fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts.json"), JSON.stringify(out));
 console.log(`${good} passed, ${bad} failed`); process.exit(bad ? 1 : 0);
