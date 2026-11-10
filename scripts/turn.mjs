@@ -358,7 +358,7 @@ export function checkPlan(plan, ctx) {
     if (ctx.cantAttack) return { ok: false, reason: `${at}: ${ctx.cantAttack}` };
     const s = ctx.strikes.find(x => x.id === step.item); if (!s) return { ok: false, reason: `${at}: it has no attack called "${step.item}".` };
     if (s.dropped || (s.weapon && released.has(s.weapon))) return { ok: false, reason: `${at}: its ${s.name} is on the ground${s.dropped ? "" : " (released earlier in this plan)"}, so it can't Strike with it.` };
-    const t = ctx.targets[step.target]; if (!t) return { ok: false, reason: ctx.allies?.[step.target] ? `${at}: "${step.target}" is on its side: a Strike needs a creature it fights.` : `${at}: it doesn't know of "${step.target}".` };   /* an ally's label said "doesn't know of" until 0.19.0 */
+    const t = ctx.targets[step.target]; if (!t) return { ok: false, reason: ctx.allies?.[step.target] || ctx.allyLabels?.includes?.(step.target) ? `${at}: "${step.target}" is on its side: a Strike needs a creature it fights.` : `${at}: it doesn't know of "${step.target}".` };   /* an ally's label said "doesn't know of" until 0.19.0 */
     const where = steps.some(x => MOVES.includes(x.do)) ? ` from [${here[0]}, ${here[1]}]` : "";
     /* ammunition: shotsLeft is what the shot's own checks will let through (fight.mjs's ammoOf), counted through the plan */
     if (s.shotsLeft != null) { const k = s.stack ?? s.id, n = (shots[k] ?? 0) + 1; if (n > s.shotsLeft) return { ok: false, reason: `${at}: it has ${s.shotsLeft ? `only ${s.shotsLeft} shot${s.shotsLeft === 1 ? "" : "s"}` : "no shots"} left with ${s.name} (${s.ammo ?? "ammunition"}).` }; shots[k] = n; }

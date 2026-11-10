@@ -602,7 +602,8 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("a target it needs", /needs a target/.test(checkPlan({ steps: [sp("ignition")] }, sctx).reason ?? ""));
   check("no target for a spell with none", /leave "target" out/.test(checkPlan({ steps: [sp("shield", "E1")] }, sctx).reason ?? ""));
   check("someone it doesn't know of", /doesn't know of "E9"/.test(checkPlan({ steps: [sp("ignition", "E9")] }, sctx).reason ?? ""));
-  check("a Strike at an ally says so (0.19.0)", /"M2" is on its side/.test(checkPlan({ steps: [{ do: "strike", item: "dagger", target: "M2" }] }, sctx).reason ?? "") && /doesn't know of "E9"/.test(checkPlan({ steps: [{ do: "strike", item: "dagger", target: "E9" }] }, sctx).reason ?? ""));
+  check("a Strike at an ally says so (0.19.0)", /"M2" is on its side/.test(checkPlan({ steps: [{ do: "strike", item: "dagger", target: "M2" }] }, sctx).reason ?? "") && /doesn't know of "E9"/.test(checkPlan({ steps: [{ do: "strike", item: "dagger", target: "E9" }] }, sctx).reason ?? "")
+    && /"M7" is on its side/.test(checkPlan({ steps: [{ do: "strike", item: "dagger", target: "M7" }] }, { ...sctx, allies: undefined, allyLabels: ["M7"] }).reason ?? ""));   /* live, a plan without a spell has only allyLabels */
   check("an ability's id given as a spell", /rally is an ability/.test(checkPlan({ steps: [sp("rally")] }, sctx).reason ?? ""));
   check("restrained can't cast a manipulate spell", /can't cast Thunderstrike/.test(checkPlan({ steps: [sp("thunderstrike", "E2")] }, { ...sctx, cantAttack: "it is restrained, so it can't attack." }).reason ?? "")
     && /restrained/.test(checkPlan({ steps: [sp("ignition", "E1")] }, { ...sctx, cantAttack: "it is restrained, so it can't attack." }).reason ?? ""));

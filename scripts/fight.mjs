@@ -494,6 +494,7 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
     /* Hide: the light at a square (where it stands, or will after a move) and its own concealment */
     lightAt: sq => { const px = scene.grid.size, d = scene.dimensions, n = sizeOf(tok); return lightOn({ x: d.sceneX + (sq[0] + n / 2) * px, y: d.sceneY + (sq[1] + n / 2) * px }, scene); }, concealed: !!actor.hasCondition?.("concealed"),
     /* abilities, and its last action before this plan (a Grab or Knockdown needs it): the step just done, or the last thing done before a re-plan */
+    allyLabels: Object.keys(alliesByLabel(combat, tok)),   /* only for words: a Strike at an ally is refused as one (0.19.0) */
     abilities: abilityList(actor).map(({ item, ...a }) => a), last: lastAction({ ...(before ?? { done: req.done?.at(-1) ?? null }), strikes }),
     /* spells: what it can cast now, and for a spell at a friend its allies (not hidden by the GM) and itself, by their labels */
     ...(spells ? { spells: await spellBook(actor), allies: alliesByLabel(combat, tok), saveRows: targetHelperOn(), reach: actor.getReach?.({ action: "interact" }) ?? 5, areaOf: areaCheck(combat, tok, req, now) } : {}) };   /* touch: the creature's own reach, not a weapon's */
