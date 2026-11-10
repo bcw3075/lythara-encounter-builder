@@ -29,6 +29,7 @@ Record every id below in the release's change record when this feature, or a fea
 - (cu-2) {live} Prompts: flip `window.MouseEvent`'s `shiftKey` on the Bridge's page at a chosen stage through the `.step` hook to make a real dialog open: it must stop within a second, close it, name it on the card and repeat nothing.
 
 ## Traps
+- **The Monster Turns window object is reused when reopened** (`main.mjs` keeps one `TurnsApp`): anything kept on it (the Change draft) survives a close unless `_onClose` clears it (seen in 0.19.0's first test build: the panel came back open).
 - Anything shown on the Monster Turns card must belong to the current turn or the latest finished one. Old requests and old notes stay on the Combat flag.
 - **PF2e's Modifier dialog is a v1 app in `ui.windows`, not in `foundry.applications.instances`.** Watch both.
 - **The Monster Turns window shows the fight on the scene its browser views,** so it must redraw on `canvasReady` and on fights, combatants and tokens changing, not only on fight updates (fixed in 0.5.1; before that a scene change left "No fight on this scene").
