@@ -87,3 +87,75 @@ export function answerWords(list = [], names = {}) {
   return list.map(x => { const n = names[x.token] ?? x.name ?? "Someone";
     return x.answer === "done" ? `${n} used ${x.reaction}` : x.answer === "react" ? `${n} is using ${x.reaction}` : x.answer === "timeout" ? `${n} didn't answer in time (${x.reaction} passed)` : x.answer === "continue" ? `${n}'s ${x.reaction} was skipped` : `${n} passed on ${x.reaction}`; });
 }
+
+/* ---------- monsters reacting on players' turns (0.21.0) ----------
+   Rhea, 2026-11-09: a monster with Angel and Auto ticked takes a Reactive Strike by itself, any other monster's is Do it / Skip on her card; every
+   trigger the rule names counts ("basically it should be anything that the rules state"; a spell only through its own traits); and when the module
+   isn't sure a trigger happened it always comes to her card, even for an Auto monster. Reactive Strike (Rage of Elements pg. 233; Player Core, checked
+   on Archives of Nethys 2026-11-09): a creature within reach uses a manipulate action or a move action, makes a ranged attack, or leaves a square
+   during a move action it is using. Each function says what the module saw and how sure it is: { gate, sure, kind, why }. */
+/** The reactions the module runs for a monster: Reactive Strike under either slug. A monster's other reactions are listed for the GM, never run. */
+export const MONSTER_REACTIONS = ["reactive-strike", "attack-of-opportunity"];
+/* Foundry's movement actions that are move actions leaving squares (PF2e 8.7.0 names them Stride, Crawl, Climb, Swim, Fly, Burrow, Leap). Teleports
+   (blink, displace) aren't move actions that leave squares. There is no "step": a one-square walk can be a Step, which triggers nothing. */
+const MOVE_ACTIONS = ["walk", "crawl", "climb", "swim", "fly", "burrow", "jump"], TELEPORTS = ["blink", "displace"];
+/** A token move as a trigger. action: Foundry's movement action; squares: how many squares it left; ownTurn: it is the mover's turn; stepped: the mover
+    posted a Step card just before. Returns null (no trigger) or { gate: "move", sure, kind, why }. */
+export function moveTrigger({ action = "walk", squares = 0, ownTurn = true, stepped = false } = {}) {
+  if (!(squares > 0) || TELEPORTS.includes(action)) return null;
+  if (squares === 1 && action === "walk") { if (stepped) return null;
+    return { gate: "move", sure: false, kind: "moved one square", why: "It moved one square: a Step doesn't trigger this, a Stride does." }; }
+  if (!MOVE_ACTIONS.includes(action)) return { gate: "move", sure: false, kind: "moved", why: `Its move was made as "${action}", which may not be a move action.` };
+  if (!ownTurn) return { gate: "move", sure: false, kind: "moved", why: "It moved outside its own turn: being pushed or pulled doesn't trigger this." };
+  return { gate: "move", sure: true, kind: "left a square" };
+}
+/* Action cards whose movement shows as a token move (the move tells; the card would only ask twice), and the two move actions that leave no square. */
+const MOVERS = ["stride", "crawl", "leap", "fly", "swim", "climb", "burrow", "sneak", "tumble-through", "long-jump", "high-jump", "balance", "mount", "travel"];
+const STAYS = { stand: "stood up", "drop-prone": "dropped prone" };
+/* Consumables whose activation is an Interact (manipulate) by their own rules: drinking, applying, injecting. Others vary (a talisman is usually free). */
+const HAND_CONSUMABLES = ["potion", "elixir", "oil", "mutagen", "drug"];
+/** A chat card as a trigger. card: { type (PF2e's context type or null), ranged, spell (it is a cast card), consumable (its category, or true when
+    unknown), traits ([] of slugs from the card's tags, its origin and its context), slug (the action's, sluggified), name }. Returns null,
+    { step: true } (a Step: the next one-square move is no trigger), or { gate, sure, kind, why }. */
+export function cardTrigger(card = {}) {
+  const traits = card.traits ?? [], name = card.name || "an action";
+  if (card.type === "attack-roll") return card.ranged ? { gate: "ranged", sure: true, kind: "made a ranged attack" } : null;
+  if (card.type && !["spell-cast", "skill-check", "perception-check"].includes(card.type)) return null;   /* damage, saves and the like follow an action already seen */
+  if (card.spell) return traits.includes("manipulate") ? { gate: "manipulate", sure: true, kind: `cast ${name} (manipulate)` } : null;   /* only by its own traits (Rhea) */
+  if (card.consumable) return HAND_CONSUMABLES.includes(card.consumable) || traits.includes("manipulate") ? { gate: "manipulate", sure: true, kind: `used ${name} (an Interact)` }
+    : { gate: "manipulate", sure: false, kind: `used ${name}`, why: `It used ${name}: if activating it was a manipulate action, this triggers.` };
+  if (card.slug === "step") return { step: true };
+  if (card.slug === "release") return null;   /* Release has the manipulate trait and triggers nothing (Player Core pg. 417) */
+  if (traits.includes("manipulate")) return { gate: "manipulate", sure: true, kind: `used ${name} (manipulate)` };
+  if (traits.includes("move")) { if (card.slug in STAYS) return { gate: "stay", sure: true, kind: STAYS[card.slug] };
+    return MOVERS.includes(card.slug) ? null : { gate: "stay", sure: true, kind: `used ${name} (a move action)` }; }
+  return null;
+}
+/** An item changing hands with no card (PF2e posts none for drawing, stowing or picking up). before/after: { carry, hands }. Letting go (dropped, or
+    fewer hands on something still held) is a Release and triggers nothing; anything else is an Interact, if it was an action at all: never sure. */
+export function equipTrigger(before = {}, after = {}, name = "an item") {
+  const b = { carry: before.carry ?? "worn", hands: before.hands ?? 0 }, a = { carry: after.carry ?? b.carry, hands: after.hands ?? b.hands };
+  if (a.carry === b.carry && a.hands === b.hands) return null;
+  if (a.carry === "dropped" || (a.carry === "held" && b.carry === "held" && a.hands < b.hands)) return null;
+  const did = a.carry === "held" && b.carry !== "held" ? "drew or picked up" : b.carry === "held" && a.carry !== "held" ? "put away" : a.carry === "held" ? "changed its grip on" : "moved";
+  return { gate: "manipulate", sure: false, kind: `${did} ${name}`, why: `It ${did} ${name} with no action card: that is an Interact (manipulate) if it was done as an action.` };
+}
+/** Prone coming off with no Stand card: standing up is a move action, but the condition can also just be removed. Never sure. */
+export function proneOffTrigger({ ownTurn = true, stood = false } = {}) {
+  return ownTurn && !stood ? { gate: "stay", sure: false, kind: "is no longer prone", why: "Prone came off with no Stand card: if it stood up, that is a move action." } : null;
+}
+/** The squares a token passed, from the squares of its waypoints (the first is where it started): straight runs between them, one square a step. */
+export function squaresAlong(points = []) {
+  const out = []; for (const p of points) { if (!out.length) { out.push([p[0], p[1]]); continue; }
+    let [x, y] = out.at(-1); while (x !== p[0] || y !== p[1]) { x += Math.sign(p[0] - x); y += Math.sign(p[1] - y); out.push([x, y]); } }
+  return out;
+}
+/** Which melee Strike a monster reacts with: the best attack among those that reach. strikes: [{ id, name, ranged, reach, mod }]; dist in feet. */
+export function reactionStrike(strikes = [], dist = 5) {
+  return strikes.filter(s => !s.ranged && (s.reach ?? 5) >= dist).sort((a, b) => (b.mod ?? 0) - (a.mod ?? 0))[0] ?? null;
+}
+/** The line on the GM's card. o: { monster, target, strike, kind, sure, why } */
+export function offerWords(o = {}) {
+  const who = o.target ?? "a creature";
+  return `${o.monster ?? "A monster"} can make a Reactive Strike${o.strike ? ` (${o.strike})` : ""} at ${who}: ${who} ${o.kind ?? "acted"} in its reach.${o.sure ? "" : ` Not certain. ${o.why ?? ""}`.trimEnd()}`;
+}

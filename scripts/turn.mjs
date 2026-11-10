@@ -950,14 +950,14 @@ export function absorbOwn(seen = [], before = [], after = [], own = null) {
 }
 /** This turn's unfinished request. By round and combatant, not turn number: an initiative change can move the number during the turn. */
 export function currentOf(requests = {}, round, combatantId) {
-  return Object.entries(requests).map(([id, r]) => ({ id, ...r })).filter(r => !["done", "manual"].includes(r.state) && r.round === round && r.combatantId === combatantId).at(-1) ?? null;
+  return Object.entries(requests).map(([id, r]) => ({ id, ...r })).filter(r => !["done", "manual"].includes(r.state) && !r.reaction && r.round === round && r.combatantId === combatantId).at(-1) ?? null;   /* a monster's reaction (0.21.0) is its own request, never the turn's */
 }
 /** Whether a request has work in flight or about to start. Waiting on a person or a plan doesn't count. */
 export const requestBusy = r => !!r && (r.state === "running" || r.state === "submitted" || r.state === "extending" || !!r.go || !!r.extend);
 /** The note to show between turns: only the latest finished turn's, so an old warning never outlives the turn it was about. A turn that was re-planned
     is several requests linked by `parent`, and a warning from its first part (a PC at 0 HP) still counts. */
 export function latestNote(requests = {}) {
-  const fin = Object.values(requests).filter(r => ["done", "manual"].includes(r.state)).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+  const fin = Object.values(requests).filter(r => ["done", "manual"].includes(r.state) && !r.reaction).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   const last = fin.at(-1); if (last?.state !== "done") return null;
   const notes = []; for (let r = last, n = 0; r && n < 10; r = r.parent ? requests[r.parent] : null, n++) if (r.note) notes.unshift(r.note);
   return notes.length ? { ...last, note: notes.join(" ") } : null;

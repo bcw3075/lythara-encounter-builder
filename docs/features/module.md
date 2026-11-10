@@ -11,6 +11,7 @@ The module's glue: settings, the Encounters left-bar group, hooks and the `api` 
 (none recorded yet)
 
 ## How it works
+- **Monsters' reactions (0.21.0):** `main.mjs` adds the runner's hooks `moveToken`, `updateItem`, `deleteItem` and a third reader of `createChatMessage` (`onActionCard`), all with block bodies, and the API's `fight.reactions`, `fight.doReaction`, `fight.skipReaction`. No new setting.
 - **Reactions (0.20.0):** the world setting `reactionTimer` ("Time to answer a reaction", 0 to 60 in steps of 5, default 20, 0 = no countdown; since 0.20.1 its hint says the GM's own rows have none), `"socket": true` in `module.json`, `game.socket.on("module.<id>")` in `ready` handing messages to `onSocket`, and the `<id>.reactionPrompt` hook for the player's window (`docs/features/reactions.md`).
 - **`deleteCombat` (0.18.0):** besides redrawing Monster Turns, the runner clears a party member's Angel and Auto ticks (`untickParty`, `docs/features/turn-loop.md`).
 - **`pauseGame` hook (0.11.0):** redraws the Monster Turns window, whose card says when Auto is waiting on the game's pause (`docs/features/turn-loop.md`).
