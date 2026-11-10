@@ -17,10 +17,13 @@ function rxHtml(rx) { if (!rx) return ""; const ans = rx.answers ?? {}, left = c
           const btns = gm && !a ? `<button type="button" data-rx="react" data-row="${esc(x.id)}">React</button><button type="button" data-rx="pass" data-row="${esc(x.id)}">Pass</button>` : gm && a === "react" ? `<button type="button" data-rx="done" data-row="${esc(x.id)}">Done</button>` : "";
           return `<p>${esc(x.name)}: ${esc(x.reaction)}, ${state}. ${btns}</p>`; }).join("");
         return `<div class="leb-react"><p><b>Reactions</b>: ${esc(String(rx.list[0]?.gmWords ?? rx.list[0]?.words ?? "").replace(/\s*React with .*$/, ""))}${left != null ? ` ${rx.list.some(x => x.to === "gm") ? "Players' answers pass" : "They pass"} in about ${left} s.` : ""}</p>${rows}<div class="leb-btns"><button type="button" data-rx="cont" title="Skip any reaction not answered yet and carry on"><i class="fa-solid fa-forward"></i> Continue</button></div></div>`; }
-/** The window's monsters as plain rows for the group ticks. A kind is the creature's own name (its actor's, so an Elite or Weak one is its own kind and a
-    renamed or numbered token stays with its kind). Anything on the party's side or owned by a player (a party member the GM plays, an NPC ally, a summon
+/** The window's monsters as plain rows for the group ticks. A kind is the creature a token was made from (its base actor's name: PF2e gives an unlinked
+    token's own actor the token's name, so that can't be used, seen live 2026-11-10), with "Elite" or "Weak" in front when PF2e's adjustment is on it
+    (the adjustment renames nothing), so a renamed or numbered token stays with its kind and an Elite one is its own. Anything on the party's side or owned by a player (a party member the GM plays, an NPC ally, a summon
     or companion built as an NPC) is marked `party` and is in no group: one click must never hand Angel a creature that isn't an enemy (0.22.0 review). */
-const tickRows = c => c.combatants.filter(x => x.token && runnable(x.token)).map(x => ({ id: x.token.id, name: x.token.name, kind: x.actor?.name ?? x.token.baseActor?.name ?? x.token.name,
+const kindOf = x => { const base = x.token.baseActor?.name ?? x.actor?.name ?? x.token.name, adj = x.actor?.isElite ? "Elite" : x.actor?.isWeak ? "Weak" : "";
+  return adj && !new RegExp(`^${adj}\\b`, "i").test(base) ? `${adj} ${base}` : base; };   /* a world actor already named "Elite Wolf" isn't prefixed twice */
+const tickRows = c => c.combatants.filter(x => x.token && runnable(x.token)).map(x => ({ id: x.token.id, name: x.token.name, kind: kindOf(x),
   party: partyMember(x.actor) || x.actor?.alliance === "party" || !!x.actor?.hasPlayerOwner, run: !!x.token.getFlag(ID, "run"), auto: !!x.token.getFlag(ID, "auto") }));
 export class TurnsApp extends foundry.applications.api.ApplicationV2 {
   static DEFAULT_OPTIONS = { id: "leb-turns", classes: ["leb-turns"], window: { title: "Monster Turns", resizable: true }, position: { width: 400, height: 420, left: 110, top: 60 } };
