@@ -728,17 +728,32 @@ export function applyEdits(raw = [], edits = []) {
   return out;
 }
 /** The GM's note in the thinker's words (the module's rule: no PC's name reaches the thinker). people: [{ names: [...], label }], label null for a
-    creature the monster doesn't perceive. Each whole-word name becomes its label, or "someone it doesn't perceive"; the longest names first, so "Test
-    Hero" wins over "Hero". Returns { text, unknown: names that were swapped out because it doesn't perceive them }. */
+    creature (or a person) the monster doesn't perceive. Each whole-word name, case aside, the longest first ("Test Hero" before "Hero"), becomes its
+    label. Returns { text, unknown, ambiguous }: `unknown`, names of creatures it doesn't perceive (left as typed: the card refuses to send, since
+    even "someone" would tell it they exist); `ambiguous`, names that fit several creatures it perceives (two Goblin Warriors), also refused. */
 export function noteForThinker(note, people = []) {
-  const clean = String(note ?? "").replace(/\s+/g, " ").trim().slice(0, NOTE_MAX), unknown = [], byName = new Map();
-  for (const p of people) for (const n of p.names ?? []) { const k = String(n ?? "").trim(); if (k.length >= 2 && !byName.has(k.toLowerCase())) byName.set(k.toLowerCase(), { name: k, label: p.label ?? null }); }
+  const clean = String(note ?? "").replace(/\s+/g, " ").trim().slice(0, NOTE_MAX), unknown = [], ambiguous = [], byName = new Map();
+  for (const p of people) for (const n of p.names ?? []) { const k = String(n ?? "").trim(); if (k.length < 2) continue;
+    const e = byName.get(k.toLowerCase()) ?? { name: k, labels: new Set(), hidden: false }; if (p.label) e.labels.add(p.label); else e.hidden = true; byName.set(k.toLowerCase(), e); }
   const names = [...byName.keys()].sort((a, b) => b.length - a.length);
-  if (!names.length || !clean) return { text: clean, unknown };
+  if (!names.length || !clean) return { text: clean, unknown, ambiguous };
   const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), re = new RegExp(`(?<![\\p{L}\\p{N}])(${names.map(esc).join("|")})(?![\\p{L}\\p{N}])`, "giu");
-  const text = clean.replace(re, m => { const p = byName.get(m.toLowerCase()); if (p.label) return p.label; if (!unknown.includes(p.name)) unknown.push(p.name); return "someone it doesn't perceive"; });
-  return { text, unknown };
+  const text = clean.replace(re, m => { const e = byName.get(m.toLowerCase());
+    if (e.labels.size === 1 && !e.hidden) return [...e.labels][0];
+    if (e.labels.size > 1 || (e.labels.size && e.hidden)) { if (!ambiguous.includes(e.name)) ambiguous.push(e.name); return m; }
+    if (!unknown.includes(e.name)) unknown.push(e.name); return m; });
+  return { text, unknown, ambiguous };
 }
+/** A short fingerprint of a request's plan from where it stands: a change made from one plan is refused on another (a new plan from Angel, another
+    GM's change, a step done meanwhile). */
+export function planPrint(r) {
+  const s = JSON.stringify([r?.pos ?? 0, r?.plan?.steps ?? []]); let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+/** Names of a character to match in a note besides its full name: each word of 4 letters or more, brackets left out ("Valeros (Level 7)" gives
+    "Valeros"), so a first name or a surname alone is caught. */
+export const nameWords = n => String(n ?? "").replace(/\([^)]*\)/g, " ").split(/[\s,.'-]+/).filter(w => w.length >= 4);
 
 /** A Fly in plain words: across, up, down, a hover or a landing. */
 function flyWords(s) {

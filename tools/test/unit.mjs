@@ -1220,12 +1220,22 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   const same = applyEdits([{ do: "stride", to: [3, 4], why: "close in" }], [{ to: [3, 4] }]);
   check("ch: an unchanged step keeps its why", same[0].why === "close in" && applyEdits([{ do: "stand" }], []).length === 1 && applyEdits([{ do: "stand" }], [{ remove: true }]).length === 0);
   const src = [{ do: "stride", to: [3, 4] }]; applyEdits(src, [{ to: [7, 7] }]); check("ch: edits don't touch the plan they read", src[0].to.join() === "3,4");
-  const people = [{ names: ["Test Hero"], label: "E1" }, { names: ["Valeros", "Valeros (Level 7)"], label: null }, { names: ["Hero"], label: "E9" }, { names: ["Sod Hound"], label: "M2" }, { names: ["Ankhrav"], label: "M1" }];
-  const nt = noteForThinker("  Ankhrav: go for test hero, not Valeros; help the Sod Hound.  Valeros again. ", people);
-  check("ch: names become labels", nt.text === "M1: go for E1, not someone it doesn't perceive; help the M2. someone it doesn't perceive again." && nt.unknown.join() === "Valeros", JSON.stringify(nt));
+  const { nameWords, planPrint } = await import("../../scripts/turn.mjs");
+  const people = [{ names: ["Test Hero"], label: "E1" }, { names: ["Valeros", "Valeros (Level 7)", ...nameWords("Valeros (Level 7)")], label: null }, { names: ["Hero"], label: "E9" }, { names: ["Sod Hound"], label: "M2" }, { names: ["Ankhrav"], label: "M1" },
+    { names: ["Goblin Warrior"], label: "E2" }, { names: ["Goblin Warrior"], label: "E3" }, { names: ["Wolf"], label: "E4" }, { names: ["Wolf"], label: null }, { names: ["Gamemaster"], label: null }];
+  const nt = noteForThinker("  Ankhrav: go for test hero; help the Sod Hound.  ", people);
+  check("ch: names become labels", nt.text === "Ankhrav: go for E1; help the M2.".replace("Ankhrav", "M1") && !nt.unknown.length && !nt.ambiguous.length, JSON.stringify(nt));
+  const nu = noteForThinker("not Valeros, and not Valeros (Level 7)", people);
+  check("ch: an unperceived name is kept and reported, never swapped", nu.text === "not Valeros, and not Valeros (Level 7)" && nu.unknown.join() === "Valeros,Valeros (Level 7)", JSON.stringify(nu));
+  check("ch: a user's name is reported", noteForThinker("ask Gamemaster", people).unknown.join() === "Gamemaster");
+  const na = noteForThinker("hit the Goblin Warrior, then the Wolf", people);
+  check("ch: names that fit several creatures are reported", na.ambiguous.join() === "Goblin Warrior,Wolf" && !na.unknown.length, JSON.stringify(na));
   check("ch: whole words only", noteForThinker("Heroes and Hero", people).text === "Heroes and E9" && noteForThinker("Sod Hounds", people).text === "Sod Hounds");
   check("ch: note trimmed to its limit", noteForThinker("x".repeat(NOTE_MAX + 50)).text.length === NOTE_MAX && noteForThinker("", people).text === "");
-  check("ch: names with brackets", noteForThinker("Valeros (Level 7) is near", people).text === "someone it doesn't perceive is near");
+  check("ch: name words", nameWords("Valeros (Level 7)").join() === "Valeros" && nameWords("Mira Blackwood").join() === "Mira,Blackwood" && nameWords("Al Bo").length === 0);
+  check("ch: first names caught", noteForThinker("then Mira", [{ names: ["Mira Blackwood", ...nameWords("Mira Blackwood")], label: null }]).unknown.join() === "Mira");
+  const pr = { pos: 1, plan: { steps: [{ do: "stand" }, { do: "strike", item: "jaws", target: "E1" }] } };
+  check("ch: plan fingerprint", planPrint(pr) === planPrint(structuredClone(pr)) && planPrint(pr) !== planPrint({ ...pr, pos: 2 }) && planPrint(pr) !== planPrint({ pos: 1, plan: { steps: [{ do: "stand" }, { do: "strike", item: "jaws", target: "E2" }] } }));
   check("ch: the note in words", describeChange({ who: "gm", what: "note", text: "go for E1" }) === 'The GM asks for the rest of this turn: "go for E1"' && describeChanges([{ who: "gm", what: "note", text: "flee" }], l => "X", "Wolf").includes('"flee"'));
 }
 /* the history shows the GM's edits with the presses (0.19.0) */
