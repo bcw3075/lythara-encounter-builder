@@ -105,6 +105,8 @@ export function stallOf(req, { now, auto = false, machineMs = STALL_MS.machine }
   if (!req || req.gaveUp || !Number.isFinite(req.since) || !Number.isFinite(now) || now < req.since) return null;
   /* a request with no packet, or refused for the last time, waits on the GM, not on the thinker */
   const gm = req.state === "requested" && (!req.packet || (req.tries ?? 0) >= MAX_TRIES);
+  /* waiting for a player's reaction (0.20.0) is a wait on a person, whatever the step's state */
+  if (req.react) { const waited = now - req.since; return waited >= STALL_MS.person ? { kind: "person", state: "reacting", since: req.since, waited } : null; }
   const kind = gm ? "person" : STALL_KIND[req.state] ?? (req.state === "ready" && auto ? "person" : null); if (!kind) return null;
   const waited = now - req.since; return waited >= (kind === "machine" ? (req.state === "extending" ? Math.max(machineMs, STALL_MS.extending) : machineMs) : STALL_MS.person) ? { kind, state: gm ? "gm" : req.state, since: req.since, waited } : null;
 }
@@ -112,7 +114,7 @@ export function stallOf(req, { now, auto = false, machineMs = STALL_MS.machine }
 export const stallLive = (ev, req) => !!req?.stall && req.stall.since === ev.since && req.since === ev.since && !["done", "manual", "held"].includes(req.state);
 /** What it's waiting on, in words for the card and the thinker. */
 export function stallWords(stall) {
-  const what = { gm: "waiting for you to play the turn", requested: "waiting for Angel's plan", submitted: "checking the plan", running: "an action has been running", saves: "waiting for a save", stopped: "stopped, waiting for you", ready: "waiting for you (a card to apply, then Next step)", fled: "at the map's edge, waiting for you (Extend map or Let it get away)", extending: "the map has been extending" }[stall?.state] ?? "not moving";
+  const what = { gm: "waiting for you to play the turn", requested: "waiting for Angel's plan", submitted: "checking the plan", running: "an action has been running", saves: "waiting for a save", reacting: "waiting for a reaction", stopped: "stopped, waiting for you", ready: "waiting for you (a card to apply, then Next step)", fled: "at the map's edge, waiting for you (Extend map or Let it get away)", extending: "the map has been extending" }[stall?.state] ?? "not moving";
   const m = Math.floor((stall?.waited ?? 0) / 60000), sec = Math.round((stall?.waited ?? 0) / 1000);
   return `Stalled: ${what}, for ${m >= 1 ? `${m} minute${m === 1 ? "" : "s"}` : `${sec} seconds`}.`;
 }

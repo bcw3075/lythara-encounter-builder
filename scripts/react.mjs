@@ -2,11 +2,9 @@
    and what a reaction that raises AC does to an attack already rolled. Pure: no Foundry globals, so the unit tests run it in Node. */
 import { distanceBetween } from "./move.mjs";
 
-/** The gates a monster's action passes through (Rhea's design, 2026-11-05; built 0.20.0):
-    move: it leaves a square during a move action (asked before it leaves); stay: a move action that leaves no square (Stand, Drop Prone, a Climb),
-    asked at the end of that action; manipulate and ranged: asked before the action resolves; attack: an attack declared at a creature, before the roll;
-    hit: that attack hit, before damage. */
-export const GATES = ["move", "stay", "manipulate", "ranged", "attack", "hit"];
+/* The gates a monster's action passes through (Rhea's design, 2026-11-05; built 0.20.0): move: it leaves a square during a move action (asked before
+   it leaves); stay: a move action that leaves no square (Stand, Drop Prone, a Climb), asked at the end of that action; manipulate and ranged: asked
+   before the action resolves; attack: a Strike at a creature, before the roll; hit: that Strike hit, before damage. */
 /** The reactions the module knows, by PF2e slug, each row checked against Archives of Nethys (2026-11-09):
     Reactive Strike (Player Core; Player Core 2 pg. 80; monsters' Rage of Elements pg. 233): a creature within your reach uses a manipulate or a move
       action, makes a ranged attack, or leaves a square during a move action; a melee Strike, no multiple attack penalty; a critical hit disrupts a

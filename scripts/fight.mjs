@@ -7,7 +7,7 @@ import { BURROW_DEPTH, FT, distanceBetween, burrowWorld, crossesWalls, cutShort,
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
 import { readMap, partySize, suggestedLevel } from "./builder.mjs";
 import { aimArea, aimWords, alliesCaught, burstReachable, caughtBy, shapeOf, squaresNear } from "./area.mjs";
-import { degreeAgainst, finished, fits, gateWords, reactionsOf, routeGates } from "./react.mjs";
+import { answerWords, degreeAgainst, finished, fits, gateWords, reactionsOf, routeGates } from "./react.mjs";
 import { MAX_TRIES, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, stallOf, text, waitSeconds } from "./brain.mjs";
 
 const ID = "lythara-encounter-builder", WORKBENCH = "xdy-pf2e-workbench", TOOLBELT = "pf2e-toolbelt", VISIONER = "pf2e-visioner", HUD = "pf2e-hud", GROUND_RADIUS = 10, STEP_MS = 20000, SETTLE_MS = 400, SCENE_MS = 30000, RESUMABLE = ["ready", "running", "held", "stopped", "saves"];
@@ -967,14 +967,15 @@ async function runStrike(combat, id, i, step, tok, target) {
         if (!shot.roll) { if (ammo) return refused(); throw new Error(`${step.itemName} didn't roll.`); }
         const { message, roll } = shot, left = own ? await takeAmmo(tok.actor, ammo) : null;
         if (ammo?.unreadable) await addNote(combat, id, `I couldn't read Ranged Combat's ammunition for ${tok.name}, so Ranged Combat took this shot's ammunition itself (on version 8.0.7 that is 2 for a monster).`);
-        await record({ attack: { message: message.id, degree: roll?.degreeOfSuccess ?? message.rolls?.[0]?.degreeOfSuccess ?? 0, ...(left != null ? { ammoLeft: left } : {}) } });
-        /* Nimble Dodge used before the roll (0.20.0): +2 circumstance to AC against this attack, so the degree is read again against it */
-        const bonus = dodgeBonus(combat, id, i, target), check = message.rolls?.[0] ?? roll;
-        if (bonus && check) { const dc = Math.max(message.flags?.pf2e?.context?.dc?.value ?? 0, acWith(target.actor, bonus) ?? 0), deg = degreeAgainst(check.total, check.dice?.[0]?.total, dc), was = get().attack.degree;
-          if (deg !== was) { await record({ attack: { ...get().attack, degree: deg, was, against: dc } }); await addNote(combat, id, `Nimble Dodge: against AC ${dc} ${step.itemName}'s ${OUTCOMES[was] ?? "result"} becomes a ${OUTCOMES[deg] ?? "different result"}.`); } }
+        /* Nimble Dodge used before the roll (0.20.0): +2 circumstance to AC against this attack, over what circumstance bonus it already had (they don't
+           stack); read against the attack's own DC, and recorded in the same save as the attack (review findings 5 and 17) */
+        const base = roll?.degreeOfSuccess ?? message.rolls?.[0]?.degreeOfSuccess ?? 0, bonus = dodgeBonus(combat, id, i, target), check = message.rolls?.[0] ?? roll;
+        const add = bonus ? Math.max(0, bonus - circNow(target.actor)) : 0, dc = add ? (message.flags?.pf2e?.context?.dc?.value ?? target.actor.armorClass?.value ?? 0) + add : null, degree = add && check ? degreeAgainst(check.total, check.dice?.[0]?.total, dc) : base;
+        await record({ attack: { message: message.id, degree, ...(degree !== base ? { was: base, against: dc } : {}), ...(left != null ? { ammoLeft: left } : {}) } });
+        if (degree !== base) await addNote(combat, id, `Nimble Dodge: against AC ${dc} ${step.itemName}'s ${OUTCOMES[base] ?? "result"} becomes a ${OUTCOMES[degree] ?? "different result"}.`);
       } else if (now === "damage") {
-        const hr = await hitGate(combat, id, i, step, tok, target, strike, get);   /* Shield Block, Reactive Shield (0.20.0) */
-        if (hr === "ask") return "ask"; if (hr === "manual") return "next"; if (hr === "missed") continue;
+        let hr; try { hr = await hitGate(combat, id, i, step, tok, target, strike, get); } catch (e) { console.error(`${ID} | reactions`, e); hr = null; await addNote(combat, id, `I couldn't ask the reactions to ${step.itemName}'s hit (${e.message}); damage went ahead.`); }   /* Shield Block, Reactive Shield (0.20.0) */
+        if (hr === "manual") return "next"; if (hr === "held" || hr === "gone") return hr; if (hr === "missed") continue;
         const degree = get().attack.degree; aimAt(target); await record({ damageStarted: true });
         const message = await watched(async () => { const card = waitFor("damage-roll"); await strike[degree === 3 ? "critical" : "damage"]({ event: clickWith("showDamageDialogs"), target: target.object, mapIncreases: step.variant }); return card; });
         await record({ damage: { message: message.id } });
@@ -1052,9 +1053,11 @@ async function runStride(combat, id, i, step, tok) {
     : route.slice(1).map(sq => ({ ...at(sq), action }));
   /* player reactions along the way (0.20.0): asked before it leaves the first square in each reactor's reach. A Stride's (Crawl's, flee's) whole route;
      a Fly, Swim or Burrow only where it starts (open item: a flier passing through someone's reach later on its route isn't asked). */
-  const gates = moveGates(combat, tok, step, route);
-  if (gates[0]?.k === 0) { const g = await askReactions(combat, id, i, "move:0", "move", tok, gates[0].list); if (g === "ask") return "ask"; if (g === "manual") return "next";
-    if (downNow(tok) || cantMove(tok.actor) || tok.actor?.hasCondition?.("prone")) { await finish({ started: true, moved: { to: squareOf(tok, scene), cost: 0 } }); return "next"; } }
+  const gates = (() => { try { return moveGates(combat, tok, step, route); } catch (e) { console.error(`${ID} | reactions`, e); return []; } })(), wasProne = !!tok.actor?.hasCondition?.("prone");
+  /* it can't go on after a reaction if it went down, can't move, or was knocked prone (a Crawl is prone all along: review finding 1) */
+  const stopped = () => downNow(tok) || !!cantMove(tok.actor) || (!wasProne && !!tok.actor?.hasCondition?.("prone"));
+  if (gates[0]?.k === 0) { const g = await askReactions(combat, id, i, "move:0", "move", tok, gates[0].list); if (g === "manual") return "next"; if (g === "gone") return "gone";
+    if (stopped()) { await finish({ started: true, moved: { to: squareOf(tok, scene), cost: 0 } }); return "next"; } }
   await record({ started: true, ...swum });
   if (dig && !isBelow(tok)) await setBelow(tok, true);
   const go = wps => (async () => { try { return await watched(async () => {
@@ -1072,8 +1075,8 @@ async function runStride(combat, id, i, step, tok) {
   for (const g of gates.filter(g => g.k > 0)) {
     add(await go(waypoints.slice(from, g.k))); from = g.k;
     const res = await askReactions(combat, id, i, `move:${g.k}`, "move", tok, g.list);
-    if (res === "ask" || res === "manual") { await finish({ moved: { to: squareOf(tok, scene), cost: charged?.cost ?? null } }); return res === "ask" ? "ask" : "next"; }
-    if (downNow(tok) || cantMove(tok.actor) || tok.actor?.hasCondition?.("prone")) { held = true; break; }   /* it can't go on: it stops where it is */
+    if (res === "manual" || res === "gone") { await finish({ moved: { to: squareOf(tok, scene), cost: charged?.cost ?? null } }); return res === "gone" ? "gone" : "next"; }
+    if (stopped()) { held = true; break; }   /* it can't go on: it stops where it is */
   }
   if (!held && from < waypoints.length) add(await go(waypoints.slice(from)));
   await finish({ moved: { to: squareOf(tok, scene), cost: charged?.cost ?? null } });
@@ -1998,15 +2001,21 @@ async function runTurn(combat, requestId) {
     if (request(combat, requestId).log?.[i]?.disrupted) work = null;   /* disrupted before a reload: the action is spent, never done after all */
     /* player reactions before the action (0.20.0): a manipulate action, a ranged attack, an attack at a character; once per step, before it begins */
     if (work && !Object.keys(request(combat, requestId).log?.[i] ?? {}).length && ["strike", "interact", "release", "ability", "spell"].includes(step.do)) {
-      const tid = step.target ? (tokenIdOf(combat, r, step.target) ?? r.labels?.[step.target]) : null, pre = await beforeAction(combat, requestId, i, step, tok, tid ? combat.scene.tokens.get(tid) : null);
+      const tid = step.target ? tokenIdOf(combat, r, step.target) : null;
+      let pre; try { pre = await beforeAction(combat, requestId, i, step, tok, tid ? combat.scene.tokens.get(tid) : null); } catch (e) { console.error(`${ID} | reactions`, e); return save(combat, requestId, { state: "stopped", note: `I couldn't ask the reactions before step ${i + 1} (${e.message}). Press Do it to try again, or play it yourself.` }); }   /* review finding 8 */
       if (pre === "manual") return;
+      if (pre === "gone") return save(combat, requestId, { state: "stopped", note: "The turn moved on while reactions were being asked." });
+      if (pre === "held") return save(combat, requestId, { state: "held", hold: false, note: `Held before step ${i + 1}, after the reactions to it.` });
       if (pre === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} hasn't been done. Check the reactions in chat, then press Do it to carry on or play the rest yourself.`.trim() });
       if (pre === "down") { await save(combat, requestId, { pos: i, state: "done", note: joinNote(combat, requestId, `${tok.name} went down to a reaction before it could act.`) }); return endAfter(combat, requestId); }
-      if (pre === "disrupted") { await save(combat, requestId, { log: { [i]: { disrupted: true } }, note: joinNote(combat, requestId, `A critical Reactive Strike disrupted ${tok.name}'s ${actWords(step)}: the action is spent.`) }); work = null; }
+      if (pre === "disrupted") { await save(combat, requestId, { log: { [i]: { disrupted: true } }, note: joinNote(combat, requestId, `A critical Reactive Strike disrupted ${tok.name}'s ${actWords(step)}: the action is spent (any spell slot or use it costs is your call).`) }); work = null; }
     }
+    const stayFrom = ["stand", "drop-prone", "climb"].includes(step.do) && tok.object ? { at: placeOf(tok, combat.scene).pos, elev: heightUp(tok) } : null;   /* a Climb is asked from where it was (review finding 16) */
     if (work) {
       let result; try { result = await work(); } catch (e) { console.error(e); result = "ask"; await save(combat, requestId, { note: e.message }); }
       if (result === "stopped") return save(combat, requestId, { state: "stopped" });
+      if (result === "held") return save(combat, requestId, { state: "held", hold: false, note: "Held after the reactions, before the damage." });   /* a Hold during the reactions to a hit (0.20.0) */
+      if (result === "gone") return save(combat, requestId, { state: "stopped", note: "The turn moved on while reactions were being asked." });
       /* a Delay ended the turn itself (the rest of the turn doesn't happen): the request is done, and its new turn comes after the named creature's */
       if (result === "delayed") return save(combat, requestId, { pos: i + 1, coverSettled: i + 1, state: "done", delayed: true });
       /* a shot it couldn't make (no ammunition left, or Ranged Combat refused): nothing was rolled, so ask again with the action unspent */
@@ -2021,8 +2030,9 @@ async function runTurn(combat, requestId) {
       if (result === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} may not have finished. ${isMove(step) ? "Put the monster where it should be" : step.do in POSTURES ? "Check whether it is prone" : step.do === "take-cover" ? "Check whether it is Taking Cover" : step.do === "interact" ? "Check the chat for its Interact card" : step.do === "delay" ? "Check the tracker: its turn should have ended and its place moved to just after the creature it waits for" : step.do === "ability" ? "Check the chat, HP and conditions" : step.do === "spell" ? "Check the chat, the spell's slot or use, HP and conditions" : step.do in STEALTH_WORD ? `Check its ${STEALTH_WORD[step.do]} card and apply Visioner's results if they aren't${step.do === "sneak" ? ", and where it stands" : ""}` : step.do === "strike" && tok.actor?.type === "npc" && rangedOn() && strikesWithIds(tok.actor).find(x => x.id === step.item)?.strike?.item?.isRanged ? "Check the chat, HP and its ammunition (the module takes a monster's ammunition after the roll)" : "Check the chat and HP"}, then play the rest yourself.`.trim() });
       /* a move action that leaves no square: reactions such as Reactive Strike at its end (0.20.0) */
       if (["stand", "drop-prone", "climb"].includes(step.do) && result === "next") {
-        const g = await stayGate(combat, requestId, i, step, tok);
+        let g; try { g = await stayGate(combat, requestId, i, step, tok, stayFrom); } catch (e) { console.error(`${ID} | reactions`, e); g = "ask"; }
         if (g === "manual") return;
+        if (g === "gone") return save(combat, requestId, { state: "stopped", pos: i + 1, coverSettled: i + 1, note: "The turn moved on while reactions were being asked." });
         if (g === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} is done. Check the reactions in chat, then press Do it to carry on or play the rest yourself.`.trim(), pos: i + 1, coverSettled: i + 1 });
       }
       /* the monster went down to a reaction (0.20.0): nothing more this turn */
@@ -2298,8 +2308,8 @@ export async function untickParty(combat) {
 /* Rhea's design (2026-11-05/06) and her answers of 2026-11-09: a prompt in the player's browser, React or Pass, with a countdown (world setting
    reactionTimer: 5 to 60 s, default 20, 0 = none), only for a player whose character has a reaction that fits; the GM's card always has Continue; a
    reaction with no player online (or a party member the GM plays) is the GM's, on the card. The module counts no reactions: a player with none left
-   passes. Gates: docs/features/reactions.md. */
-const REACT_POLL = 250, SOCKET = `module.${ID}`;
+   passes. Gates and rules: docs/features/reactions.md. */
+const REACT_POLL = 250, SOCKET = `module.${ID}`, NEED_SIGHT = ["reactive-strike", "attack-of-opportunity", "nimble-dodge"];
 export const reactionTimer = () => { const v = Math.round(Number(game.settings.get(ID, "reactionTimer")) || 0); return v <= 0 ? 0 : Math.max(5, Math.min(60, v)); };
 /** A creature's reactions as react.mjs reads them (actions and feats; a character's are mostly feats). */
 export function reactionsFor(actor) {
@@ -2315,100 +2325,114 @@ function perceivesNow(observer, tok) {
 }
 /** The monster as a reactor may see it named: its token name when its name shows to players, otherwise "A creature". */
 function moverName(tok) { const N = CONST.TOKEN_DISPLAY_MODES; return [N.ALWAYS, N.HOVER].includes(tok.displayName) ? tok.name : "A creature"; }
-/** The circumstance bonus a creature's AC has now, and its AC with another circumstance bonus instead if that is higher (they don't stack). */
-function acWith(actor, circ = 0) {
-  const st = actor?.armorClass; if (!st) return null;
-  const have = Math.max(0, ...(st.modifiers ?? []).filter(m => m.type === "circumstance" && m.enabled && m.modifier > 0).map(m => m.modifier));
-  return st.value - have + Math.max(have, circ);
+/** The highest circumstance bonus on a creature's AC now; without a raised shield's own (review finding 5: circumstance bonuses don't stack, so a new
+    one adds only what it beats). */
+function circNow(actor, { noShield = false } = {}) {
+  return Math.max(0, ...(actor?.armorClass?.modifiers ?? []).filter(m => m.type === "circumstance" && m.enabled && m.modifier > 0 && !(noShield && /shield/i.test(`${m.slug ?? ""} ${m.label ?? ""}`))).map(m => m.modifier));
 }
-/** Who can react at this gate, with which reaction: characters on the other side, able to act, perceiving the monster, with a known reaction that fits.
-    o: { target, melee, damageTypes, at (the square it is at, for reach), anyReach (route gates: reach is checked per square) } */
+/** Who can react at this gate, with which reaction: characters on the other side, able to act, with a known reaction that fits; Reactive Strike and
+    Nimble Dodge also need to perceive the monster (review finding 15: Shield Block and Reactive Shield don't). One row per reaction (`id`).
+    o: { target, melee, damageTypes, at, elev (where it was, for reach), anyReach (route gates: reach is checked per square) } */
 function reactorsFor(combat, tok, gate, o = {}) {
-  const scene = combat.scene, out = [], me = o.at ? { pos: o.at, span: sizeOf(tok) } : placeOf(tok, scene);
+  const scene = combat.scene, out = [], me = o.at ? { pos: o.at, span: sizeOf(tok) } : placeOf(tok, scene), myElev = o.elev ?? heightUp(tok);
   for (const c of combat.combatants) {
     const t = c.token, a = t?.actor;
     if (!t || t.id === tok.id || !a?.isOfType?.("character") || !a.isEnemyOf?.(tok.actor) || t.hidden || t.getFlag(ID, "escaped") || isBelow(t)) continue;
-    if (cantAct(a) || a.hasCondition?.("stunned") || (a.hitPoints?.value ?? 1) <= 0) continue;
-    if (!perceivesNow(t, tok)) continue;
-    const reach = a.getReach?.({ action: "attack" }) ?? 5, p = placeOf(t, scene);
-    const dist = distanceBetween({ x: me.pos[0], y: me.pos[1], size: me.span, elev: heightUp(tok) }, { x: p.pos[0], y: p.pos[1], size: p.span, elev: heightUp(t) }, { reach });
+    if (cantAct(a) || ["stunned", "confused"].some(k => a.hasCondition?.(k)) || (a.hitPoints?.value ?? 1) <= 0) continue;
+    const reach = a.getReach?.({ action: "attack" }) ?? 5, p = placeOf(t, scene), sees = perceivesNow(t, tok);
+    const dist = distanceBetween({ x: me.pos[0], y: me.pos[1], size: me.span, elev: myElev }, { x: p.pos[0], y: p.pos[1], size: p.span, elev: heightUp(t) }, { reach });
     const sh = a.attributes?.shield, who = { inReach: !cantAttack(a) && (o.anyReach || dist <= reach), isTarget: o.target?.id === t.id, shieldRaised: !!sh?.raised && !sh?.broken, hasShield: !!sh?.itemId && !sh?.broken && (sh?.ac ?? 0) > 0 };
-    for (const x of reactionsFor(a)) if (x.known && fits(x.slug, gate, who, { melee: !!o.melee, damageTypes: o.damageTypes ?? [] }))
-      out.push({ token: t.id, actor: a.id, name: t.name, reaction: x.name, slug: x.slug, pos: p.pos, span: p.span, elev: heightUp(t), reach });
+    for (const x of reactionsFor(a)) if (x.known && (sees || !NEED_SIGHT.includes(x.slug)) && fits(x.slug, gate, who, { melee: !!o.melee, damageTypes: o.damageTypes ?? [] }))
+      out.push({ id: `${t.id}:${x.slug}`, token: t.id, actor: a.id, name: t.name, reaction: x.name, slug: x.slug, pos: p.pos, span: p.span, elev: heightUp(t), reach });
   }
   return out;
 }
-/** Ask the reactions in `list` and wait for them: players by a prompt in their browser, the GM on the card. key names the gate within step i (a move's
-    gates are "move:<route index>"). Returns { list, since } once everyone has answered, passed, run out of time or the GM pressed Continue; "ask" when a
-    reload found the question already asked (anything rolled meanwhile is in chat); "manual" when the GM took the turn. Asked once per gate. */
+/* Attack rolls made while a question is open, from any page (the createChatMessage hook): a Reactive Strike's critical hit disrupts a manipulate action.
+   Collected on the runner by the hook, not compared by clocks (review finding 14). */
+const rxWatch = new Map();
+export function noteReactionRoll(message) {
+  if (!rxWatch.size || message.flags?.pf2e?.context?.type !== "attack-roll") return;
+  const r = { actor: message.actor?.id ?? message.speaker?.actor ?? null, target: String(message.flags.pf2e.context.target?.token ?? ""), outcome: message.flags.pf2e.context.outcome ?? null };
+  for (const w of rxWatch.values()) w.push(r);
+}
+const strip = ({ users, words, pos, span, elev, reach, ...x }) => x;
+/** Ask the reactions in `list` and wait: players by a prompt in their browser, the GM on the card. key names the gate within step i ("before",
+    "move:<route index>", "stay", "hit"). Returns { done, list (each with its answer), rolls (attack rolls made meanwhile), held } once everyone has
+    answered, passed, run out of time, the GM pressed Continue or Hold, or the monster went down; "manual" when the GM took the turn; "gone" when the
+    turn moved on. Each gate is asked once: a reload while asking keeps what was answered and skips the rest, with a note (review finding 2). The
+    question (`react`) is cleared on every way out (review finding 3). */
 async function askReactions(combat, id, i, key, gate, tok, list, kind = "") {
-  if (!list.length) return { list: [] };
+  if (!list.length) return { done: true, list: [], rolls: [] };
   const had = request(combat, id).gates?.[i]?.[key];
   if (had?.done) return had;
-  if (had) { await addNote(combat, id, `${tok.name}'s ${gate === "hit" ? "hit" : "action"} was waiting for reactions when the page reloaded: check the chat for a reaction already rolled.`); return "ask"; }
-  const secs = reactionTimer(), until = secs ? clock() + secs * 1000 : 0, since = Date.now(), who = moverName(tok);
-  const asked = list.map(x => { const users = answerersOf(game.actors.get(x.actor)); return { token: x.token, actor: x.actor, name: x.name, reaction: x.reaction, slug: x.slug, to: users.length ? "player" : "gm", users, words: gateWords(x.gateOf ?? gate, who, { kind, reaction: x.reaction }) }; });
-  await save(combat, id, { react: whole({ key, step: i, gate, list: asked, until, answers: {}, cont: false }), gates: { [i]: { [key]: { asked: since } } } });
-  emitSocket({ t: "ask", combat: combat.id, request: id, key, until, list: asked.filter(x => x.to === "player") });
-  let out = "done";
-  for (;;) {
-    await sleep(REACT_POLL);
-    const n = request(combat, id), rx = n?.react;
-    if (!n || n.state === "manual") { out = "manual"; break; }
-    if (!rx || rx.key !== key) break;
-    const answers = { ...(rx.answers ?? {}) }, open = asked.filter(x => !answers[x.token]);
-    if (rx.cont || n.hold) { for (const x of asked) if (!["done", "pass", "timeout"].includes(answers[x.token])) answers[x.token] = "continue"; await save(combat, id, { "react.answers": whole(answers) }); break; }
-    if (until && clock() >= until && open.length) { for (const x of open) answers[x.token] = "timeout"; await save(combat, id, { "react.answers": whole(answers) }); }
-    if (finished(asked.map(x => ({ answer: answers[x.token] })))) break;
-    if (tok.actor?.isDead || (tok.actor?.hitPoints?.value ?? 1) <= 0) { for (const x of asked) if (!["done", "pass", "timeout"].includes(answers[x.token])) answers[x.token] = "continue"; await save(combat, id, { "react.answers": whole(answers) }); break; }
+  if (had) {
+    const rx = request(combat, id).react, ans = rx?.key === key ? rx.answers ?? {} : {}, final = (rx?.key === key ? rx.list : []).map(x => ({ ...strip(x), answer: ans[x.id] ?? "continue" }));
+    await save(combat, id, { react: null, gates: { [i]: { [key]: whole({ done: true, list: final, reloaded: true }) } }, note: joinNote(combat, id, `The page reloaded while ${tok.name}'s ${gate === "hit" ? "hit" : "action"} waited for reactions: what was answered stands and the rest were skipped. Check the chat for a reaction already rolled.`) });
+    emitSocket({ t: "close", combat: combat.id, request: id, key });
+    return { done: true, list: final, rolls: [], reloaded: true };
   }
-  const answers = request(combat, id)?.react?.answers ?? {}, final = asked.map(x => ({ ...x, answer: answers[x.token] ?? "continue" }));
+  const secs = reactionTimer(), until = secs ? clock() + secs * 1000 : 0, who = moverName(tok), start = request(combat, id), watchKey = `${combat.id}.${id}.${i}.${key}`, rolls = [];
+  const asked = list.map(x => { const users = answerersOf(game.actors.get(x.actor)); return { id: x.id, token: x.token, actor: x.actor, name: x.name, reaction: x.reaction, slug: x.slug, to: users.length ? "player" : "gm", users, words: gateWords(x.slug === "nimble-dodge" ? "attack" : gate, who, { kind, reaction: x.reaction }) }; });
+  /* `since` moves on: waiting for a reaction is a wait on a person for the stall check (brain.mjs stallOf, review finding 9) */
+  await save(combat, id, { react: whole({ key, step: i, gate, list: asked, until, answers: {}, cont: false }), since: clock(), gates: { [i]: { [key]: { asked: clock() } } } });
+  rxWatch.set(watchKey, rolls);
+  emitSocket({ t: "ask", combat: combat.id, request: id, key, until, list: asked.filter(x => x.to === "player") });
+  let out = "done", held = false;
+  const skip = async (n, as) => { for (const x of asked) if (!n?.react?.answers?.[x.id] || n.react.answers[x.id] === "react") await save(combat, id, { [`react.answers.${x.id}`]: as }); };   /* one key each, so an answer arriving now isn't overwritten (review finding 12) */
+  try {
+    for (;;) {
+      await sleep(REACT_POLL);
+      const n = request(combat, id), rx = n?.react;
+      if (!n || n.state === "manual") { out = "manual"; break; }
+      if (!game.combats.has(combat.id) || combat.round !== start.round || combat.combatant?.id !== start.combatantId) { out = "gone"; break; }   /* review finding 10 */
+      if (!rx || rx.key !== key) break;
+      if (n.hold) { held = true; await skip(n, "continue"); break; }
+      if (rx.cont) { await skip(n, "continue"); break; }
+      if (until && clock() >= until) for (const x of asked) if (!rx.answers?.[x.id]) await save(combat, id, { [`react.answers.${x.id}`]: "timeout" });
+      if (finished(asked.map(x => ({ answer: request(combat, id)?.react?.answers?.[x.id] })))) break;
+      if (downNow(tok)) { await skip(n, "continue"); break; }
+    }
+  } finally { rxWatch.delete(watchKey); }
+  const answers = request(combat, id)?.react?.answers ?? {}, final = asked.map(x => ({ ...strip(x), answer: answers[x.id] ?? "continue" }));
+  await save(combat, id, { react: null, since: clock(), gates: { [i]: { [key]: whole({ done: true, list: final, rolls }) } } });
   emitSocket({ t: "close", combat: combat.id, request: id, key });
-  if (out === "manual") return "manual";
-  await save(combat, id, { react: null, gates: { [i]: { [key]: whole({ done: true, list: final.map(({ users, words, ...x }) => x), since }) } } });
-  const words = final.map(x => x.answer === "done" ? `${x.name} used ${x.reaction}` : x.answer === "timeout" ? `${x.name} didn't answer in time` : x.answer === "continue" ? `${x.name}'s ${x.reaction} was skipped` : `${x.name} passed on ${x.reaction}`);
-  if (final.some(x => x.answer === "done")) await addNote(combat, id, `Reactions: ${words.join("; ")}.`);
-  return { done: true, list: final, since };
-}
-/** Did a reactor's Strike at the monster land a critical hit since `since` (a Reactive Strike disrupting a manipulate action)? */
-function critSince(list, tok, since) {
-  const used = new Set(list.filter(x => x.answer === "done" && x.slug !== "nimble-dodge").map(x => x.actor));
-  return game.messages.contents.some(m => m.timestamp >= since && m.flags?.pf2e?.context?.type === "attack-roll" && used.has(m.actor?.id ?? m.speaker?.actor)
-    && String(m.flags.pf2e.context.target?.token ?? "").endsWith(tok.id) && m.flags.pf2e.context.outcome === "criticalSuccess");
+  if (out !== "done") return out;
+  if (final.some(x => x.answer === "done")) await addNote(combat, id, `Reactions: ${answerWords(final).join("; ")}.`);
+  return { done: true, list: final, rolls, held };
 }
 const downNow = tok => !!tok.actor?.isDead || (tok.actor?.hitPoints?.value ?? 1) <= 0;
-/** Before an action that isn't a move: manipulate, a ranged attack, an attack at a creature. Returns null to go on, "disrupted" (a critical Reactive
-    Strike on a manipulate action: the action is spent), "down" (the monster went down), "ask" or "manual"; with acBonus for Nimble Dodge. */
+/** Before an action that isn't a move: a manipulate action (Release excepted: it triggers no such reactions, Player Core pg. 417, review finding 4), a
+    ranged attack, a Strike at a character (Nimble Dodge). Returns null to go on, "disrupted", "down", "held", "ask", "manual" or "gone". */
 async function beforeAction(combat, id, i, step, tok, target) {
-  const actor = tok.actor, w = beforeKinds(actor, step, target);
+  const w = beforeKinds(tok.actor, step, target);
   if (!w.manipulate && !w.ranged && !w.attack) return null;
-  const list = [], add = l => { for (const x of l) if (!list.some(y => y.token === x.token && y.reaction === x.reaction)) list.push(x); };
+  const list = [], add = l => { for (const x of l) if (!list.some(y => y.id === x.id)) list.push(x); };
   if (w.manipulate) add(reactorsFor(combat, tok, "manipulate"));
   if (w.ranged) add(reactorsFor(combat, tok, "ranged"));
   if (w.attack && target) add(reactorsFor(combat, tok, "attack", { target }));
-  const gate = w.manipulate ? "manipulate" : w.ranged ? "ranged" : "attack";
-  /* each reactor is told its own trigger: Nimble Dodge is about being attacked, Reactive Strike about the action in its reach */
-  const res = await askReactions(combat, id, i, "before", gate, tok, list.map(x => x.slug === "nimble-dodge" ? { ...x, gateOf: "attack" } : x), w.kind);
+  const res = await askReactions(combat, id, i, "before", w.manipulate ? "manipulate" : w.ranged ? "ranged" : "attack", tok, list, w.kind);
   if (typeof res === "string") return res;
   if (downNow(tok)) return "down";
-  if (w.manipulate && critSince(res.list, tok, res.since)) return "disrupted";
+  if (res.held) return "held";
+  const struck = new Set(res.list.filter(x => x.answer === "done" && x.slug !== "nimble-dodge").map(x => x.actor));
+  if (w.manipulate && (res.rolls ?? []).some(r => struck.has(r.actor) && r.target.endsWith(tok.id) && r.outcome === "criticalSuccess")) return "disrupted";
   return null;
 }
-/** What an action is for the reaction gates: { manipulate, ranged, attack, kind (words) }. */
+/** What an action is for the reaction gates: { manipulate, ranged, attack, kind (words) }. Nimble Dodge is asked only for a Strike, the one attack whose
+    degree the module reads again (review finding 7). */
 function beforeKinds(actor, step, target) {
   const pc = !!target?.actor?.isOfType?.("character");
   if (step.do === "interact") return { manipulate: true, kind: "Interact" };
-  if (step.do === "release") return { manipulate: true, kind: "Release" };
   if (step.do === "strike") { const s = strikesWithIds(actor).find(x => x.id === step.item)?.strike; return { ranged: !!s?.item?.isRanged, attack: pc, kind: "Strike" }; }
-  if (step.do === "ability") { const ab = abilityList(actor).find(a => a.id === step.item), tr = ab?.traits ?? []; if (ab?.followUp) return {}; return { manipulate: tr.includes("manipulate"), attack: pc && tr.includes("attack"), kind: ab?.name ?? "" }; }
-  if (step.do === "spell") { const sp = spellFor(actor, step)?.spell, tr = [...(sp?.system?.traits?.value ?? [])]; return { manipulate: tr.includes("manipulate"), ranged: tr.includes("attack"), attack: pc && tr.includes("attack") && !step.area?.aim, kind: sp?.name ? `casting ${sp.name}` : "" }; }
+  if (step.do === "ability") { const ab = abilityList(actor).find(a => a.id === step.item), tr = ab?.traits ?? []; if (ab?.followUp) return {}; return { manipulate: tr.includes("manipulate"), kind: ab?.name ?? "" }; }
+  if (step.do === "spell") { const sp = spellFor(actor, step)?.spell, tr = [...(sp?.system?.traits?.value ?? [])]; return { manipulate: tr.includes("manipulate"), ranged: tr.includes("attack"), kind: sp?.name ? `casting ${sp.name}` : "" }; }
   return {};
 }
-/** Nimble Dodge's bonus for this step's attack, from the answers recorded before it. */
+/** Nimble Dodge's bonus for this step's Strike, from the answers recorded before it. */
 function dodgeBonus(combat, id, i, target) { const g = request(combat, id)?.gates?.[i]?.before; return g?.list?.some(x => x.answer === "done" && x.slug === "nimble-dodge" && x.token === target?.id) ? 2 : 0; }
-/** At the end of a move action that leaves no square (Stand, Drop Prone, a Climb): Reactive Strike and the like. */
-async function stayGate(combat, id, i, step, tok) {
-  const list = reactorsFor(combat, tok, "stay");
+/** At the end of a move action that leaves no square (Stand, Drop Prone, a Climb), measured from where it was (a Climb can take it out of reach). */
+async function stayGate(combat, id, i, step, tok, from) {
+  const list = reactorsFor(combat, tok, "stay", from ?? {});
   return askReactions(combat, id, i, "stay", "stay", tok, list, step.do === "stand" ? "stands up" : step.do === "drop-prone" ? "drops prone" : "climbs");
 }
 /** The answers of a socket message: from the player (only for a reactor that player owns) or a GM's page; the runner writes them on the request. */
@@ -2417,21 +2441,21 @@ export function onSocket(data, senderId) {
   if (data.t === "answer") {
     if (!isRunner()) return;
     const combat = game.combats.get(data.combat), n = combat && request(combat, data.request), rx = n?.react; if (!rx || rx.key !== data.key) return;
-    const from = game.users.get(senderId ?? data.user), x = rx.list.find(y => y.token === data.token); if (!from || !x) return;
+    const from = game.users.get(senderId), x = rx.list.find(y => y.id === data.row); if (!from || !x) return;   /* the sender as Foundry reports it, never as the message claims (review finding 13) */
     if (!from.isGM && !game.actors.get(x.actor)?.testUserPermission(from, "OWNER")) return;   /* only the player who owns that character */
     if (!["react", "done", "pass"].includes(data.answer)) return;
-    const was = rx.answers?.[x.token]; if (["done", "pass", "timeout", "continue"].includes(was)) return;
-    save(combat, data.request, { [`react.answers.${x.token}`]: data.answer }).catch(e => console.warn(`${ID} | reaction`, e));
+    if (["done", "pass", "timeout", "continue"].includes(rx.answers?.[x.id])) return;
+    save(combat, data.request, { [`react.answers.${x.id}`]: data.answer }).catch(e => console.warn(`${ID} | reaction`, e));
     return;
   }
   Hooks.callAll(`${ID}.reactionPrompt`, data);   /* "ask" and "close": the prompt window in a player's browser (ui/react.mjs) */
 }
-function emitSocket(data) { try { game.socket.emit(SOCKET, { ...data, user: game.user.id }); } catch (e) { console.warn(`${ID} | socket`, e); } }
-/** A player's (or the GM's card's) answer. A player's goes to the runner by socket; a GM writes it on the request. */
-export async function answerReaction(combatId, requestId, key, token, answer) {
+function emitSocket(data) { try { game.socket.emit(SOCKET, data); } catch (e) { console.warn(`${ID} | socket`, e); } }
+/** An answer to one reaction row: a player's goes to the runner by socket; a GM writes it on the request. */
+export async function answerReaction(combatId, requestId, key, row, answer) {
   const combat = game.combats.get(combatId), rx = combat && request(combat, requestId)?.react; if (!rx || rx.key !== key) return;
-  if (game.user.isGM) return save(combat, requestId, { [`react.answers.${token}`]: answer });
-  emitSocket({ t: "answer", combat: combatId, request: requestId, key, token, answer });
+  if (game.user.isGM) return save(combat, requestId, { [`react.answers.${row}`]: answer });
+  emitSocket({ t: "answer", combat: combatId, request: requestId, key, row, answer });
 }
 /** The GM's Continue: everyone not yet answered is skipped and the turn goes on. */
 export async function continueReactions(combat, requestId) { if (!game.user.isGM) return; const rx = request(combat, requestId)?.react; if (rx) await save(combat, requestId, { "react.cont": true }); }
@@ -2453,8 +2477,9 @@ function moveGates(combat, tok, step, route) {
 }
 /** A Strike's damage types, for Shield Block (physical only); empty when unknown. */
 const damageTypesOf = strike => { const it = strike?.item; return [...Object.values(it?.system?.damageRolls ?? {}).map(d => d?.damageType), it?.system?.damage?.damageType].filter(Boolean); };
-/** A hit, before its damage: Shield Block and Reactive Shield. Returns null to go on, "missed" (Reactive Shield turned the hit into a miss), "ask" or
-    "manual". Reactive Shield raises the shield (the module does it if the player didn't) and the attack is read again against the new AC. */
+/** A hit, before its damage: Shield Block and Reactive Shield. Returns null to go on, "missed" (Reactive Shield turned the hit into a miss), "held",
+    "ask", "manual" or "gone". Reactive Shield raises the shield (the module does it if the player didn't) and the attack is read again against the
+    attack's own DC plus what the shield adds over the circumstance bonus the target had (review finding 5). */
 async function hitGate(combat, id, i, step, tok, target, strike, get) {
   const rec = get(); if (rec.reacted || !target?.actor) return null;
   const list = reactorsFor(combat, tok, "hit", { target, melee: !strike.item?.isRanged, damageTypes: damageTypesOf(strike) }); if (!list.length) return null;
@@ -2462,11 +2487,13 @@ async function hitGate(combat, id, i, step, tok, target, strike, get) {
   const used = slug => res.list.some(x => x.answer === "done" && x.slug === slug), change = { reacted: true };
   let degree = rec.attack.degree;
   if (used("reactive-shield")) {
-    if (!target.actor.attributes?.shield?.raised) await watched(() => game.pf2e.actions.get("raise-a-shield")?.use?.({ actors: [target.actor] }) ?? game.pf2e.actions.raiseAShield?.({ actors: [target.actor] })).catch(e => console.warn(`${ID} | raise a shield`, e));
-    const m = game.messages.get(rec.attack.message), check = m?.rolls?.[0], dc = Math.max(m?.flags?.pf2e?.context?.dc?.value ?? 0, acWith(target.actor, 0) ?? 0);
-    if (check) { degree = degreeAgainst(check.total, check.dice?.[0]?.total, dc); if (degree !== rec.attack.degree) { change.attack = { ...rec.attack, degree, was: rec.attack.degree, against: dc }; await addNote(combat, id, `Reactive Shield: against AC ${dc} ${step.itemName}'s ${OUTCOMES[rec.attack.degree]} becomes a ${OUTCOMES[degree]}.`); } }
+    const before = circNow(target.actor, { noShield: true });
+    if (!target.actor.attributes?.shield?.raised) await watched(async () => game.pf2e.actions.get?.("raise-a-shield")?.use?.({ actors: [target.actor] }) ?? game.pf2e.actions.raiseAShield?.({ actors: [target.actor] })).catch(e => console.warn(`${ID} | raise a shield`, e));
+    const m = game.messages.get(rec.attack.message), check = m?.rolls?.[0], add = Math.max(0, (target.actor.attributes?.shield?.ac ?? 0) - before), dc = (m?.flags?.pf2e?.context?.dc?.value ?? target.actor.armorClass?.value ?? 0) + add;
+    if (check && add) { degree = degreeAgainst(check.total, check.dice?.[0]?.total, dc); if (degree !== rec.attack.degree) { change.attack = { ...rec.attack, degree, was: rec.attack.degree, against: dc }; await addNote(combat, id, `Reactive Shield: against AC ${dc} ${step.itemName}'s ${OUTCOMES[rec.attack.degree]} becomes a ${OUTCOMES[degree]}.`); } }
   }
-  if (used("shield-block") && degree >= 2) change.shieldBlock = true;
+  if (used("shield-block") && degree >= 2) { change.shieldBlock = true; if (!applySetting()) await addNote(combat, id, `${target.name} used Shield Block: apply the damage with the card's Shield Block option.`); }
   await save(combat, id, { log: { [i]: change } });
-  return degree < 2 ? "missed" : null;
+  if (degree < 2) return "missed";
+  return res.held ? "held" : null;
 }

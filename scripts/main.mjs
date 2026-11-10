@@ -4,7 +4,7 @@ import { BuildApp, askClear, askReplace } from "./ui/build.mjs";
 import { TurnsApp } from "./ui/turns.mjs";
 import { HistoryApp, onPreDeleteCombat, saveHistory } from "./ui/history.mjs";
 import { onReactionPrompt } from "./ui/react.mjs";
-import { askAngel, changePlan, onSocket, busy, untickParty, checkOnly, keepTurn, saveTurn, currentRequest, doIt, fightState, hold, onCombatUpdate, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
+import { askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, currentRequest, doIt, fightState, hold, onCombatUpdate, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
 
 const CONTROL = "encounters", apps = new Map(); let turnsApp = null, historyApp = null, historyTimer = null;
 /* the history window fills in live; many flag writes come in a burst during a turn, so one redraw per quarter second */
@@ -59,7 +59,7 @@ Hooks.on("activateNote", note => {
 });
 /* the fight */
 Hooks.on("preCreateChatMessage", message => { onPreCreateMessage(message); });
-Hooks.on("createChatMessage", message => { onCreateMessage(message); });
+Hooks.on("createChatMessage", message => { onCreateMessage(message); noteReactionRoll(message); });
 Hooks.on("updateChatMessage", (message, change) => { onMessageUpdate(message, change); });
 Hooks.on("preUpdateCombatant", (combatant, change, options) => { keepTurn(combatant, change, options); });
 Hooks.on("updateCombatant", (combatant, change, options, userId) => { saveTurn(combatant, options, userId); });
