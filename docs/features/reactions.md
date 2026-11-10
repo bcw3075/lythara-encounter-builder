@@ -37,6 +37,8 @@ Player reactions during a monster's turn: Reactive Strike, Shield Block, Reactiv
 - (r-9) {live,player} Test Player's own page shows no card; the socket refuses an answer for a character the sender doesn't own.
 
 ## Traps
+- **Test trap: "can't perceive" can't be set with Visioner's hidden alone** (0.20.0 live test): the module's out-of-hiding rule makes a hidden monster observed just before any action but Hide, Sneak or Step, so a Stride is rightly asked of a reactor it was hidden from. Test it with a monster that Sneaks (not asked yet), or a reactor that is blinded.
+- **Test trap: the timer runs for the GM's own rows too:** with the test timer at 5 s, Valeros's Shield Block timed out before the card was read. Use 20 s (or 0) for GM-answered checks.
 - **A question left on the request** (`react`) after the GM took the turn kept dead buttons on the card and redrew the window every second for the rest of the fight (review finding 3): clear it on every way out, tick only for the current request.
 - **Answers keyed per character** gave one answer to two reactions (Reactive Strike and Nimble Dodge on one Swashbuckler): key them per reaction row (review finding 6).
 - **A Crawl is prone all along:** "stop the move if it's prone after the reaction" cancelled every Crawl in reach (review finding 1). Stop only if a reaction made it prone.

@@ -58,3 +58,4 @@ The gate counts the open ones; above 8 open at a release's start, that release m
 - (u-50) [0.19.0] open: Change: not offered while a step runs or while saves are awaited (unit tests; live only the waiting-for-a-plan case was seen).
 - (u-51) [0.19.0] open: Change from Rhea's own browser as the active GM (tested from AI's session with the Bridge as runner).
 - (u-52) [0.20.0] open: Nimble Dodge behind cover: a circumstance bonus that was only in the attack roll's DC (Visioner's cover) isn't counted by circNow, so the +2 may be added where it shouldn't stack (review finding 5's remainder).
+- (u-53) [0.20.0] open: Reactions: a reactor who can't perceive the monster isn't asked (Reactive Strike, Nimble Dodge): not seen live; the Visioner 'hidden' setup was undone by the out-of-hiding rule before a Stride. Also an unconscious reactor, a Climb's question, a ranged Strike's or spell's questions, a reload while a question is open, and the turn moving on while asked.
