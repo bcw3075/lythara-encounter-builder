@@ -17,8 +17,11 @@ function rxHtml(rx) { if (!rx) return ""; const ans = rx.answers ?? {}, left = c
           const btns = gm && !a ? `<button type="button" data-rx="react" data-row="${esc(x.id)}">React</button><button type="button" data-rx="pass" data-row="${esc(x.id)}">Pass</button>` : gm && a === "react" ? `<button type="button" data-rx="done" data-row="${esc(x.id)}">Done</button>` : "";
           return `<p>${esc(x.name)}: ${esc(x.reaction)}, ${state}. ${btns}</p>`; }).join("");
         return `<div class="leb-react"><p><b>Reactions</b>: ${esc(String(rx.list[0]?.gmWords ?? rx.list[0]?.words ?? "").replace(/\s*React with .*$/, ""))}${left != null ? ` ${rx.list.some(x => x.to === "gm") ? "Players' answers pass" : "They pass"} in about ${left} s.` : ""}</p>${rows}<div class="leb-btns"><button type="button" data-rx="cont" title="Skip any reaction not answered yet and carry on"><i class="fa-solid fa-forward"></i> Continue</button></div></div>`; }
-/** The window's monsters as plain rows for the group ticks: a kind is the creature a token was made from (its actor's own name, not the token's). */
-const tickRows = c => c.combatants.filter(x => x.token && runnable(x.token)).map(x => ({ id: x.token.id, name: x.token.name, kind: x.token.baseActor?.name ?? x.actor?.name ?? x.token.name, party: partyMember(x.actor), run: !!x.token.getFlag(ID, "run"), auto: !!x.token.getFlag(ID, "auto") }));
+/** The window's monsters as plain rows for the group ticks. A kind is the creature's own name (its actor's, so an Elite or Weak one is its own kind and a
+    renamed or numbered token stays with its kind). Anything on the party's side or owned by a player (a party member the GM plays, an NPC ally, a summon
+    or companion built as an NPC) is marked `party` and is in no group: one click must never hand Angel a creature that isn't an enemy (0.22.0 review). */
+const tickRows = c => c.combatants.filter(x => x.token && runnable(x.token)).map(x => ({ id: x.token.id, name: x.token.name, kind: x.actor?.name ?? x.token.baseActor?.name ?? x.token.name,
+  party: partyMember(x.actor) || x.actor?.alliance === "party" || !!x.actor?.hasPlayerOwner, run: !!x.token.getFlag(ID, "run"), auto: !!x.token.getFlag(ID, "auto") }));
 export class TurnsApp extends foundry.applications.api.ApplicationV2 {
   static DEFAULT_OPTIONS = { id: "leb-turns", classes: ["leb-turns"], window: { title: "Monster Turns", resizable: true }, position: { width: 400, height: 420, left: 110, top: 60 } };
   get combat() { return game.combat?.scene?.id === canvas.scene?.id ? game.combat : game.combats.find(c => c.scene?.id === canvas.scene?.id) ?? null; }
@@ -140,7 +143,11 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     /* a group's tick: half-ticked when only some of its monsters are; one update for the tokens whose own tick differs, read again at the click */
     root.querySelectorAll(".leb-g input[type=checkbox]").forEach(el => { el.indeterminate = el.dataset.state === "some";
       el.addEventListener("change", () => { const ids = groupChanges(el.closest("[data-ids]").dataset.ids.split(",").filter(Boolean), tickRows(c), el.name, el.checked);
-        if (ids.length) c.scene.updateEmbeddedDocuments("Token", ids.map(id => ({ _id: id, [`flags.${ID}.${el.name}`]: el.checked }))).catch(e => ui.notifications.error(e.message)); }); });
+        if (!ids.length) return;
+        /* the group boxes wait for the redraw the update brings, so a second click can't act on ticks that haven't arrived yet; a refused write redraws
+           the window, which puts the boxes back to what the tokens really say (0.22.0 review) */
+        root.querySelectorAll(".leb-g input[type=checkbox]").forEach(b => { b.disabled = true; });
+        c.scene.updateEmbeddedDocuments("Token", ids.map(id => ({ _id: id, [`flags.${ID}.${el.name}`]: el.checked }))).catch(e => { ui.notifications.error(e.message); if (this.rendered) this.render(); }); }); });
     root.querySelectorAll("[data-request] [data-do]").forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); const id = el.closest("[data-request]").dataset.request, a = el.dataset.do; const r = c.getFlag(ID, "turns")?.requests?.[id];
       if (["change", "useedit", "sendnote", "confirmnote", "cancel", "cancelchange"].includes(a)) return this._change(a, c, id, r, el);
       if (a === "reactdo" || a === "reactskip") { el.disabled = true; notePress(c, id, a === "reactdo" ? "Do it" : "Skip"); return (a === "reactdo" ? doReaction(c, id) : skipReaction(c, id)).catch(e => ui.notifications.error(e.message)); }   /* a monster's reaction (0.21.0) */
