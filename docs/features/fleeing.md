@@ -61,6 +61,7 @@ Build choices (Angel, 2026-11-08, within the design; Rhea can change them):
 - **A timeout on another module's job doesn't stop the job:** offering Extend again after a Survey Sheet timeout would have grown the map twice.
 
 ## Open items
+- **Found 2026-11-10 (0.24.0 close-out), to be fixed in 0.24.0:** after Let it get away, the next creature gets no plan request when it is a monster ticked for Angel. Deleting the current combatant leaves the turn number the same, so core hands the turn on with `combatTurnChange` and PF2e's turn start but no `updateCombat` carrying `turn`, and everything `onCombatUpdate` does on a turn change is skipped (the request, reactions lapsing, the fall and sink notes, what they sense). Seen twice on the water test map (Wolf then Viper, Viper then Shark; 10 s and 30 s with no request, PF2e's `roundOfLastTurn` already naming the round). Unticking and ticking Angel asks at once. The same holds when a GM deletes the current combatant by hand.
 - A Fleeing monster with no reachable edge: the prompt tells the thinker to Stride away from the source; the checker doesn't enforce "away from the source".
 - The thinker gets no hint that the edge is in reach beyond the map's size and its square; it works it out.
 - Extend's effect on other hidden tokens: the Survey Sheet shifts every token, hidden ones too; not yet watched live.
