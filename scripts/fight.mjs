@@ -1,7 +1,7 @@
 /* A fight's turns. One named account does the work (the runner: the Claude Bridge unless the setting says otherwise), on its own page with the
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. It runs Strikes, Strides, Steps, Crawls, Fly, Swim, Climb, Release, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek, Interact, Delay and fleeing off the map; what is still to come is in the repo's docs/features and the project's plan doc. */
-import { settleFrom, settleWait, CHANGEABLE, NOTE_MAX, changeProblem, describeStep, nameWords, noteForThinker, planPrint } from "./turn.mjs";
+import { handedOn, settleFrom, settleWait, CHANGEABLE, NOTE_MAX, changeProblem, describeStep, nameWords, noteForThinker, planPrint } from "./turn.mjs";
 import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, shouldSink, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract, nextClimb, climbResult } from "./turn.mjs";
 import { BURROW_DEPTH, FT, distanceBetween, burrowWorld, crossesWalls, cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, heightWhenCut, rockSquares, routeWords, swimWorld, glideWorld, treeTop, treesBeside, wallSquares, waterKinds, waterUnder } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions } from "./perceive.mjs";
@@ -370,8 +370,21 @@ function situationNow(combat, tok, labels = {}, others = null) {
   return situationOf({ me: { square: squareOf(tok, combat.scene), hp: (h.value ?? 0) + (h.temp ?? 0), actions: actionsOf(a, combat), conditions: conditionWords(a) }, others: seen });
 }
 /** The runner's answer to any change on the Combat. */
+/* whose turn the runner last handled, by combat: a turn can pass with no `updateCombat` carrying `turn` (0.24.0, below) */
+const turnOf = new Map();
+/** The current combatant was deleted (Let it get away, or the GM removing it): the turn number stays the same, so core hands the turn to the next
+    survivor with `combatTurnChange` and the system's turn start but no `updateCombat` with `turn` in it (14.370, seen live 2026-11-10: the next
+    ticked monster was never asked). Called from both `combatTurnChange` and `deleteCombatant`; it waits a moment so an ordinary turn change, which
+    `updateCombat` handles, has been noted first, and then handles only a turn nobody handled. */
+export function onTurnHandedOn(combat) {
+  if (!isRunner() || !combat?.started) return;
+  setTimeout(() => { if (!game.combats.has(combat.id) || !combat.started) return; const now = combat.combatant?.id ?? null;
+    if (!handedOn(turnOf.has(combat.id), turnOf.get(combat.id) ?? null, now)) return;
+    onCombatUpdate(combat, { turn: combat.turn }); }, 150);
+}
 export function onCombatUpdate(combat, change) {
   if (!isRunner()) return;
+  if ("turn" in change || "round" in change) turnOf.set(combat.id, combat.combatant?.id ?? null);
   if ("turn" in change || "round" in change) turnAt.set(combat.id, performance.now());   /* when the turn change arrived: `settle` counts from here */
   if ("turn" in change || "round" in change) turnReactions(combat).catch(e => console.warn(`${ID} | reactions`, e));   /* monsters' reactions (0.21.0): open offers lapse, the new creature's reaction comes back */
   if ("turn" in change || "round" in change) leaveWaiting(combat).catch(e => console.warn(`${ID} | waiting`, e)).then(() => dropInstantAreas(combat, currentRequest(combat) ? { id: currentRequest(combat).id, pos: 0 } : null)).catch(e => console.warn(`${ID} | areas`, e));
@@ -481,6 +494,7 @@ export async function onRunnerReady() {
     /* a monster's reaction cut off by the reload (0.21.0): never repeated; the chat and HP say how far it got */
     for (const [id, x] of Object.entries(turns(combat).requests ?? {})) if (x.reaction && x.state === "running" && !running.has(id)) await save(combat, id, { state: "done", go: false, note: joinNote(combat, id, `${game.user.name}'s page reloaded during this Reactive Strike. Check the chat and HP: it may not have finished.`) });
     noteCarried(combat);
+    if (!turnOf.has(combat.id)) turnOf.set(combat.id, combat.combatant?.id ?? null);   /* this page's first look: the turn it finds is the one it handles below */
     await onTurnChange(combat); act(combat);
     if (r?.state === "saves") doIt(combat, r.id).catch(e => console.error(`${ID} | turn`, e));   /* a save rolled while this page was away */
   }

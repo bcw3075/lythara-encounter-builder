@@ -974,6 +974,9 @@ export function damageOptions(options = []) {
     less than `min` after the turn change and never more than `max` (a fight where something keeps changing must still get its turn). Measured
     2026-11-10 on the runner's page: the last change came 100 to 270 ms after the turn change, with gaps under 70 ms, whichever GM page did the work. */
 export const SETTLE = { min: 400, quiet: 300, max: 3000 };
+/** A turn that passed with no `updateCombat` carrying `turn` (the current combatant was deleted, 0.24.0): true when someone is up and it isn't the
+    combatant whose turn the runner last handled (`known` false: this page has handled none in that fight yet). */
+export function handedOn(known, last, now) { return now != null && (!known || last !== now); }
 /** How many ms the runner still waits before it reads the monster. since: when the turn change arrived; lastChange: the last change to a creature
     (null: none seen); now: the same clock; begun: PF2e's turn start has reached this page (the combatant's `roundOfLastTurn` flag is this round's,
     which PF2e writes at every turn start): until it has, quiet means nothing, because a far-off GM page's work may not have started arriving

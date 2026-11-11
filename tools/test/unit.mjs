@@ -17,7 +17,7 @@ import { promptText } from "../../scripts/prompt.mjs";
 import { historyHTML, historyOf, journalHTML, stepResult } from "../../scripts/history.mjs";
 import { cutShort, diagonalsIn, distanceBetween, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, headingOf, heightCost, heightWhenCut, routeWords, swimDistance, swimWorld, waterKinds, waterUnder } from "../../scripts/move.mjs";
 import { SWIM_DC, movedOn, shouldFall, shouldSink } from "../../scripts/turn.mjs";
-import { SETTLE, settleFrom, settleWait } from "../../scripts/turn.mjs";
+import { SETTLE, handedOn, settleFrom, settleWait } from "../../scripts/turn.mjs";
 import { CLIMB_DC, climbResult, nextClimb } from "../../scripts/turn.mjs";
 import { endsCover as endsCover2 } from "../../scripts/turn.mjs";
 import { groupChanges, tickGroups } from "../../scripts/ui/ticks.mjs";
@@ -211,6 +211,9 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("a time from this launch is listening", listening({ at: 63465, launch: "Mon 21:02" }, 74000, "Mon 21:02") && !listening({ at: 63465, launch: "Mon 21:02" }, 63465 + 121000, "Mon 21:02"));
   check("with no launch known on either side it falls back to the clock alone", listening({ at: 63465, launch: "" }, 74000, ""));
   /* settle time (0.23.0): quiet for 300 ms, never under 400 ms after the turn change, never over 3 s */
+  check("handed on: the next creature after the current one was deleted", handedOn(true, "a", "b") === true);
+  check("handed on: the same creature still up, an ordinary turn change already noted, nobody up", handedOn(true, "a", "a") === false && handedOn(true, "b", "b") === false && handedOn(true, "a", null) === false && handedOn(false, null, null) === false);
+  check("handed on: a fight this page has handled no turn of yet", handedOn(false, null, "a") === true);
   check("settle: nothing changed, the minimum", settleWait({ since: 1000, now: 1000 }) === 400 && settleWait({ since: 1000, now: 1250 }) === 150 && settleWait({ since: 1000, now: 1400 }) === 0);
   check("settle: a change long before the turn doesn't count", settleWait({ since: 1000, lastChange: 200, now: 1400 }) === 0);
   check("settle: quiet counts from the last change", settleWait({ since: 1000, lastChange: 1270, now: 1400 }) === 170 && settleWait({ since: 1000, lastChange: 1270, now: 1569 }) === 1 && settleWait({ since: 1000, lastChange: 1270, now: 1570 }) === 0);
