@@ -78,5 +78,6 @@ Record every id below in the release's change record when this feature, or a fea
 - **Anything sent to the thinker must be words in labels, never the card's note** (it names PCs, who a secret Hide worked against, GM-hidden creatures): the 0.9.0 review found the first stall event sent it.
 
 ## Open items
+- Turn requests the GM skipped past (still `requested` when the turn moved on) stay queued: a thinker that says hello later is sent them first, oldest first, before the current turn (seen live 2026-11-11 on 0.24.0, two stale events). They cost a wait each and a plan for one would be for a turn that is over.
 - Step 3's measured test fight (4 monsters, 5 rounds, seconds per turn, the usage note (private doc)), a reload of the runner during a chat-run fight, two fights at once; trimming the packet (every ally on the scene is listed; an event is about 4,600 characters, the hello 14,600).
 - The light seen on Rhea's own computer (it uses the server clock since 0.4.0; only pages on the server PC were tested).
