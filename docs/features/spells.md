@@ -25,6 +25,7 @@ Spells: a spell attack or a save spell at one perceived creature runs for real, 
   - **Not done:** rerolls on a row (a Hero Point) after damage is applied don't correct it; the chat log must have the card drawn on the runner's page for its buttons (after a reload with many newer messages it may not: the card says it couldn't find the button and the GM clicks the row on their own card); Sustain, counteracting, reaction spells; heightened damage in the packet; staffs, wands and scrolls.
 **Design-era text (from the plan; where it and the lines above disagree, the lines above, written from the code, win):**
 - **Spells:** read from `actor.spellcasting` with slots and DCs. The call is `entry.cast(spell, {rank, slotId, consume, message, messageMode})` [CODE, not run]. First test of this step.
+- **0.27.0 (`reactions.md`):** a spell attack's hit asks Shield Block before its damage (`hitGate` with the spell's damage types); the apply stage asks the damage gate first and passes `{ resist, less }` and the block to `applyFromCard`; with automatic damage off `harmByHand` asks after the roll.
 
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.

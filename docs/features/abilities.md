@@ -26,6 +26,7 @@ Abilities: Strike follow-ups (Grab, Knockdown, Push, Pull) run for real; every o
 **Design-era text (from the plan; where it and the lines above disagree, the lines above, written from the code, win):**
 **Everything else.** Conditions and start and end of turn stay with Workbench. Flat checks are never rolled by PF2e or Visioner [DOC], so the mod rolls them: concealed DC 5, hidden DC 11, spending the action on a failure [RULES]. Skill actions use `game.pf2e.actions.get(slug).use(...)`; demoralize, hide, seek, take-cover, grapple, trip, shove, feint, escape, sneak, stand and create-a-diversion are registered [LIVE].
 - **Anything else: the checklist.** The card says what the thinker wants to do, the mod posts the item's card, and Rhea applies it. Never faked.
+- **0.27.0 (`reactions.md`):** an ability's own damage (a critical Trip's) asks the damage gate before it is applied; a refused Glimpse of Redemption's resistance is on the copy of the creature the damage is applied to.
 
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.

@@ -93,7 +93,29 @@ export function cleanMeta(m = {}) {
 export const nextSeq = (maxSeen = 0, now = 0) => Math.max(Math.floor(now), Math.floor(maxSeen) + 1);
 /** An event still matters while its request waits for the plan it asks for. A turn event wants the first plan, a retry the second; once a plan is in,
     a turn is played, or the thinker gave up, it's history. */
-export const live = (ev, req) => ev.kind === "stall" ? stallLive(ev, req) : !!req?.packet && req.state === "requested" && !req.gaveUp && (req.tries ?? 0) === ev.tries;
+export const live = (ev, req) => ev.kind === "stall" ? stallLive(ev, req) : ev.kind === "choice" ? choiceLive(ev, req) : !!req?.packet && req.state === "requested" && !req.gaveUp && (req.tries ?? 0) === ev.tries;
+
+/* ---------- a choice in the middle of an action (0.27.0) ----------
+   Rhea, 2026-11-11 (PR-1): when a champion's Glimpse of Redemption makes a monster repent or refuse, the thinker decides at that moment, through the
+   monster's mind. It is an event of its own ("choice") on the monster's request, answered by handing in { choice, reason } where a plan would go. */
+export const CHOICE_KINDS = ["repent", "refuse"];
+/** A choice event matters while that same question is still open on its request. */
+export const choiceLive = (ev, req) => !!req?.choice && req.choice.seq === ev.choiceSeq && !req.choice.answer && !req.choice.gaveUp && req.state !== "manual";
+/** Is this a choice handed in (and not a plan)? */
+export const isChoice = raw => { let p = raw; if (typeof p === "string") { try { p = JSON.parse(p); } catch { return false; } } return !!p && typeof p === "object" && !Array.isArray(p) && p.choice != null && p.steps == null; };
+/** A choice as it arrives (an object or JSON text), reduced to what the module reads, or refused in words. */
+export function cleanChoice(raw) {
+  let p = raw;
+  if (typeof p === "string") { try { p = JSON.parse(p); } catch { return bad("The choice isn't valid JSON."); } }
+  if (!p || typeof p !== "object" || Array.isArray(p)) return bad(`A choice is { "choice": "repent" } or { "choice": "refuse" }, with a short "reason".`);
+  if (!CHOICE_KINDS.includes(p.choice)) return bad(`"choice" is "repent" or "refuse", not "${text(String(p.choice ?? ""), 30)}".`);
+  return { ok: true, choice: p.choice, reason: text(p.reason, 200), seq: Number.isFinite(p.seq) ? p.seq : null };   /* the event's own number, when the thinker passes it back */
+}
+/** What the thinker receives for a choice: the monster's packet as it last was (its mind, its notebook, how the fight stood), and the question. */
+export function choiceOut(ev, req, packet = null) {
+  return { seq: ev.seq, kind: "choice", combatId: ev.combatId, requestId: ev.requestId, round: req.round, monster: packet?.you?.label ?? null,
+    choice: { about: req.choice.kind, on: req.choice.ally ?? null, words: req.choice.words, answers: CHOICE_KINDS, answerWith: `{ "choice": "repent" | "refuse", "reason": "a few words", "seq": ${ev.seq} } where a plan would go` }, packet };
+}
 
 /* ---------- stalls (Rhea, 2026-11-08) ---------- */
 /** How long a turn may sit before it counts as stalled: machine work (an action running, or the thinker's plan not in) 60 s; anything waiting on a person
@@ -107,6 +129,8 @@ export function stallOf(req, { now, auto = false, machineMs = STALL_MS.machine }
   const gm = req.state === "requested" && (!req.packet || (req.tries ?? 0) >= MAX_TRIES);
   /* waiting for a player's reaction (0.20.0) is a wait on a person, whatever the step's state */
   if (req.react) { const waited = now - req.since; return waited >= STALL_MS.person ? { kind: "person", state: "reacting", since: req.since, waited } : null; }
+  /* a monster's repent-or-refuse (0.27.0): Angel's to answer within the machine's time, or the GM's on her card */
+  if (req.choice && !req.choice.answer) { const waited = now - req.since, mine = !!req.choice.angel && !req.choice.gaveUp; return waited >= (mine ? machineMs : STALL_MS.person) ? { kind: mine ? "machine" : "person", state: "choosing", since: req.since, waited } : null; }
   const kind = gm ? "person" : STALL_KIND[req.state] ?? (req.state === "ready" && auto ? "person" : null); if (!kind) return null;
   const waited = now - req.since; return waited >= (kind === "machine" ? (req.state === "extending" ? Math.max(machineMs, STALL_MS.extending) : machineMs) : STALL_MS.person) ? { kind, state: gm ? "gm" : req.state, since: req.since, waited } : null;
 }
@@ -114,7 +138,7 @@ export function stallOf(req, { now, auto = false, machineMs = STALL_MS.machine }
 export const stallLive = (ev, req) => !!req?.stall && req.stall.since === ev.since && req.since === ev.since && !["done", "manual", "held"].includes(req.state);
 /** What it's waiting on, in words for the card and the thinker. */
 export function stallWords(stall) {
-  const what = { gm: "waiting for you to play the turn", requested: "waiting for Angel's plan", submitted: "checking the plan", running: "an action has been running", saves: "waiting for a save", reacting: "waiting for a reaction", stopped: "stopped, waiting for you", ready: "waiting for you (a card to apply, then Next step)", fled: "at the map's edge, waiting for you (Extend map or Let it get away)", extending: "the map has been extending" }[stall?.state] ?? "not moving";
+  const what = { gm: "waiting for you to play the turn", requested: "waiting for Angel's plan", submitted: "checking the plan", running: "an action has been running", saves: "waiting for a save", reacting: "waiting for a reaction", choosing: "waiting for the monster's answer to Glimpse of Redemption (Repent or Refuse on your card)", stopped: "stopped, waiting for you", ready: "waiting for you (a card to apply, then Next step)", fled: "at the map's edge, waiting for you (Extend map or Let it get away)", extending: "the map has been extending" }[stall?.state] ?? "not moving";
   const m = Math.floor((stall?.waited ?? 0) / 60000), sec = Math.round((stall?.waited ?? 0) / 1000);
   return `Stalled: ${what}, for ${m >= 1 ? `${m} minute${m === 1 ? "" : "s"}` : `${sec} seconds`}.`;
 }

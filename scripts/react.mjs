@@ -18,8 +18,17 @@ export const KNOWN = {
   "attack-of-opportunity": { name: "Reactive Strike", gates: ["move", "stay", "manipulate", "ranged"], reach: true },
   "shield-block": { name: "Shield Block", gates: ["hit"], target: true, needs: "raised", physical: true },
   "reactive-shield": { name: "Reactive Shield", gates: ["hit"], target: true, needs: "shield", melee: true },
-  "nimble-dodge": { name: "Nimble Dodge", gates: ["attack"], target: true, ac: 2 }
+  "nimble-dodge": { name: "Nimble Dodge", gates: ["attack"], target: true, ac: 2 },
+  /* The party's own (0.27.0), each checked on Archives of Nethys 2026-11-11.
+     Glimpse of Redemption (Player Core 2 pg. 93): an enemy damages your ally, and both are in your champion's aura; the enemy repents (the ally is
+       unharmed) or refuses (the ally resists all of that damage by 2 + your level, then the enemy is enfeebled 2 until the end of its next turn).
+     Interposing Earth (Rage of Elements pg. 95, a reaction spell): you are the target of a Strike or would attempt a Reflex save against a damaging
+       area effect; standard cover against it, and if you are still damaged the barrier is destroyed and the damage is 2 less (8 from 4th rank). */
+  "glimpse-of-redemption": { name: "Glimpse of Redemption", gates: ["harm"], ally: true, aura: "champions-aura" },
+  "interposing-earth": { name: "Interposing Earth", gates: ["attack", "area"], target: true, ac: 2, cover: true, spell: true }
 };
+/** The rows that are asked before an attack and raise AC against it (circumstance bonuses, so only the best counts). */
+export const AC_ROWS = Object.keys(KNOWN).filter(k => KNOWN[k].ac);
 const PHYSICAL = ["bludgeoning", "piercing", "slashing"];
 
 /** The trigger line of a reaction's description (HTML), in plain words, or null. */
@@ -32,8 +41,10 @@ export function reactionsOf(items = []) {
   const out = [], seen = new Set();
   for (const it of items) {
     if (it?.actionType !== "reaction") continue;
-    const row = KNOWN[it.slug], key = row ? row.name : it.slug ?? it.name; if (seen.has(key)) continue; seen.add(key);
-    out.push(row ? { slug: it.slug, name: row.name, known: true } : { slug: it.slug ?? null, name: it.name, known: false, trigger: triggerOf(it.description) });
+    const row = KNOWN[it.slug], key = row ? row.name : it.slug ?? it.name; if (seen.has(key)) continue;
+    if (row && !!row.spell !== !!it.spell) continue;   /* a spell's row is only for the spell, a feat's only for the feat */
+    seen.add(key);
+    out.push(row ? { slug: it.slug, name: row.name, known: true, ...(it.spell ? { spell: it.spell } : {}) } : { slug: it.slug ?? null, name: it.name, known: false, trigger: triggerOf(it.description) });
   }
   return out;
 }
@@ -43,6 +54,8 @@ export function fits(slug, gate, who = {}, what = {}) {
   const row = KNOWN[slug]; if (!row || !row.gates.includes(gate)) return false;
   if (row.reach && !who.inReach) return false;
   if (row.target && !who.isTarget) return false;
+  if (row.ally && (!who.isAlly || who.isTarget || !who.inAura)) return false;   /* an ally, never itself, and the aura rule holds (Rhea, PR-8) */
+  if (row.spell && !who.canCast) return false;
   if (row.needs === "raised" && !who.shieldRaised) return false;
   if (row.needs === "shield" && (!who.hasShield || who.shieldRaised)) return false;   /* already raised: nothing to gain */
   if (row.melee && !what.melee) return false;
@@ -71,12 +84,19 @@ export function degreeAgainst(total, natural, dc) {
 /** What the reactor is told, in a sentence. who: the mover as the reactor may see it ("The Sod Hound" or "A creature"); kind: the monster's action. */
 export function gateWords(gate, who, { kind = "", reaction = "" } = {}) {
   const W = { move: `${who} is moving out of a square in your reach`, stay: `${who} ${kind || "uses a move action"} in your reach`, manipulate: `${who} uses a manipulate action in your reach${kind ? ` (${kind})` : ""}`,
-    ranged: `${who} makes a ranged attack in your reach`, attack: `${who} attacks you`, hit: `${who}'s Strike hits you` };
+    ranged: `${who} makes a ranged attack in your reach`, attack: `${who} attacks you`, hit: `${who}'s ${kind || "Strike"} hits you`,
+    harm: `${who} is about to damage ${kind || "your ally"}, and both are in your champion's aura`, area: `${who}'s ${kind || "spell"} is about to catch you in its area` };
   return `${W[gate] ?? who}. React with ${reaction}?`;
 }
 /** What a reaction asked on the card or the prompt resolved to, from the answers: "react" (and the reactor finished: "done"), "pass", "timeout",
     "continue" (the GM went on). A list is finished when no one is left to answer. */
 export function finished(list = []) { return list.every(x => ["done", "pass", "timeout", "continue"].includes(x.answer)); }
+/** The rows another answer settles (0.27.0): a creature has one reaction, so once one of its rows is being used its other rows that spend the reaction
+    are skipped. rows: [{ id, token, free }]; answers: { id: answer }. Returns the ids to skip. */
+export function spentRows(rows = [], answers = {}) {
+  const using = new Set(rows.filter(x => !x.free && ["react", "done"].includes(answers[x.id])).map(x => x.token));
+  return rows.filter(x => !x.free && using.has(x.token) && !answers[x.id]).map(x => x.id);
+}
 /** When a question's countdown ends (server-clock ms), or 0 for none: only rows a player answers in their own window count down; rows the GM answers
     on her card wait (Rhea, 2026-11-09, 0.20.1). secs 0 is no countdown. */
 export function untilFor(rows = [], secs = 0, now = 0) { return secs > 0 && rows.some(x => x.to === "player") ? now + secs * 1000 : 0; }
@@ -172,3 +192,55 @@ export function offerWords(o = {}) {
   const who = o.target ?? "a creature";
   return `${o.monster ?? "A monster"} can make a Reactive Strike${o.strike ? ` (${o.strike})` : ""} at ${who}: ${who} ${o.kind ?? "acted"} in its reach.${o.sure ? "" : ` Not certain. ${o.why ?? ""}`.trimEnd()}`;
 }
+
+/* ---------- the party's reactions (0.27.0) ----------
+   Rhea, 2026-11-11 (docs/features/reactions.md): each character's reaction is tracked like a focus point that comes back at the start of its turn; a
+   character whose reaction is used, who is Delaying, or who is a minion is never asked; every reduction says why. */
+/** Who has a reaction box and is asked: a character, or an ordinary NPC fighting on the party's side; never a minion (summons, companions and
+    familiars can't use reactions, Player Core pg. 416, checked on Archives of Nethys 2026-11-11). a: { type, traits } */
+export const canReact = (a = {}) => ["character", "npc"].includes(a.type) && !(a.traits ?? []).includes("minion");
+/** Does a held shield let its bearer Shield Block without the feat? The impulse's own shield says so in its text, and the module reads what the
+    character can do, not only a feat with that slug (Rhea, 2026-11-11). shield: { slug, text } (its description as plain text). */
+export const shieldGrantsBlock = (shield = {}) => shield.slug === "metal-carapace-shield" || /shield block\W{0,3}with this shield even if you don.t have/i.test(String(shield.text ?? ""));
+/** Glimpse of Redemption, refused: resistance to all of the triggering damage, 2 + the champion's level. */
+export const glimpseResistance = level => 2 + Math.max(0, Math.round(Number(level) || 0));
+/** Interposing Earth: how much comes off the damage when the barrier is destroyed (8 from 4th rank). */
+export const earthLess = rank => (Number(rank) || 1) >= 4 ? 8 : 2;
+/** Interposing Earth's barrier when it outlives the attack or the save (Rage of Elements pg. 95; from 4th rank Hardness 8 and 20 HP): the GM's to
+    rule on for its 3 rounds. Read after "the earth barrier" or "...'s earth barrier". */
+export const barrierWords = rank => `stands for 3 rounds (AC 5, Hardness ${(Number(rank) || 1) >= 4 ? 8 : 2}, ${(Number(rank) || 1) >= 4 ? 20 : 5} HP): yours to rule on.`;
+/** The lowest rank a reaction spell can be cast at now. slots: [{ rank, left }]; base: the spell's own rank. Null when none is left. */
+export function castRank(base = 1, slots = []) {
+  return slots.filter(s => s.rank >= base && s.left > 0).sort((a, b) => a.rank - b.rank)[0]?.rank ?? null;
+}
+/** How long "until the end of its next turn" is as a PF2e effect that expires at a turn's end, counted from the monster's own initiative: 0 rounds
+    when its turn this round is still to come (that turn is its next), 1 when its turn is under way or already over this round. */
+export const untilNextTurnEnds = ({ ownTurn = false, acted = false } = {}) => ownTurn || acted ? 1 : 0;
+/** What the refused enemy gets, in plain words for the champion's player (Rhea, 2026-11-11: so she never has to look it up; Player Core pp. 443 and
+    446, checked on Archives of Nethys 2026-11-11). */
+export const GUILT = {
+  enfeebled: { name: "Enfeebled 2", words: "Enfeebled 2: -2 to its Strength-based attack rolls, its Strength-based damage and Athletics (Grapple, Trip, Shove). Best against a creature that fights with weapons, claws or teeth." },
+  stupefied: { name: "Stupefied 2", words: "Stupefied 2: -2 to its spell attacks, spell DCs, Will saves and Intelligence-, Wisdom- and Charisma-based skills, and each spell it casts is lost unless it rolls 7 or higher on a flat check. Best against a spellcaster." }
+};
+export const guiltLines = who => [`${who} refused your Glimpse of Redemption. Weight of Guilt: make it Enfeebled 2 or Stupefied 2? Both last until the end of its next turn.`, GUILT.enfeebled.words, GUILT.stupefied.words, "No answer in time is Enfeebled 2."];
+export const guiltWords = who => guiltLines(who).join(" ");
+/** Why a character with a fitting reaction wasn't asked, for the GM's card. list: [{ name, reaction, why }] */
+export function notAskedWords(list = []) {
+  const W = { used: "reaction already used", delaying: "Delaying" };
+  return list.map(x => `${x.name}: ${x.reaction} not asked (${W[x.why] ?? x.why}).`).join(" ");
+}
+/** What a hit did after the reactions to it, for everyone (Rhea, 2026-11-11, PR-10: every reduction says why, with the numbers).
+    o: { name, enemy ("the creature" as players may name it), hit (the damage as rolled, after doubling or halving), taken (what came off HP and
+    temporary HP), repent, resist (Glimpse refused: the resistance), less (Interposing Earth: what came off), block (Shield Block was used) } */
+export function harmWords(o = {}) {
+  const name = o.name ?? "Someone", enemy = o.enemy ?? "the creature";
+  if (o.repent) return `${name} is unharmed: ${enemy} repented (Glimpse of Redemption).`;
+  const why = [o.resist ? `Glimpse of Redemption, refused: resistance ${o.resist} to all of it` : null, o.less ? `Interposing Earth: ${o.less} less, and the barrier is destroyed` : null, o.block ? "Shield Block" : null].filter(Boolean);
+  if (!why.length) return "";
+  return `${name} takes ${o.taken ?? 0} (the hit was ${o.hit ?? 0}; ${why.join("; ")}).`;
+}
+/** A hit turned into a miss by a reaction, for everyone. */
+export const missWords = (name, reaction, strike = "The hit") => `${strike} at ${name} becomes a miss: ${reaction === "Interposing Earth" ? "cover from Interposing Earth" : reaction}.`;
+/** What the thinker is told when its monster must answer Glimpse of Redemption: words, never numbers (Rhea, 2026-11-11, reading a). */
+export const CHOICES = ["repent", "refuse"];
+export const choiceWords = ally => `As your blow lands on ${ally || "your enemy"}, a vision floods your mind: the harm you are doing, and another way. You must choose now. "repent": you hold back, and this blow does ${ally || "them"} no harm at all. "refuse": the blow lands, but weaker, and you are left weakened until the end of your next turn.`;

@@ -49,6 +49,7 @@ Stride, Step, Crawl, Fly, Swim, Climb (with Release) and Burrow: routes, costs b
 **Design-era text (from the plan; where it and the lines above disagree, the lines above, written from the code, win):**
 **Move.** Split at reaction gates, then `tokenDoc.move(waypoints)` with the action on each waypoint. In combat PF2e picks `walk` for a creature with a land speed and `crawl` if prone; outside combat it picks `travel` [CODE]. Walk, travel and crawl all cost 30 ft over the test squares when measured [LIVE]. A scripted move stops at walls and its promise resolves early [DOC], so wait for the `moveToken` hook and reread the position. **[UNVERIFIED]** that a real scripted move charges what we measured, and whether GM scripted moves work while paused.
 - **Skipped in the review because it would create or change something; all step 2 unless noted:** start-of-turn settling time (measured and built in 0.23.0: `docs/features/turn-loop.md`). **Checked 2026-11-07:** a real move's charged cost equals Foundry's measurement (5 routes, and every Stride since), and GM scripted moves work while paused.
+- **0.27.0 (`reactions.md`):** `runStride` puts "not asked (reaction already used)" on the card for a creature whose reach the route leaves but whose reaction box is ticked (`moveGates(...).skipped`).
 
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.

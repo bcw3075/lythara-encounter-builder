@@ -1,7 +1,7 @@
 ---
 feature: strike-damage
 files: []
-functions: [fight.mjs:strikesWithIds, fight.mjs:strikesOf, fight.mjs:runStrike, fight.mjs:targetHelperOn, fight.mjs:markApplied, fight.mjs:onRenderMessage, fight.mjs:applyFromCard, fight.mjs:aimAt, fight.mjs:stopAiming, turn.mjs:isAttack, turn.mjs:strikeIds, turn.mjs:damageOptions]
+functions: [fight.mjs:resistEffect, fight.mjs:strikesWithIds, fight.mjs:strikesOf, fight.mjs:runStrike, fight.mjs:targetHelperOn, fight.mjs:markApplied, fight.mjs:onRenderMessage, fight.mjs:applyFromCard, fight.mjs:aimAt, fight.mjs:stopAiming, turn.mjs:isAttack, turn.mjs:strikeIds, turn.mjs:damageOptions]
 dependsOn: [turn-loop, card-ui, ammunition]
 since: 0.10.0
 ---
@@ -47,8 +47,9 @@ Re-run D1 after any change to rolling or applying damage, and after any PF2e, Wo
 - Read the outcome from the returned roll's `degreeOfSuccess`.
 - **Visioner's auto-cover applies with no dialog** [LIVE 2026-11-06]: a real Strike by this route behind a test wall with greater cover had `target:cover-level:greater` on the card and AC 11 became DC 15. Nothing needs passing on.
 **Damage: never roll twice.** Changed from the first design, which waited on Workbench when its setting was on. Workbench's auto-damage only fires in the browser that wrote the attack card, using that browser's setting [CODE], so **the mod always rolls damage itself and turns Workbench off for its own attack cards** with Workbench's flag `noAutoDamageRoll` [LIVE: a plain Strike without the flag does auto-roll]. If a step's record can't tell whether something finished, the mod never repeats it: it stops and hands the step to Rhea. Dice So Nice holds each card about 5 s [DOC]. Test D1 proves this.
-**Applying damage.** `target.actor.applyDamage({damage: roll, token})`, which respects resistances and shows the system's undo card [DOC, CODE]. Not the HP box or a bare number, which skip them [DOC].
+**Applying damage.** `actor.applyDamage({damage: roll, token})` on the target's actor (or, since 0.27.0, on a copy of it that carries a reaction's resistance), which respects resistances and shows the system's undo card [DOC, CODE]. Not the HP box or a bare number, which skip them [DOC].
 - **Checked in step 2 (2026-11-05):** a real Strike card by the Shift route, and damage and undo (test D1). What players' browsers receive of Combat flags: they get the flag. Workbench's `reminderTargeting`: with no target, "reminder" shows a note and "mustTarget" cancels the Strike; with the runner's real target neither happens [LIVE].
+- **Reactions to the damage (0.27.0, `reactions.md`):** the apply stage first asks the damage gate (`harmGate`), then applies unless the monster repented; `applyFromCard(message, roll, target, multiplier, shieldBlock, { resist, less })` puts a one-rule resistance effect (`resistEffect`) on the copy of the creature the damage is worked out on and takes a flat `less` off the roll with `roll.alter(multiplier, -less)`; `afterHarm` then says what happened. The attack stage reads the AC raised by the target's reactions through `acRaised` (Nimble Dodge, Interposing Earth) and says a hit turned into a miss to everyone. With automatic damage off, `harmByHand` asks after the damage roll.
 
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.

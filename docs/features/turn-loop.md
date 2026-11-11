@@ -100,6 +100,7 @@ A pure function that replays the plan against a copy of the state and returns OK
 | Perception | Target must be in the packet. Flat checks added automatically |
 | Limits | Requirements in ability text, frequency, once-per-day, recharge, spell slots |
 **If it fails:** the reason goes back to the thinker once. A second failure goes to Rhea with "Couldn't do: …". One repair is allowed: a move cut short by a blocked last square goes to the last legal square, and the card says so.
+- **0.27.0 (`reactions.md`, `brain.md`):** `submitPlan`, `checkOnly` and `reportFailure` each handle an open choice before anything else (an answer to a monster's repent or refuse is no plan); `runTurn` takes Interposing Earth's cover off when a step's work returns (not while it waits on a save, a hold or a stop).
 
 ## Checks
 - (tl-7) {live,player} A party member the GM plays (a character no player owns, in the party) in a fight: listed with "(party)", both ticks unticked at first; ticked Angel by a real click as AI, its turn gets a request and a packet; a plan of a Stride and a Strike at a monster by Do it; a flee refused in words; Test Player sees no card; a character Test Player owns is not listed.

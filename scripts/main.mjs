@@ -4,18 +4,21 @@ import { BuildApp, askClear, askReplace } from "./ui/build.mjs";
 import { TurnsApp } from "./ui/turns.mjs";
 import { HistoryApp, onPreDeleteCombat, saveHistory } from "./ui/history.mjs";
 import { onReactionPrompt } from "./ui/react.mjs";
+import { drawChip, registerChip } from "./ui/chip.mjs";
 import { MindsApp, openLibrary, redrawLibrary } from "./ui/minds.mjs";
 import { LINES, MIND_SCHEMA } from "./minds.mjs";
 import { bandOf, bandViews, joinBand, removeBand, setBand } from "./bandlib.mjs";
 import { dropLibraryCache, dropOwn, giveOwn, kindFacts, libraryEntries, libraryExport, libraryGet, libraryImport, libraryPut, libraryRemove, mindLayers, mindOf, mindRows, rowProfile, setLines } from "./library.mjs";
-import { doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCombatGone, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, onMemoryCard, onMemoryUpdate, onMemoryHp, notebookOf, previewRemember, rememberAdd, rememberCross, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
+import { chooseFor, onReactionCard, partyReactors, setReactionUsed, doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCombatGone, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, onMemoryCard, onMemoryUpdate, onMemoryHp, notebookOf, previewRemember, rememberAdd, rememberCross, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
 
 const CONTROL = "encounters", apps = new Map(), mindsApps = new Map(); let turnsApp = null, historyApp = null, historyTimer = null;
 /* the history window fills in live; many flag writes come in a burst during a turn, so one redraw per quarter second */
 const redrawHistory = () => { if (!historyApp?.rendered || historyTimer) return; historyTimer = setTimeout(() => { historyTimer = null; if (historyApp?.rendered) historyApp.render(); }, 250); };
 const openHistory = () => { historyApp ??= new HistoryApp(); historyApp.render(true); };
 /* The Monster Turns window shows the fight on the scene this browser is looking at, so it redraws when that scene, its fight or a ticked box changes. */
-const redrawTurns = () => { if (turnsApp?.rendered) turnsApp.render(); redrawHistory(); };
+const redrawTurns = () => { if (turnsApp?.rendered) turnsApp.render(); redrawHistory(); redrawChip(); };
+/* the player's reaction chip (0.27.0): drawn again whenever a fight, its creatures or its reaction boxes change; never on a GM's page */
+const redrawChip = () => { try { drawChip(); } catch (e) { console.warn(`${ID} | chip`, e); } };
 Hooks.once("init", () => {
   game.settings.register(ID, "partySize", { name: "Party size for balance", hint: "How many PCs threat is worked out for. The campaign's rules say how many; PF2e's Low budget differs from the published one away from 4.", scope: "world", config: true, type: Number, default: 4 });
   game.settings.register(ID, "applyMonsterDamage", { name: "Apply monster damage automatically", hint: "A monster's hit changes HP at once, with PF2e's undo card. Off: damage is rolled and you apply it from the card.", scope: "world", config: true, type: Boolean, default: true });
@@ -29,6 +32,7 @@ Hooks.once("init", () => {
   game.settings.register(ID, "brainAt", { scope: "world", config: false, type: Number, default: 0, onChange: () => { redrawTurns(); } });
   /* the world launch that time was written in: the server clock restarts at every launch, so a time from another launch never counts (0.23.0) */
   game.settings.register(ID, "brainLaunch", { scope: "world", config: false, type: String, default: "", onChange: () => { redrawTurns(); } });
+  registerChip();   /* where each player put their reaction chip, per browser (0.27.0) */
   game.settings.register(ID, "treasure", { scope: "world", config: false, type: Object, default: { manual: {}, builds: {} } });
 });
 /* Monster Minds (0.24.0): one window per scene; it redraws when the scene's brief or a token's own profile changes, unless she is in the middle of an edit */
@@ -58,6 +62,7 @@ Hooks.on("canvasReady", c => { markReady(c.scene?.id); redrawTurns(); });
 /* a party member's ticks last one fight (0.18.0): the runner clears them when the fight is deleted */
 Hooks.on("deleteCombat", combat => { onCombatGone(combat); untickParty(combat).catch(e => console.warn(`${ID} | untick`, e)); });
 for (const h of ["createCombat", "deleteCombat", "createCombatant", "updateCombatant", "deleteCombatant", "deleteToken"]) Hooks.on(h, () => { redrawTurns(); });
+Hooks.on("updateCombat", () => { redrawChip(); });
 /* a brief sent from a chat shows up in an open window */
 Hooks.on("updateScene", (scene, change) => { if (!foundry.utils.hasProperty(change, `flags.${ID}`)) return; redrawMinds(scene);
   /* an open Build window holds its own copy of the brief: minds saved meanwhile go into it, or its next Build would write the old ones back (0.24.0 review 4) */
@@ -74,7 +79,7 @@ Hooks.on("activateNote", note => {
 });
 /* the fight */
 Hooks.on("preCreateChatMessage", message => { onPreCreateMessage(message); });
-Hooks.on("createChatMessage", message => { onCreateMessage(message); noteReactionRoll(message); onActionCard(message).catch(e => console.warn(`${ID} | reactions`, e)); try { onMemoryCard(message); } catch (e) { console.warn(`${ID} | notebook`, e); } });
+Hooks.on("createChatMessage", message => { onCreateMessage(message); noteReactionRoll(message); onActionCard(message).catch(e => console.warn(`${ID} | reactions`, e)); try { onReactionCard(message); } catch (e) { console.warn(`${ID} | reaction box`, e); } try { onMemoryCard(message); } catch (e) { console.warn(`${ID} | notebook`, e); } });
 /* monsters reacting on players' turns (0.21.0): the runner watches moves, cards, items changing hands and Prone coming off. Block bodies: no handler returns anything. */
 Hooks.on("moveToken", (doc, movement) => { onTokenMoved(doc, movement); });
 Hooks.on("updateItem", (item, change) => { onItemHands(item, change); noteChange(item); });
@@ -107,7 +112,8 @@ Hooks.once("ready", () => {
   onRunnerReady().catch(e => console.error(`${ID} | runner`, e));
   watchStalls();
   game.socket.on(`module.${ID}`, (data, senderId) => { onSocket(data, senderId); });
-  game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty, fight: { current: currentRequest, busy, reactions: openReactions, doReaction, skipReaction, perceived, submitPlan, doIt, hold, playMyself, askAngel, changePlan, rollFor, waitForEvent, checkPlan: checkOnly, reportFailure, state: fightState, saveHistory, openHistory, memory: { of: notebookOf, preview: previewRemember, add: rememberAdd, cross: rememberCross } },
+  redrawChip();
+  game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty, fight: { current: currentRequest, busy, reactions: openReactions, doReaction, skipReaction, partyReactions: { list: partyReactors, set: setReactionUsed }, choose: chooseFor, perceived, submitPlan, doIt, hold, playMyself, askAngel, changePlan, rollFor, waitForEvent, checkPlan: checkOnly, reportFailure, state: fightState, saveHistory, openHistory, memory: { of: notebookOf, preview: previewRemember, add: rememberAdd, cross: rememberCross } },
     /* monster minds (0.24.0), `api.minds`: how a chat reads and writes profiles (api.minds.set, api.minds.open, api.minds.library.put and the rest). `by: "angel"` never replaces a line whose words are the GM's unless `force`.
        This is the chat's door, so a write with no `by` is Angel's (the windows say "gm" themselves): only `by: "gm"` for words she dictated, and
        `giveOwn`, `dropOwn`, `library.remove` and `library.import` only when she asked for them. */

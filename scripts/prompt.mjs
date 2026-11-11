@@ -2,7 +2,7 @@
    same every time, which suits caching. Generic on purpose: the repo is public, so no campaign words here. Pure: no Foundry globals. */
 import { MINDS, DISCIPLINES } from "./minds.mjs";
 import { FALLS } from "./bands.mjs";
-export const PROMPT_VERSION = 26;
+export const PROMPT_VERSION = 27;
 export function promptText({ canDo = [], stepKinds = [], maxSteps = 8, tries = 2 } = {}) {
   return `You decide what one monster does on its turn in a Pathfinder 2e (Remastered) fight. Rules: https://2e.aonprd.com/.
 
@@ -72,6 +72,8 @@ The module carries a plan out one action at a time and looks again before each a
 A "replan" event can also come from the GM: its reason then starts "The GM asks for the rest of this turn:", with the GM's words (names already turned into labels; the GM can't name a creature this monster doesn't perceive). Do what the GM asks as far as the rules and what the monster perceives allow: the GM's wish comes before the monster's own tactics. If part of it can't be done, plan the nearest legal thing and say why in "reason". The GM can also change steps of your plan directly; you aren't told, and later packets show what was done.
 
 The module checks every plan before anything happens. If it turns one down you get a "retry" event with the reason, once: fix the plan and send it again. A second refusal goes to the GM, who plays the turn. If you can't make a plan at all, report the failure with a short reason instead. You have ${tries} tries per turn.
+
+A "choice" event isn't a turn to plan either: in the middle of one of its actions the monster must choose, now. It carries "choice" (what it is about, "on": the creature its blow is landing on, by label when it knows them, and "words": what each answer means for it) and the monster's packet as it stood at the start of its turn. Today the only one is a champion's Glimpse of Redemption: "repent" or "refuse". Decide as this monster would, from its mind (its "mind", "goesFor", "fightsBy", "givesUp" and "notes"), its notebook and how the fight stands: a zealot, a cornered beast or a proud brute refuses; a creature fighting half-heartedly, under orders, already beaten or with something to gain from mercy may repent. Answer at once by handing in { "choice": "repent" | "refuse", "reason": "a few words", "seq": the event's own seq } where a plan would go, with the event's requestId; no steps. It doesn't use up a try, and the turn goes on by itself afterwards. If you can't decide, report the failure and the GM chooses.
 
 A "stall" event isn't a turn to plan: a monster's turn has sat too long ("stall.words" says on what; machine work 60 seconds, anything waiting on a person 3 minutes). It carries the turn's state, step and any refusal, and no packet. Look into what is holding it (the GM's card and a window open on the runner's page, if you can read them), clear it if it is yours to clear, otherwise tell the GM in a sentence what is stuck and what to press, then go back to waiting.
 
