@@ -1,6 +1,7 @@
 /* The Foundry side of a build: gathers the map, imports creatures, places tokens, treasure, journal and notes, and removes them again.
    Every document made here carries flags[ID].built = the build id, and Rebuild and Clear delete only those, by id. */
 import { cleanBrief, expandCreatures } from "./brief.mjs";
+import { stampBrief } from "./minds.mjs";
 import { adjustedLevel, chooseTreasure, claimDiffers, ledgerLine, levelTotal, toGp, treasureFor } from "./budget.mjs";
 import { esc, journalPages } from "./journal.mjs";
 import { SIZE_SQUARES, buildModel, summarise } from "./mapread.mjs";
@@ -254,4 +255,5 @@ export async function applyReplace(prep) {
   return { moved: ups.length, warnings: [...prep.warnings, ...nextToParty(scene)] };
 }
 /** Store a brief on the map for the Build dialog to pick up, written in a chat. Nothing is placed. */
-export async function submitBrief(scene, brief) { gmOnly(); const clean = cleanBrief(brief); await scene.setFlag(ID, "brief", clean); return clean; }
+/* a chat's door: mind lines in the brief are Angel's unless they say they are the GM's own words (minds.mjs `stampBrief`, 0.24.0) */
+export async function submitBrief(scene, brief, { by = "angel" } = {}) { gmOnly(); const clean = cleanBrief(stampBrief(brief, by)); await scene.setFlag(ID, "brief", clean); return clean; }

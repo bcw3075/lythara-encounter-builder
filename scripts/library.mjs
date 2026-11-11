@@ -4,8 +4,7 @@
    The rules themselves are pure, in minds.mjs. Everything here writes as a GM only. */
 import { ID } from "./builder.mjs";
 import { cleanBrief } from "./brief.mjs";
-import { nameWords } from "./turn.mjs";
-import { MIND_SCHEMA, LINES, applyLines, assemble, baseName, baseLevel, cleanEntry, cleanLines, exportData, forPacket, fromStatBlock, importPlan, kindKey, rowLines } from "./minds.mjs";
+import { MIND_SCHEMA, LINES, applyLines, assemble, baseName, baseLevel, cleanEntry, cleanLines, exportData, forPacket, fromStatBlock, importPlan, kindKey, namesFor, rowLines } from "./minds.mjs";
 
 const LIBRARY_NAME = "Minds Library (Encounter Builder)";
 const gmOnly = () => { if (!game.user.isGM) throw new Error("Only a GM can do this."); };
@@ -25,8 +24,9 @@ async function ensureLibrary() {
 let index = null;
 export const dropLibraryCache = () => { index = null; };
 function libraryIndex() {
-  if (index) return index; index = new Map(); const j = libraryJournal(); if (!j) return index;
-  for (const page of j.pages) { const e = cleanEntry(page.getFlag(ID, "mind")); if (e && !index.has(e.key)) index.set(e.key, { entry: e, page }); }
+  if (index) return index; index = new Map();
+  /* every journal with the flag is read: two GM pages saving for the first time at the same moment can make two (0.24.0 review 11); the first to hold a key wins */
+  for (const j of game.journal.filter(x => x.getFlag(ID, "mindsLibrary"))) for (const page of j.pages) { const e = cleanEntry(page.getFlag(ID, "mind")); if (e && !index.has(e.key)) index.set(e.key, { entry: e, page }); }
   return index;
 }
 export const libraryEntries = () => [...libraryIndex().values()].map(x => x.entry);
@@ -34,17 +34,19 @@ export const libraryGet = key => libraryIndex().get(key)?.entry ?? null;
 const pageText = e => `<p>${foundry.utils.escapeHTML(e.type === "people" ? "A people or family" : e.type === "band" ? "A kind of group" : "A kind of creature")} in the Minds Library. Read and edit it in the Minds Library window (the Encounters tools); what is typed on this page is not used.</p>`;
 /** Save an entry: its lines are laid over what the library has (minds.mjs `applyLines`: Angel never replaces the GM's words unless `force`; a line
     given as null goes back to inherit). `by` is "gm" or "angel". Out: { entry, skipped, created }. */
-export async function libraryPut(raw, { by = "gm", force = false } = {}) {
-  gmOnly(); const want = cleanEntry({ ...raw, lines: {} }); if (!want) throw new Error("A library entry needs a name.");
-  const have = libraryIndex().get(want.key), { lines, skipped } = applyLines(have?.entry.lines ?? {}, raw.lines ?? {}, { by, force, library: true, now: Date.now() });
+export async function libraryPut(raw, { by = "gm", force = false, keepBy = false } = {}) {
+  gmOnly(); const known = raw?.key ? libraryIndex().get(String(raw.key)) : null;
+  /* an entry already here keeps its type and, unless a new one is given, its name: a write that names neither can't turn a people into a kind */
+  const want = cleanEntry({ ...raw, type: known ? known.entry.type : raw?.type, name: raw?.name ?? known?.entry.name, lines: {} }); if (!want) throw new Error("A library entry needs a name.");
+  const have = libraryIndex().get(want.key), { lines, skipped } = applyLines(have?.entry.lines ?? {}, raw.lines ?? {}, { by, force, keepBy, library: true, now: Date.now() });
   const entry = { ...want, people: raw.people === undefined && have ? have.entry.people : want.people, lines };
-  if (entry.type === "kind" && entry.people && !libraryGet(entry.people)) throw new Error("That people isn't in the library.");
+  if (entry.type === "kind" && entry.people && !libraryGet(entry.people)) { if (raw.people !== undefined) throw new Error("That people isn't in the library."); entry.people = null; }   /* its people was removed: it stands on its own */
   const j = await ensureLibrary();
   if (have) await have.page.update({ name: entry.name, [`flags.${ID}.==mind`]: entry });
   else await j.createEmbeddedDocuments("JournalEntryPage", [{ name: entry.name, type: "text", text: { content: pageText(entry), format: CONST.JOURNAL_ENTRY_PAGE_FORMATS.HTML }, flags: { [ID]: { mind: entry } } }]);
   dropLibraryCache(); return { entry, skipped, created: !have };
 }
-/** Remove an entry (the GM's own press: nothing else calls it). A people's kinds stay, with no people. */
+/** Remove an entry: the GM's own press in the window, or a chat doing it because she asked. A people's kinds stay, with no people. */
 export async function libraryRemove(key) {
   gmOnly(); const have = libraryIndex().get(key); if (!have) return false;
   if (have.entry.type === "people") for (const x of [...libraryIndex().values()]) if (x.entry.people === key) await x.page.update({ [`flags.${ID}.==mind`]: { ...x.entry, people: null } });
@@ -60,9 +62,9 @@ export async function libraryImport(data, { apply = false, theirs = [] } = {}) {
   for (const r of rows) {
     if (r.status === "match") continue;
     if (r.status === "collision" && !take.has(r.entry.key)) { kept++; continue; }
-    const have = libraryIndex().get(r.entry.key);
-    if (have) { await have.page.update({ name: r.entry.name, [`flags.${ID}.==mind`]: r.entry }); replaced++; }
-    else { await j.createEmbeddedDocuments("JournalEntryPage", [{ name: r.entry.name, type: "text", text: { content: pageText(r.entry), format: CONST.JOURNAL_ENTRY_PAGE_FORMATS.HTML }, flags: { [ID]: { mind: r.entry } } }]); added++; }
+    const have = libraryIndex().get(r.entry.key), e = r.entry.people && !libraryGet(r.entry.people) ? { ...r.entry, people: null } : r.entry;   /* its people came with neither the file nor this library */
+    if (have) { await have.page.update({ name: e.name, [`flags.${ID}.==mind`]: e }); replaced++; }
+    else { await j.createEmbeddedDocuments("JournalEntryPage", [{ name: e.name, type: "text", text: { content: pageText(e), format: CONST.JOURNAL_ENTRY_PAGE_FORMATS.HTML }, flags: { [ID]: { mind: e } } }]); added++; }
     dropLibraryCache();
   }
   return { ...plan, added, replaced, kept };
@@ -74,9 +76,16 @@ export async function libraryImport(data, { apply = false, theirs = [] } = {}) {
 export function kindFacts(actor) {
   if (!actor) return null;
   const flagged = actor.getFlag?.(ID, "source") ?? null, from = flagged && !flagged.startsWith("Compendium.") ? fromUuidSync(flagged) : null, base = from ?? actor;
-  const adjustment = actor.getFlag?.(ID, "adjust") || actor.system?.attributes?.adjustment || null;
-  const source = flagged?.startsWith("Compendium.") ? flagged : base._stats?.compendiumSource ?? null;
-  const facts = { source: typeof source === "string" && source.startsWith("Compendium.") ? source : null, name: from ? from.name : actor.name, level: from ? from.level : actor.level, adjustment: from ? null : adjustment };
+  /* how it was adjusted: a copy of a world actor carries that actor's own Elite or Weak; anything else the builder's flag or PF2e's own mark */
+  const adjustment = (from ? from.system?.attributes?.adjustment : actor.getFlag?.(ID, "adjust") || actor.system?.attributes?.adjustment) || null;
+  const name = from ? from.name : actor.name, level = from ? from.level : actor.level;
+  /* its compendium source: the builder's flag; a compendium creature read straight from its pack is its own source (it carries no flag); a world
+     actor's import record counts only while it still has the pack creature's name, so a named boss made from a stock creature is its own kind
+     (0.24.0 review 6) */
+  let source = flagged?.startsWith("Compendium.") ? flagged : actor.pack ? actor.uuid : null;
+  if (!source) { const cs = base._stats?.compendiumSource ?? null, stock = typeof cs === "string" && cs.startsWith("Compendium.") ? fromUuidSync(cs) : null;
+    if (stock && String(stock.name ?? "").trim().toLowerCase() === baseName(name, adjustment).trim().toLowerCase()) source = cs; }
+  const facts = { source: typeof source === "string" && source.startsWith("Compendium.") ? source : null, name, level, adjustment };
   return { ...facts, key: kindKey(facts), kindName: baseName(facts.name, facts.adjustment), baseLevel: baseLevel(facts.level, facts.adjustment) };
 }
 const statFacts = actor => ({ traits: actor?.system?.traits?.value ?? [], int: actor?.system?.abilities?.int?.mod ?? null, abilities: (actor?.items ?? []).filter(i => i.type === "action").map(i => i.name) });
@@ -86,7 +95,11 @@ const briefOf = scene => { const b = scene?.getFlag(ID, "brief"); return b ? cle
 /** Where a token stands in the build on its scene: { row, n } (its brief row and its number in the row), or null for a creature the build didn't place. */
 export function builtRef(scene, tok) {
   const b = scene?.getFlag(ID, "build"); if (!b || tok?.getFlag(ID, "built") !== b.id) return null;
-  const m = String(tok.getFlag(ID, "key") ?? "").match(/^c(\d+)-(\d+)$/); return m && scene.getFlag(ID, "brief")?.creatures?.[+m[1]] ? { row: +m[1], n: +m[2] } : null;
+  const m = String(tok.getFlag(ID, "key") ?? "").match(/^c(\d+)-(\d+)$/), row = m ? scene.getFlag(ID, "brief")?.creatures?.[+m[1]] : null; if (!row) return null;
+  /* the row must still be the creature this token was built from: a brief stored over a standing build can have other rows at that number, and
+     their lines must never reach this monster (0.24.0 review 5). Then it counts as a creature the build didn't place. */
+  const src = tok.actor?.getFlag?.(ID, "source") ?? null; if (src && row.uuid && src !== row.uuid) return null;
+  return +m[2] < (row.count ?? 1) ? { row: +m[1], n: +m[2] } : null;
 }
 /* a kind the build didn't place keeps this encounter's lines on the scene, as a list (a kind's key has dots in it, which a flag's key can't) */
 const looseOf = scene => (scene?.getFlag(ID, "minds") ?? []).filter(x => x && typeof x.kind === "string");
@@ -106,15 +119,16 @@ export function mindLayers(scene, tok, combat = null) {
   layers.push({ from: "statblock", lines: fromStatBlock(statFacts(actor)) });
   return layers;
 }
-/** Who a profile's free text may not name unless the monster perceives them: everyone on the party's side on the scene (a character also by each long
-    word of its name), every other character in the world and every user. labelOf(tokenId): that creature's label when this monster perceives it or
-    knows it as an ally, else null. The same shape `noteForThinker` takes for the GM's note. */
+/** Who a profile's free text may not name unless the monster perceives them: everyone on the party's side on the scene, every other character in
+    the world, and the party's other members (companions, familiars). Each by its whole name and by each word of it (`namesFor`: a character's from 3
+    letters, another creature's from 4), so a first name alone is caught. Users aren't in it: an account's name isn't a creature's, and common ones
+    ("Will") would hold ordinary lines (0.24.0 review 9). labelOf(tokenId): that creature's label when this monster perceives it or knows it as
+    an ally, else null. The same shape `noteForThinker` takes for the GM's note. */
 export function partyPeople(scene, labelOf = () => null) {
-  const out = [], onScene = new Set(), names = (...ns) => [...new Set(ns.filter(Boolean))];
-  for (const t of scene?.tokens.contents ?? []) { const a = t.actor; if (!a || a.alliance !== "party") continue; onScene.add(a.id); const isChar = !!a.isOfType?.("character");
-    out.push({ names: names(t.name, a.name, ...(isChar ? [...nameWords(t.name), ...nameWords(a.name)] : [])), label: labelOf(t.id) ?? null }); }
-  for (const a of game.actors.filter(x => x.isOfType?.("character") && !onScene.has(x.id))) out.push({ names: names(a.name, ...nameWords(a.name)), label: null });
-  for (const u of game.users) out.push({ names: [u.name], label: null });
+  const out = [], onScene = new Set(), names = (a, ...ns) => [...new Set(ns.flatMap(n => namesFor(n, a.isOfType?.("character") ? 3 : 4)))];
+  for (const t of scene?.tokens.contents ?? []) { const a = t.actor; if (!a || a.alliance !== "party") continue; onScene.add(a.id); out.push({ names: names(a, t.name, a.name), label: labelOf(t.id) ?? null }); }
+  const others = new Map(); for (const a of [...game.actors.filter(x => x.isOfType?.("character")), ...(game.actors.party?.members ?? [])]) if (a && !onScene.has(a.id)) others.set(a.id, a);
+  for (const a of others.values()) out.push({ names: names(a, a.name), label: null });
   return out;
 }
 /** A monster's profile as things stand: { assembled, mind, held } (`mind` is what its packet carries, null when nothing is left to say). */
@@ -128,8 +142,8 @@ const writeBrief = (scene, brief) => scene.update({ [`flags.${ID}.==brief`]: cle
 /** Change lines of a profile on a scene. ref says whose: { row } a build row's kind for this encounter; { row, n } one built monster's own;
     { kind } a kind the build didn't place, for this scene; { token } one such monster's own. lines: key → words, { pick, text }, or null to take the
     line away. Angel never replaces the GM's words unless `force`. Out: { lines, skipped }. */
-export async function setLines(scene, ref, lines, { by = "gm", force = false } = {}) {
-  gmOnly(); const opts = { by, force, now: Date.now() };
+export async function setLines(scene, ref, lines, { by = "gm", force = false, keepBy = false } = {}) {
+  gmOnly(); const opts = { by, force, keepBy, now: Date.now() };
   if (Number.isInteger(ref?.row)) {
     const brief = briefOf(scene), row = brief?.creatures[ref.row]; if (!row) throw new Error("This map's build has no such row.");
     if (Number.isInteger(ref.n)) { if (ref.n < 0 || ref.n >= row.count) throw new Error("That row has no such monster."); const r = applyLines(row.own[String(ref.n)] ?? {}, lines, opts);
@@ -137,16 +151,18 @@ export async function setLines(scene, ref, lines, { by = "gm", force = false } =
     const r = applyLines(row.mind, lines, opts); row.mind = r.lines; await writeBrief(scene, brief); return r;
   }
   if (ref?.token) { const tok = scene.tokens.get(ref.token); if (!tok) throw new Error("That token isn't on this scene.");
-    const at = builtRef(scene, tok); if (at) return setLines(scene, at, lines, { by, force });
+    const at = builtRef(scene, tok); if (at) return setLines(scene, at, lines, { by, force, keepBy });
     const r = applyLines(tok.getFlag(ID, "mind") ?? {}, lines, opts); await tok.update({ [`flags.${ID}.==mind`]: Object.keys(r.lines).length ? r.lines : null }); return r; }
   if (typeof ref?.kind === "string") { const list = looseOf(scene), had = list.find(x => x.kind === ref.kind), r = applyLines(had?.lines ?? {}, lines, opts);
     const next = [...list.filter(x => x.kind !== ref.kind), ...(Object.keys(r.lines).length ? [{ kind: ref.kind, lines: r.lines }] : [])];
     await scene.update({ [`flags.${ID}.==minds`]: next }); return r; }
   throw new Error("Whose profile? Give a row, a row and number, a kind or a token.");
 }
-/** Give one monster its own profile (Rhea's decision 6): a copy of the profile it follows now, which then stops following its kind's. */
+/** Give one monster its own profile (Rhea's decision 6): a copy of the profile it follows now, which then stops following its kind's. One that
+    already has its own keeps it: nothing is written over (0.24.0 review 3). */
 export async function giveOwn(scene, tok) {
-  gmOnly(); const layers = mindLayers(scene, tok).filter(l => l.from !== "fight" && l.from !== "own"), a = assemble(layers);
+  gmOnly(); if (mindLayers(scene, tok).some(l => l.from === "own")) throw new Error(`${tok.name} already has its own profile.`);
+  const layers = mindLayers(scene, tok).filter(l => l.from !== "fight" && l.from !== "own"), a = assemble(layers);
   const lines = Object.fromEntries(LINES.filter(k => a.lines[k]).map(k => [k, { ...(a.lines[k].pick ? { pick: a.lines[k].pick } : {}), text: a.lines[k].text, by: a.lines[k].by }]));
   const at = builtRef(scene, tok);
   if (at) { const brief = briefOf(scene); brief.creatures[at.row].own[String(at.n)] = cleanLines(lines); await writeBrief(scene, brief); }

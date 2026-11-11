@@ -374,6 +374,8 @@ function situationNow(combat, tok, labels = {}, others = null) {
 /** The runner's answer to any change on the Combat. */
 /* whose turn the runner last handled, by combat: a turn can pass with no `updateCombat` carrying `turn` (0.24.0, below) */
 const turnOf = new Map();
+/** A fight is over: nothing of it is kept on this page. */
+export const onCombatGone = combat => { turnOf.delete(combat?.id); };
 /** The current combatant was deleted (Let it get away, or the GM removing it): the turn number stays the same, so core hands the turn to the next
     survivor with `combatTurnChange` and the system's turn start but no `updateCombat` with `turn` in it (14.370, seen live 2026-11-10: the next
     ticked monster was never asked). Called from both `combatTurnChange` and `deleteCombatant`; it waits a moment so an ordinary turn change, which

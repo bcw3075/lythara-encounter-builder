@@ -1450,5 +1450,21 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
   check("brief: band and leader are kept for the group releases", b.creatures[0].band === "warband" && b.creatures[0].leader === true && b.creatures[1].band === "" && b.creatures[1].leader === false);
   check("brief: a row's own notes win over old tactics text", b.creatures[1].mind.notes.text === "kept");
   check("brief: cleaning twice changes nothing", JSON.stringify(cb(b)) === JSON.stringify(b));
+  /* the review's findings (0.24.0) */
+  a = M.assemble([L("encounter", { goesFor: "x".repeat(225) + " Valeros is the one" })]); p = M.forPacket(a, party);
+  check("review 1: a name at the cap is never sent in part", !/Valer/.test(JSON.stringify(p.mind ?? {})) && M.cleanLine("goesFor", "x".repeat(236) + " Valeros").text === "x".repeat(236));
+  check("review 1: the gate reads the whole text before the cap", M.forPacket({ lines: { notes: { text: "y ".repeat(310) + "ask Valeros", by: "gm" } } }, party).held.some(h => h.key === "notes"));
+  check("review 1: a cut falls at a word's end", M.cutWords("alpha beta gamma", 12) === "alpha beta" && M.cutWords("short", 12) === "short" && M.cutWords("x".repeat(30), 12).length === 12);
+  check("review 2: a short first name, a surname, an ally's name word", M.namesFor("Kai Stormwind").join() === "Kai Stormwind,Kai,Stormwind" && M.namesFor("Captain Mirela", 4).includes("Mirela") && !M.namesFor("Ed of the Vale", 3).includes("the") && !M.namesFor("Ed of the Vale", 3).includes("of") && M.namesFor("Valeros (Level 7)").join() === "Valeros (Level 7),Valeros");
+  p = M.forPacket(M.assemble([L("encounter", { goesFor: "Kai first; Kai's shield arm is weak" })]), [{ names: M.namesFor("Kai Stormwind"), label: null }]);
+  check("review 2: a line using only the short first name is held", p.mind === null && p.held[0].unknown.includes("Kai"));
+  r = M.applyLines({ goesFor: { text: "hers", by: "gm" } }, { goesFor: { text: "angel wrote", by: "gm" }, notes: { text: "n", by: "gm" } }, { by: "angel" });
+  check("review 3: a line can't claim to be the GM's", r.lines.goesFor.text === "hers" && r.skipped.join() === "goesFor" && r.lines.notes.by === "angel");
+  r = M.applyLines({}, { goesFor: { text: "moved", by: "angel" } }, { by: "gm", keepBy: true });
+  check("review 3: lines moved between layers keep whose they were", r.lines.goesFor.by === "angel");
+  const sb2 = cb(M.stampBrief({ creatures: [{ name: "Wolf", tactics: "circle", mind: { goesFor: "the wounded", fightsBy: { text: "hers", by: "gm" } }, own: { 0: { givesUp: "never" } } }] }));
+  check("review 3: a chat's brief is Angel's unless it says it is hers", sb2.creatures[0].mind.goesFor.by === "angel" && sb2.creatures[0].mind.notes.by === "angel" && sb2.creatures[0].mind.fightsBy.by === "gm" && sb2.creatures[0].own[0].givesUp.by === "angel");
+  check("review 8: what is stored is what is sent", M.CAPS.store === M.CAPS.send && M.CAPS.storeNotes === M.CAPS.sendNotes);
+  check("review 11: a name of punctuation alone is no entry; a pick alone replaces the whole line", M.cleanEntry({ type: "people", name: "!!!" }) === null && M.applyLines({ mind: { pick: "cunning", text: "patient", by: "gm" } }, { mind: { pick: "simple" } }, { by: "gm" }).lines.mind.text === "");
 }
 console.log(`${good} passed, ${bad} failed`); process.exit(bad ? 1 : 0);

@@ -7,7 +7,7 @@ import { onReactionPrompt } from "./ui/react.mjs";
 import { MindsApp, openLibrary, redrawLibrary } from "./ui/minds.mjs";
 import { LINES, MIND_SCHEMA } from "./minds.mjs";
 import { dropLibraryCache, dropOwn, giveOwn, kindFacts, libraryEntries, libraryExport, libraryGet, libraryImport, libraryPut, libraryRemove, mindLayers, mindOf, mindRows, rowProfile, setLines } from "./library.mjs";
-import { doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
+import { doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCombatGone, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
 
 const CONTROL = "encounters", apps = new Map(), mindsApps = new Map(); let turnsApp = null, historyApp = null, historyTimer = null;
 /* the history window fills in live; many flag writes come in a burst during a turn, so one redraw per quarter second */
@@ -55,10 +55,12 @@ Hooks.on("getSceneControlButtons", controls => {
 Hooks.on("lythara-survey-sheet.encounterDrawn", scene => { markDrawn(scene); });
 Hooks.on("canvasReady", c => { markReady(c.scene?.id); redrawTurns(); });
 /* a party member's ticks last one fight (0.18.0): the runner clears them when the fight is deleted */
-Hooks.on("deleteCombat", combat => { untickParty(combat).catch(e => console.warn(`${ID} | untick`, e)); });
+Hooks.on("deleteCombat", combat => { onCombatGone(combat); untickParty(combat).catch(e => console.warn(`${ID} | untick`, e)); });
 for (const h of ["createCombat", "deleteCombat", "createCombatant", "updateCombatant", "deleteCombatant", "deleteToken"]) Hooks.on(h, () => { redrawTurns(); });
 /* a brief sent from a chat shows up in an open window */
-Hooks.on("updateScene", (scene, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}`)) redrawMinds(scene); });
+Hooks.on("updateScene", (scene, change) => { if (!foundry.utils.hasProperty(change, `flags.${ID}`)) return; redrawMinds(scene);
+  /* an open Build window holds its own copy of the brief: minds saved meanwhile go into it, or its next Build would write the old ones back (0.24.0 review 4) */
+  const app = apps.get(scene.id); if (app?.rendered && scene.getFlag(ID, "build")) { app.takeMinds(scene.getFlag(ID, "brief")); app.render(); } });
 Hooks.on("updateScene", (scene, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}.brief`) && !scene.getFlag(ID, "build")) { const app = apps.get(scene.id); if (app?.rendered) { app.loadBrief(); app.render(); } } });
 /* the party landing beside a hidden monster is worth a word; nothing moves on its own */
 Hooks.on("createToken", (tok, opts, userId) => { if (game.users.activeGM?.id !== game.user.id || !tok.parent?.getFlag(ID, "build") || !tok.isOwner) return; if (!game.actors.party?.members.some(m => m.id === tok.actorId)) return; setTimeout(() => { for (const w of nextToParty(tok.parent)) ui.notifications.warn(w); }, 200); });
@@ -105,7 +107,10 @@ Hooks.once("ready", () => {
   watchStalls();
   game.socket.on(`module.${ID}`, (data, senderId) => { onSocket(data, senderId); });
   game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty, fight: { current: currentRequest, busy, reactions: openReactions, doReaction, skipReaction, perceived, submitPlan, doIt, hold, playMyself, askAngel, changePlan, rollFor, waitForEvent, checkPlan: checkOnly, reportFailure, state: fightState, saveHistory, openHistory },
-    /* monster minds (0.24.0), `api.minds`: how a chat reads and writes profiles (api.minds.set, api.minds.open, api.minds.library.put and the rest). `by: "angel"` never replaces a line whose words are the GM's unless `force` */
-    minds: { schema: MIND_SCHEMA, lines: LINES, rows: mindRows, profile: rowProfile, layers: mindLayers, of: mindOf, kindOf: kindFacts, set: setLines, giveOwn, dropOwn, open: openMinds, openLibrary,
-      library: { list: libraryEntries, get: libraryGet, put: libraryPut, remove: libraryRemove, export: libraryExport, import: libraryImport } } };
+    /* monster minds (0.24.0), `api.minds`: how a chat reads and writes profiles (api.minds.set, api.minds.open, api.minds.library.put and the rest). `by: "angel"` never replaces a line whose words are the GM's unless `force`.
+       This is the chat's door, so a write with no `by` is Angel's (the windows say "gm" themselves): only `by: "gm"` for words she dictated, and
+       `giveOwn`, `dropOwn`, `library.remove` and `library.import` only when she asked for them. */
+    minds: { schema: MIND_SCHEMA, lines: LINES, rows: mindRows, profile: rowProfile, layers: mindLayers, of: mindOf, kindOf: kindFacts, giveOwn, dropOwn, open: openMinds, openLibrary,
+      set: (scene, ref, lines, { by = "angel", force = false } = {}) => setLines(scene, ref, lines, { by, force }),
+      library: { list: libraryEntries, get: libraryGet, remove: libraryRemove, export: libraryExport, import: libraryImport, put: (entry, { by = "angel", force = false } = {}) => libraryPut(entry, { by, force }) } } };
 });

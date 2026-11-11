@@ -16,6 +16,8 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
     this.brief = cleanBrief(stored ?? { mood: "ambush" }); this.brief.partyLevel ??= suggestedLevel(); this.fromChat = !!stored;
     this.rowInfo = new Map();
   }
+  /* the minds as the scene now has them, for rows that are still the same creature at the same place (the notes box shows them) */
+  takeMinds(stored) { const rows = cleanBrief(stored ?? {}).creatures; this.brief.creatures.forEach((c, i) => { const s = rows[i]; if (s && s.uuid === c.uuid) { c.mind = s.mind; c.own = s.own; c.band = s.band; c.leader = s.leader; } }); }
   async rowFacts() { for (const c of this.brief.creatures) if (c.uuid && !this.rowInfo.has(c.uuid)) { const a = await fromUuid(c.uuid); if (a) { this.rowInfo.set(c.uuid, { level: a.level, name: a.name }); c.name ||= a.name; } } }
   threat() { const levels = this.brief.creatures.flatMap(c => { const i = this.rowInfo.get(c.uuid); return i ? Array(c.count).fill(adjustedLevel(i.level, c.adjust)) : []; }); return levels.length ? threatOf(levels, this.brief.partyLevel, this.brief.claimedXP) : null; }
   async _renderHTML() {

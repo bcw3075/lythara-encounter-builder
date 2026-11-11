@@ -20,7 +20,7 @@ const STYLE = `.leb-minds .window-content{overflow:hidden!important;padding:0;di
 .leb-minds .lm-tag.people{background:#bcd6f5}.leb-minds .lm-tag.kind{background:#cfe6b5}.leb-minds .lm-tag.encounter{background:#f3d9a8}.leb-minds .lm-tag.own{background:#f0c2ec}.leb-minds .lm-tag.statblock{background:#d9d9d9}.leb-minds .lm-tag.fight{background:#f5b8b0}
 .leb-minds .lm-from a{display:block;margin-top:3px;font-size:11px}.leb-minds .lm-warn{margin:6px 0 0;padding:6px 9px;border:1px solid #a9772a;background:#f3d9a833;border-radius:5px;font-size:13px}
 .leb-minds .lm-note{margin-top:10px;opacity:.75;font-size:12px}.leb-minds .lm-msg{padding:4px 16px;font-size:13px}
-.leb-minds .lm-foot{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;padding:8px 12px;border-top:1px solid var(--color-border,#8886)}.leb-minds .lm-foot button{width:auto;flex:0 0 auto}.leb-minds .lm-foot .lm-left{margin-right:auto}
+.leb-minds .lm-foot{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;padding:8px 12px;border-top:1px solid var(--color-border,#8886)}.leb-minds .lm-foot button{width:auto;flex:0 0 auto}.leb-minds .lm-foot .lm-left{margin-right:auto}.leb-minds .lm-unsaved{align-self:center;font-size:12px;opacity:.8}
 .leb-minds table.lm-tbl{width:100%;border-collapse:collapse;table-layout:fixed}.leb-minds .lm-tbl td,.leb-minds .lm-tbl th{padding:6px 8px;border-top:1px solid #8883;text-align:left;vertical-align:top;word-wrap:break-word}
 .leb-minds .lm-tbl th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;border-top:0}.leb-minds .lm-tbl td.lm-cell{cursor:pointer}.leb-minds .lm-tbl td.lm-cell:hover{background:#8882}.leb-minds .lm-same{opacity:.5}
 .leb-minds .lm-tbl th a{margin-left:6px;opacity:.7}.leb-minds input.lm-search{width:100%;margin-bottom:6px}
@@ -57,18 +57,18 @@ export class MindsApp extends ApplicationV2 {
     if (!at) return `<div class="lm-body"><div class="lm-side">${side}</div><div class="lm-main"><p>No monsters on this map yet. Build an encounter or put monsters on it, then open this again.</p></div></div><div class="lm-foot"><button type="button" class="lm-left" data-action="library"><i class="fa-solid fa-book"></i> Minds Library…</button></div>`;
     const { row, ref } = at; this.row = row; this.ref = ref;
     const profile = this.profile = await rowProfile(scene, row, ref), layer = this.layer = this.layerOf(ref), people = partyPeople(scene);
-    const below = this.below = assemble(profile.layers.filter(l => l.from !== layer)).lines, mine = profile.layers.find(l => l.from === layer)?.lines ?? {};
+    /* what a line falls back to when this layer's is taken away: for a monster's own profile only the stat block (its own is the whole profile) */
+    const below = this.below = assemble(profile.layers.filter(l => l.from !== layer && (layer !== "own" || l.from === "statblock"))).lines, mine = this.mine = profile.layers.find(l => l.from === layer)?.lines ?? {};
+    this.people = people; this.rowUuid = row.uuid ?? null;
     const single = layer === "own", entry = profile.kind ? libraryGet(profile.kind.key) : null, peopleName = entry?.people ? libraryGet(entry.people)?.name : null;
     const lineRow = k => {
       const cur = profile.assembled.lines[k], d = this.draft[k], val = d !== undefined ? (d ?? below[k] ?? {}) : (cur ?? {}), text = val.text ?? "", fromMine = d !== undefined ? d !== null : !!mine[k] && !mine[k].blank, blanked = d === undefined && !!mine[k]?.blank;
       const field = PICKS[k]
         ? `<div class="lm-pick"><select name="${k}.pick"><option value="">(not set)</option>${Object.entries(PICKS[k]).map(([id, p]) => `<option value="${id}"${val.pick === id ? " selected" : ""} title="${esc(p.words)}">${esc(p.label)}</option>`).join("")}</select><input type="text" name="${k}.text" maxlength="${CAPS.store}" value="${esc(text)}" placeholder="in your own words (optional)"></div>`
         : `<textarea name="${k}.text" class="${k === "notes" ? "lm-notes" : ""}" maxlength="${k === "notes" ? CAPS.storeNotes : CAPS.store}" placeholder="${blanked ? "left blank on purpose" : ""}">${esc(text)}</textarea>${(SUGGEST[k] ?? []).length ? `<div class="lm-chips">${SUGGEST[k].map(s => `<span class="lm-chip" data-chip="${k}">${esc(s)}</span>`).join("")}</div>` : ""}`;
-      const src = d !== undefined ? `<i class="lm-tag ${layer}">${esc(LAYER_WORDS[layer])}</i>not saved yet` : cur ? `${tag(cur.from, cur.name)}${cur.from === "statblock" ? "" : ` ${esc(who(cur.by))}`}` : blanked ? `<i class="lm-tag ${layer}">${esc(LAYER_WORDS[layer])}</i>blank on purpose` : "nothing written";
-      const back = fromMine || blanked ? `<a data-revert="${k}">${below[k] ? `back to ${esc(LAYER_WORDS[below[k].from])}'s` : "clear this line"}</a>` : "";
-      return `<div class="lm-row"><label>${esc(LINE_LABEL[k])}</label><div>${field}${warnHtml(text, people)}</div><div class="lm-from">${src}${back}</div></div>`; };
+      return `<div class="lm-row" data-line="${k}"><label>${esc(LINE_LABEL[k])}</label><div>${field}<div class="lm-warns">${warnHtml(text, people)}</div></div><div class="lm-from">${this.srcOf(k)}</div></div>`; };
     const head = single && !row.party ? `<b>${esc(at.own?.name ?? row.name)}</b><small>its own profile: it no longer follows ${esc(row.name)}'s</small>` : row.party ? `<b>${esc(row.name)}</b><small>with the party: only what you write here is used</small>` : `<b>${esc(row.name)}</b><small>${row.count} monster${row.count === 1 ? "" : "s"} follow${row.count === 1 ? "s" : ""} this profile${peopleName ? ` · people: ${esc(peopleName)}` : entry ? " · in the library" : ""}</small>`;
-    const foot = `<button type="button" class="lm-left" data-action="library"><i class="fa-solid fa-book"></i> Minds Library…</button>${single && !row.party ? `<button type="button" data-action="dropOwn">Follow its kind again</button>` : ""}${!single && row.tokens.length ? `<button type="button" data-action="giveOwn">Give one monster its own profile…</button>` : ""}${!single && profile.kind ? `<button type="button" data-action="toLibrary">Save to library…</button>` : ""}<button type="button" data-action="save" class="lm-go"${this.dirty ? "" : " disabled"}><i class="fa-solid fa-floppy-disk"></i> ${single ? "Save its profile" : "Save for this encounter"}</button>`;
+    const foot = `<button type="button" class="lm-left" data-action="library"><i class="fa-solid fa-book"></i> Minds Library…</button>${single && !row.party ? `<button type="button" data-action="dropOwn">Follow its kind again</button>` : ""}${!single && row.tokens.length ? `<button type="button" data-action="giveOwn">Give one monster its own profile…</button>` : ""}${!single && profile.kind ? `<button type="button" data-action="toLibrary">Save to library…</button>` : ""}<span class="lm-unsaved">${this.dirty ? "Not saved yet" : ""}</span><button type="button" data-action="save" class="lm-go"><i class="fa-solid fa-floppy-disk"></i> ${single ? "Save its profile" : "Save for this encounter"}</button>`;
     return `<div class="lm-body"><div class="lm-side">${side}</div><div class="lm-main"><div class="lm-head">${head}</div>${LINES.map(lineRow).join("")}
       <div class="lm-note">Tags show where each line comes from. ${single ? "This profile is this monster's alone." : "Changing a line here changes it for this encounter only, until you choose Save to library."} Angel is told these lines at every plan; a line naming a party member is left out until the monster perceives them.</div></div></div>
       ${this.message ? `<div class="lm-msg">${esc(this.message)}</div>` : ""}<div class="lm-foot">${foot}</div>`;
@@ -78,17 +78,33 @@ export class MindsApp extends ApplicationV2 {
   take(k) {
     const root = this.element, text = root.querySelector(`[name="${k}.text"]`)?.value ?? "", pick = root.querySelector(`[name="${k}.pick"]`)?.value ?? "";
     const now = cleanLine(k, { text, pick: pick || undefined }), cur = this.profile.assembled.lines[k], sameAs = l => !!l === !!now && (!now || ((l.pick ?? null) === (now.pick ?? null) && (l.text ?? "") === now.text));
-    if (sameAs(cur) && this.draft[k] === undefined) return;
+    /* the same as what is saved is no change, even after typing something and typing it back: nothing she didn't change is ever written as hers */
+    if (sameAs(cur)) { delete this.draft[k]; return; }
     this.draft[k] = now ?? { blank: true };
   }
+  /* where a line comes from, for its tag, and the way back */
+  srcOf(k) {
+    const layer = this.layer, cur = this.profile.assembled.lines[k], d = this.draft[k], mine = this.mine ?? {}, below = this.below ?? {}, fromMine = d !== undefined ? d !== null : !!mine[k] && !mine[k].blank, blanked = d === undefined && !!mine[k]?.blank;
+    const src = d !== undefined ? `<i class="lm-tag ${layer}">${esc(LAYER_WORDS[layer])}</i>not saved yet` : cur ? `${tag(cur.from, cur.name)}${cur.from === "statblock" ? "" : ` ${esc(who(cur.by))}`}` : blanked ? `<i class="lm-tag ${layer}">${esc(LAYER_WORDS[layer])}</i>blank on purpose` : "nothing written";
+    return `${src}${fromMine || blanked ? `<a data-revert="${k}">${below[k] ? `back to ${esc(LAYER_WORDS[below[k].from])}'s` : "clear this line"}</a>` : ""}`;
+  }
+  /* a field changed: the draft, that line's warning and tag, and the "not saved" mark follow, with no redraw (a redraw would swallow the click that
+     comes next: on Save, on another kind, on a suggestion; 0.24.0 review 10) */
+  touch(k) {
+    this.take(k); const root = this.element, row = root.querySelector(`.lm-row[data-line="${k}"]`); if (!row) return;
+    row.querySelector(".lm-warns").innerHTML = warnHtml(row.querySelector(`[name="${k}.text"]`)?.value ?? "", this.people);
+    row.querySelector(".lm-from").innerHTML = this.srcOf(k); this.bindRevert(row);
+    const mark = root.querySelector(".lm-unsaved"); if (mark) mark.textContent = this.dirty ? "Not saved yet" : "";
+  }
+  bindRevert(el) { el.querySelectorAll("[data-revert]").forEach(a => a.addEventListener("click", () => { this.draft[a.dataset.revert] = null; this.render(); })); }
   _onRender() {
     const root = this.element;
     root.querySelectorAll("[data-sel]").forEach(el => el.addEventListener("click", async () => { if (el.dataset.sel === this.sel) return;
       if (this.dirty && !await DialogV2.confirm({ window: { title: "Monster Minds" }, content: "<p>Leave without saving the lines you changed?</p>", rejectClose: false })) return;
       this.sel = el.dataset.sel; this.draft = {}; this.message = ""; this.render(); }));
-    root.querySelectorAll(".lm-row textarea,.lm-row input,.lm-row select").forEach(el => el.addEventListener("change", () => { this.take(el.name.split(".")[0]); this.render(); }));
-    root.querySelectorAll("[data-chip]").forEach(el => el.addEventListener("click", () => { const k = el.dataset.chip, box = root.querySelector(`[name="${k}.text"]`); if (!box) return; box.value = box.value.trim() ? `${box.value.trim().replace(/[.;]$/, "")}; ${el.textContent}` : el.textContent[0].toUpperCase() + el.textContent.slice(1); this.take(k); this.render(); }));
-    root.querySelectorAll("[data-revert]").forEach(el => el.addEventListener("click", () => { this.draft[el.dataset.revert] = null; this.render(); }));
+    root.querySelectorAll(".lm-row textarea,.lm-row input,.lm-row select").forEach(el => { const k = el.name.split(".")[0]; for (const ev of ["input", "change"]) el.addEventListener(ev, () => this.touch(k)); });
+    root.querySelectorAll("[data-chip]").forEach(el => el.addEventListener("click", () => { const k = el.dataset.chip, box = root.querySelector(`[name="${k}.text"]`); if (!box) return; box.value = box.value.trim() ? `${box.value.trim().replace(/[.;]$/, "")}; ${el.textContent}` : el.textContent[0].toUpperCase() + el.textContent.slice(1); this.touch(k); }));
+    this.bindRevert(root);
     root.querySelectorAll("[data-action]").forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); this.act(el.dataset.action).catch(e => { ui.notifications.error(e.message); console.error(e); }); }));
   }
   /* the draft as `setLines` takes it: null takes this layer's line away; a line cleared over something below is blank on purpose */
@@ -96,7 +112,12 @@ export class MindsApp extends ApplicationV2 {
   async act(a) {
     const scene = this.scene, row = this.row, ref = this.ref;
     if (a === "library") return openLibrary();
-    if (a === "save") { if (!this.dirty) return; await setLines(scene, ref, this.changes(), { by: "gm" }); this.draft = {}; this.message = "Saved."; return this.render(); }
+    if (["save", "giveOwn", "toLibrary"].includes(a)) {
+      for (const k of LINES) if (this.element.querySelector(`[name="${k}.text"]`)) this.take(k);   /* a field still being typed in counts */
+      /* the build may have been made again while this window stood open with edits: its rows are then other rows, and nothing is saved onto them */
+      const now = this.find(mindRows(scene)); if (!now || (now.row.uuid ?? null) !== this.rowUuid) { this.draft = {}; this.message = "This map's monsters changed while you were editing, so nothing was saved. Here is how they stand now."; return this.render(); }
+    }
+    if (a === "save") { if (!this.dirty) { this.message = "Nothing was changed."; return this.render(); } await setLines(scene, ref, this.changes(), { by: "gm" }); this.draft = {}; this.message = "Saved."; return this.render(); }
     if (a === "giveOwn") {
       const taken = new Set(row.own.map(o => o.token)), free = row.tokens.map(id => scene.tokens.get(id)).filter(t => t && !taken.has(t.id)); if (!free.length) return ui.notifications.info("Every monster of this kind here already has its own profile.");
       const data = await input("Give one monster its own profile", `<p>It starts as a copy of the profile it follows now and then stops following ${esc(row.name)}'s.</p><div class="form-group"><label>Which one</label><select name="tok">${free.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select></div>`, "Give it its own"); if (!data?.tok) return;
@@ -116,7 +137,7 @@ export class MindsApp extends ApplicationV2 {
         ${list.map(c => `<label class="lm-line"><input type="checkbox" name="line_${c.key}" ${named.includes(c.key) ? "disabled" : "checked"}> <b>${esc(LINE_LABEL[c.key])}:</b> ${c.from ? `<span class="lm-old">${esc(c.from)}</span> → ` : ""}${esc(c.to)}${named.includes(c.key) ? " <em>(names a party member: reword it first)</em>" : ""}</label>`).join("")}
         ${entry ? "" : `<div class="form-group"><label>Its people or family</label><select name="people"><option value="">(none)</option>${peoples.map(p => `<option value="${esc(p.key)}">${esc(p.name)}</option>`).join("")}</select></div>`}`, "Save to library"); if (!data) return;
       const keys = list.map(c => c.key).filter(k => data[`line_${k}`]); if (!keys.length) return;
-      await libraryPut({ type: "kind", key: kind.key, name: entry?.name ?? kind.kindName, ...(entry ? {} : { people: data.people || null }), lines: Object.fromEntries(keys.map(k => [k, { ...here[k], by: here[k].by }])) }, { by: "gm" });
+      await libraryPut({ type: "kind", key: kind.key, name: entry?.name ?? kind.kindName, ...(entry ? {} : { people: data.people || null }), lines: Object.fromEntries(keys.map(k => [k, here[k]])) }, { by: "gm", keepBy: true });   /* the lines move as they are: Angel's stay Angel's */
       await setLines(scene, ref, Object.fromEntries(keys.map(k => [k, null])), { by: "gm" });   /* they come from the library now */
       this.message = `Saved ${keys.length} line${keys.length === 1 ? "" : "s"} to the library.`; return this.render(); }
   }
@@ -163,7 +184,8 @@ export class LibraryApp extends ApplicationV2 {
       <textarea name="text" maxlength="${k === "notes" ? CAPS.storeNotes : CAPS.store}" placeholder="${picks ? "in your own words (optional)" : "your own words"}">${esc(l.blank ? "" : l.text ?? "")}</textarea>${(SUGGEST[k] ?? []).length ? `<p class="lm-old">For example: ${SUGGEST[k].map(esc).join("; ")}.</p>` : ""}
       ${e.type === "kind" ? `<label class="lm-line"><input type="checkbox" name="same"> Same as its people (take this kind's own line away)</label><label class="lm-line"><input type="checkbox" name="blank"${l.blank ? " checked" : ""}> Blank on purpose (don't use its people's line either)</label>` : `<label class="lm-line"><input type="checkbox" name="same"> Take this line away</label>`}`); if (!data) return;
     const line = data.same ? null : data.blank ? { blank: true } : cleanLine(k, { text: data.text, pick: data.pick || undefined });
-    if (line && !line.blank) { const w = lineWarnings(line.text, partyPeople(canvas.scene)); if (w.names.length) return ui.notifications.warn(`“${w.names[0]}” is a party member's name. Library text is used in every encounter, so it should name nobody: nothing was saved.`); }
+    /* a party member's name in library text: asked, not refused, since a name can also be an everyday word; the packet's own gate still holds the line back from any monster that doesn't perceive them */
+    if (line && !line.blank) { const w = lineWarnings(line.text, partyPeople(canvas.scene)); if (w.names.length && !await DialogV2.confirm({ window: { title: "A party member's name" }, content: `<p>“${esc(w.names[0])}” is a party member's name, or part of one. Library text is used in every encounter, so it should name nobody; a monster is only told a line like this while it perceives that creature.</p><p>Save it anyway?</p>`, rejectClose: false })) return; }
     await libraryPut({ ...e, lines: { [k]: line } }, { by: "gm" }); this.message = "Saved."; this.render();
   }
   async rename(key) {

@@ -31,8 +31,9 @@ export const SUGGEST = {
   knows: ["nothing about them", "the basics: armour means tough, robes mean spells", "it has watched them fight before"],
   notes: []
 };
-/** Hard caps (design review 13): what a layer may store, and what one packet carries. Blank lines are never sent. */
-export const CAPS = { store: 600, storeNotes: 2000, send: 240, sendNotes: 600, name: 80 };
+/** Hard caps (design review 13). What a layer stores is what a packet carries, so nothing is cut behind the GM's back (0.24.0 review 8): 240
+    characters a line, 600 for Notes. Blank lines are never sent. */
+export const CAPS = { store: 240, storeNotes: 600, send: 240, sendNotes: 600, name: 80 };
 /** "Knows about its enemies" belongs to one encounter, one monster or one fight: never the library (design review 10). */
 export const LIBRARY_LINES = LINES.filter(l => l !== "knows");
 export const BY = ["gm", "angel", "module"];
@@ -48,7 +49,7 @@ export function cleanLine(key, v, by = null) {
   const o = typeof v === "string" ? { text: v } : v; if (typeof o !== "object") return null;
   const who = BY.includes(o.by) ? o.by : BY.includes(by) ? by : "gm", at = Number.isFinite(o.at) ? o.at : null;
   if (o.blank === true) return { blank: true, by: who, ...(at ? { at } : {}) };
-  const text = str(o.text, key === "notes" ? CAPS.storeNotes : CAPS.store), pick = PICKS[key] && Object.hasOwn(PICKS[key], o.pick) ? o.pick : null;
+  const text = cutWords(str(o.text, GATE_MAX), key === "notes" ? CAPS.storeNotes : CAPS.store), pick = PICKS[key] && Object.hasOwn(PICKS[key], o.pick) ? o.pick : null;
   if (!text && !pick) return null;
   return { ...(pick ? { pick } : {}), text, by: who, ...(at ? { at } : {}) };
 }
@@ -77,7 +78,7 @@ export const baseLevel = (level, adjustment = null) => (Number(level) || 0) - (a
 export function cleanEntry(e = {}) {
   const type = ENTRY_TYPES.includes(e.type) ? e.type : "kind", name = str(e.name, CAPS.name);
   const key = str(e.key, 200) || (type === "people" ? peopleKey(name) : type === "band" ? bandKey(name) : "");
-  if (!key || !name) return null;
+  if (!key || !name || /^(people|band):$/.test(key)) return null;   /* a name of punctuation alone makes no key */
   return { schema: MIND_SCHEMA, type, key, name, people: type === "kind" && typeof e.people === "string" && e.people.startsWith("people:") ? e.people : null, lines: cleanLines(e.lines, { library: true }) };
 }
 /** The Mind and Works with others a stat block alone suggests, so that nothing plays blank. A guess, and marked as the module's: the Mindless trait;
@@ -111,6 +112,18 @@ export function lineWords(key, l) {
   if (!l) return ""; const label = l.pick ? PICKS[key]?.[l.pick]?.label ?? "" : "", text = String(l.text ?? "").trim();
   return label && text ? `${label}. ${text}` : label || text;
 }
+const GATE_MAX = 8000;
+/** Text no longer than max, cut at the end of a word when it has to be cut. */
+export function cutWords(text, max) { const s = String(text ?? ""); if (s.length <= max) return s; const cut = s.slice(0, max + 1), at = cut.lastIndexOf(" "); return (at > max * .5 ? cut.slice(0, at) : s.slice(0, max)).trim(); }
+/** The names a party-side creature can be called by in a line (0.24.0 review 2): its whole name, and each word of it of `min` letters or more
+    (brackets left out; "the", "of" and the like never count), so a first name or a surname alone is caught. A character's words count from 3
+    letters; any other creature's from 4. */
+const SMALL = new Set(["the", "and", "von", "van", "der", "del", "des", "for", "mac"]);
+export function namesFor(name, min = 3) {
+  const full = String(name ?? "").trim(); if (!full) return [];
+  const words = full.replace(/\([^)]*\)/g, " ").split(/[^\p{L}\p{N}]+/u).filter(w => w.length >= min && !SMALL.has(w.toLowerCase()));
+  return [...new Set([full, ...words])];
+}
 /** What one packet carries (design reviews 1 and 13): each line in words, capped, blank ones left out, in the fixed order. Free text goes through the
     same gate as the GM's note to Angel: a name of someone on the party's side becomes that creature's label when this monster perceives it, and a
     line naming anyone it doesn't perceive (or a name that fits several it does) is held back whole, since even "someone" would tell it they exist.
@@ -119,7 +132,8 @@ export function lineWords(key, l) {
 export function forPacket(assembled, people = []) {
   const out = {}, pick = {}, held = [];
   for (const k of LINES) { const l = assembled?.lines?.[k]; if (!l) continue;
-    const max = k === "notes" ? CAPS.sendNotes : CAPS.send, g = noteForThinker(String(l.text ?? ""), people, max);
+    /* the gate reads the whole text and the cap comes after, at a word's end: a name cut in half by the cap would pass as no name (0.24.0 review 1) */
+    const max = k === "notes" ? CAPS.sendNotes : CAPS.send, g = noteForThinker(String(l.text ?? ""), people, GATE_MAX); g.text = cutWords(g.text, max);
     if (g.unknown.length || g.ambiguous.length) { held.push({ key: k, unknown: g.unknown, ambiguous: g.ambiguous }); if (!l.pick) continue; }
     const words = lineWords(k, { pick: l.pick, text: g.unknown.length || g.ambiguous.length ? "" : g.text }); if (!words) continue;
     out[k] = words; if (l.pick) pick[k] = l.pick; }
@@ -131,17 +145,18 @@ const STAT_WORDS = /\b(AC|HP|hit points?|armor class|saves?|saving throws?|forti
 /** What to warn the GM of when a line is saved: names of people on the party's side (a monster only gets that line while it perceives them), and stat
     words. people: [{ names }]. Out: { names: [...], stats: bool }. Library text should name nobody: it is used in every encounter. */
 export function lineWarnings(text, people = []) {
-  const g = noteForThinker(String(text ?? ""), (people ?? []).map(p => ({ names: p.names, label: null })), CAPS.storeNotes);
+  const g = noteForThinker(String(text ?? ""), (people ?? []).map(p => ({ names: p.names, label: null })), GATE_MAX);
   return { names: g.unknown, stats: STAT_WORDS.test(String(text ?? "")) };
 }
 /** New lines over a layer's own. Angel never replaces hers unasked (design review 9): a line whose words are the GM's is left alone unless `force`
     (she asked) or the writer is the GM. `null` for a key removes that line (back to inherit); the same rule protects hers. `now` stamps each line
-    written with when. Out: { lines, skipped }. */
-export function applyLines(current = {}, incoming = {}, { by = "gm", force = false, library = false, now = null } = {}) {
+    written with when. A line is written whole: a pick alone replaces the pick and its words. Out: { lines, skipped }. */
+export function applyLines(current = {}, incoming = {}, { by = "gm", force = false, library = false, now = null, keepBy = false } = {}) {
   const lines = { ...cleanLines(current, { library }) }, skipped = [];
   for (const k of library ? LIBRARY_LINES : LINES) { if (!(k in (incoming ?? {}))) continue;
     if (by !== "gm" && !force && lines[k]?.by === "gm") { skipped.push(k); continue; }
-    const l = incoming[k] === null ? null : cleanLine(k, typeof incoming[k] === "string" ? { text: incoming[k], by } : { ...incoming[k], by: incoming[k]?.by ?? by }, by);
+    /* the writer is who the call says, never who the line says (0.24.0 review 3), unless the caller is moving existing lines between layers (keepBy) */
+    const l = incoming[k] === null ? null : cleanLine(k, typeof incoming[k] === "string" ? { text: incoming[k], by } : { ...incoming[k], by: keepBy && BY.includes(incoming[k]?.by) ? incoming[k].by : by }, by);
     if (l) lines[k] = now ? { ...l, at: now } : l; else delete lines[k]; }
   return { lines, skipped };
 }
@@ -165,6 +180,13 @@ export function importPlan(existing = [], data = null) {
   for (const raw of data.entries) { const e = cleanEntry(raw); if (!e || seen.has(e.key)) continue; seen.add(e.key);
     const m = mine.get(e.key); rows.push({ status: !m ? "new" : same(core(m), core(e)) ? "match" : "collision", entry: e, mine: m ?? null }); }
   return { ok: true, reason: null, rows };
+}
+/** A brief as a chat hands it in (0.24.0 review 3): its mind lines are Angel's unless a line says they are the GM's own words (she dictated them);
+    a row's `tactics` text too. The Build window's lines are the GM's and don't come through here. */
+export function stampBrief(brief, by = "angel") {
+  const lines = v => v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, l]) => [k, typeof l === "string" ? { text: l, by } : l && typeof l === "object" && !BY.includes(l.by) ? { ...l, by } : l])) : {};
+  return { ...(brief ?? {}), creatures: (Array.isArray(brief?.creatures) ? brief.creatures : []).map(c => { const mind = lines(c?.mind); if (String(c?.tactics ?? "").trim() && !mind.notes) mind.notes = { text: c.tactics, by };
+    const { tactics, ...rest } = c ?? {}; return { ...rest, mind, own: c?.own && typeof c.own === "object" ? Object.fromEntries(Object.entries(c.own).map(([n, v]) => [n, lines(v)])) : {} }; }) };
 }
 /** A brief row's encounter mind (decision 11: profiles replace the Tactics page). A row's old `tactics` text is that kind's notes for the encounter
     when the row has no notes of its own. Out: lines. */
