@@ -107,7 +107,7 @@ export function render(book, { rung = 3, since = 0 } = {}) {
     switch (g.kind) {
       case "gm": return l.text;
       case "hurt": { const worst = Math.max(...g.lines.map(x => x.s ?? 1)), bad = g.lines.filter(x => (x.s ?? 1) === 3).length;
-        const who = l.p ? `Persistent ${l.p} damage` : g.id === "?" ? "Something (unsure what)" : l.a;
+        const who = l.p ? `Persistent ${l.p} damage` : g.id === "?" ? "Something" : l.a;
         const how = n === 1 ? (worst === 3 ? "hurt it badly" : worst === 2 ? "hurt it" : "scratched it") : `hurt it ${times(n)}${bad ? `, badly ${times(bad)}` : ""}`;
         return `${who} ${how}${hurters.size > 1 && l.a === lastHurt && !l.p && g.id !== "?" ? " and was the last to hurt it" : ""}.`; }
       case "gap": return `It missed part of round ${l.r}.`;
