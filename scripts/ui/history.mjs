@@ -6,6 +6,7 @@ import { esc } from "../journal.mjs";
 import { historyHTML, historyOf, journalHTML, namer, notebooksHTML } from "../history.mjs";
 import { notebookOf, runnerName } from "../fight.mjs";
 import { bookPrint } from "../memory.mjs";
+import { MINDS } from "../minds.mjs";
 
 const STYLE = `.leb-history .leb-h-grey{opacity:.6;font-style:italic}.leb-history details.leb-h-nb{border:none;padding:0 0 0 4px;margin:2px 0;font-size:12px}.leb-history details.leb-h-nb ul{margin:2px 0;padding-left:16px}.leb-history .window-content{overflow-y:auto;padding:6px 10px}.leb-history .leb-h-top{display:flex;gap:6px;align-items:center;margin-bottom:6px}.leb-history .leb-h-top span{flex:1;opacity:.8}.leb-history h3{margin:10px 0 4px;border-bottom:1px solid #0004}.leb-history details{border:1px solid #0003;border-radius:4px;padding:3px 7px;margin:4px 0}.leb-history details.leb-h-cur{border-color:#4caf50}.leb-history summary{cursor:pointer}.leb-history .leb-h-plan{margin:4px 0}.leb-history ol,.leb-history ul{margin:2px 0 4px 18px;padding:0}.leb-history .leb-h-why{opacity:.75;font-style:italic}.leb-history .leb-h-res{opacity:.95}.leb-history .leb-h-by{opacity:.65;font-size:.9em}.leb-history .leb-h-warn,.leb-history .leb-h-stall,.leb-history .leb-h-end{color:#e07050}.leb-history .leb-h-stall{color:#e0a030}.leb-history .leb-h-press{opacity:.7;list-style:"⏵ "}.leb-history .leb-h-note{color:#c08040}.leb-history .leb-h-gm{opacity:.65;margin:3px 0}.leb-history .leb-h-card{margin-left:4px;cursor:pointer}.leb-history hr.leb-h-sep{margin:6px 0;border-color:#0003}.chat-message.leb-h-flash{outline:2px solid #e0a030}`;
 
@@ -64,7 +65,7 @@ function notebooks(combat) {
   const labels = combat.getFlag(ID, "turns")?.labels ?? {}, n = namer(labels, Object.fromEntries(combat.scene?.tokens.map(t => [t.id, t.name]) ?? []));
   return Object.keys(combat.getFlag(ID, "notebook") ?? {}).map(id => { const tok = combat.scene?.tokens.get(id), nb = tok ? notebookOf(combat, id) : null; if (!nb) return null;
     const words = x => `${n.named(x.text)}${x.sure === false ? " (unsure)" : ""}${x.by === "gm" ? " (the GM's line)" : ""}`;
-    return { name: tok.name, mind: nb.mind, sent: [...nb.remembers.map(words), ...nb.allies.map(x => `Ally: ${n.named(x.text)}`)], unused: nb.unused.map(words), crossed: nb.crossed.map(words), side: nb.side }; }).filter(Boolean);
+    return { name: tok.name, mind: MINDS[nb.mind]?.label ?? nb.mind, sent: [...nb.remembers.map(words), ...nb.allies.map(x => `Ally: ${n.named(x.text)}`)], unused: nb.unused.map(words), crossed: nb.crossed.map(words), side: nb.side }; }).filter(Boolean);
 }
 /** What the saved page was made from: many writes don't move a request's `since` (saves, notes, presses), and the server clock restarts with the server,
     so a time can't say whether anything changed (found by the review). A short hash of the requests can. */

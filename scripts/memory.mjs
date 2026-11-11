@@ -33,7 +33,7 @@ const cap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
 const SHOWY = ["fire", "cold", "electricity", "acid", "sonic", "force", "mental", "poison", "vitality", "void", "spirit", "light", "darkness", "fear", "healing", "illusion", "water", "earth", "air", "wood", "metal", "plant", "sleep", "summon", "teleportation", "polymorph", "curse", "death"];
 export function spellWords({ traits = [], area = null, attack = false, save = null } = {}) {
   const seen = SHOWY.filter(t => traits.includes(t)).slice(0, 3), shape = area?.type && area?.value ? `in a ${Number(area.value)}-foot ${String(area.type).replace(/[^a-z]/gi, "")}` : null;
-  const how = attack ? "aimed at one creature" : save && !shape ? "that one creature had to resist" : null;
+  const how = attack ? "aimed at one creature" : save && !shape && !traits.includes("healing") ? "that one creature had to resist" : null;
   return [seen.length ? seen.join(" and ") : "magic of a kind it couldn't tell", shape ?? how].filter(Boolean).join(", ").slice(0, DEED_MAX);
 }
 
@@ -107,7 +107,7 @@ export function render(book, { rung = 3, since = 0 } = {}) {
     switch (g.kind) {
       case "gm": return l.text;
       case "hurt": { const worst = Math.max(...g.lines.map(x => x.s ?? 1)), bad = g.lines.filter(x => (x.s ?? 1) === 3).length;
-        const who = l.p ? `Its own ${l.p} damage that keeps on` : g.id === "?" ? "Something (unsure what)" : l.a;
+        const who = l.p ? `Persistent ${l.p} damage` : g.id === "?" ? "Something (unsure what)" : l.a;
         const how = n === 1 ? (worst === 3 ? "hurt it badly" : worst === 2 ? "hurt it" : "scratched it") : `hurt it ${times(n)}${bad ? `, badly ${times(bad)}` : ""}`;
         return `${who} ${how}${hurters.size > 1 && l.a === lastHurt && !l.p && g.id !== "?" ? " and was the last to hurt it" : ""}.`; }
       case "gap": return `It missed part of round ${l.r}.`;
@@ -124,7 +124,7 @@ export function render(book, { rung = 3, since = 0 } = {}) {
       default: return ""; } };
   /* most useful first: her lines, who hurt it, what failed, healers and casters, the finer things, gaps; the newest of each kind first */
   const order = ["gm", "hurt", "miss", "saved", "nothing", "heal", "cast", "reactive", "block", "weak", "resist", "immune", "gap"];
-  const ranked = groups.map(g => ({ kind: g.kind, keys: g.keys, text: text(g), by: g.kind === "gm" ? "gm" : "module", sure: !g.lines.some(l => l.sure === 0), last: g.keys.at(-1) })).filter(g => g.text)
+  const ranked = groups.map(g => ({ kind: g.kind, keys: g.keys, text: g.kind === "gm" ? text(g) : cap(text(g)), by: g.kind === "gm" ? "gm" : "module", sure: !g.lines.some(l => l.sure === 0), last: g.keys.at(-1) })).filter(g => g.text)
     .sort((x, y) => order.indexOf(x.kind) - order.indexOf(y.kind) || (x.last < y.last ? 1 : -1));
   const usable = ranked.filter(g => canUse(g.kind, rung)), remembers = usable.slice(0, SEND_MAX), unused = [...ranked.filter(g => !canUse(g.kind, rung)), ...usable.slice(SEND_MAX)];
   /* allies' deeds since its last turn: the latest of each ally, oldest ally first */

@@ -2758,7 +2758,7 @@ const keepsBook = tok => runnable(tok) && !tok.actor?.hasPlayerOwner;
 const awake = tok => !!tok?.actor && !tok.getFlag(ID, "escaped") && !isDeadNow(tok.actor) && !["unconscious", "dying"].some(c => tok.actor.hasCondition?.(c));
 /** When a monster's last turn began, for "its allies' deeds since its last turn": during its own turn the turn before this one, otherwise this one. */
 const deedsSince = (combat, tokenId) => { const m = turns(combat).nbTurn?.[tokenId] ?? [0, 0]; return combat.combatant?.tokenId === tokenId ? (m[0] ?? 0) : (m[1] ?? 0); };
-async function markTurn(combat) { const id = combat.combatant?.tokenId; if (!id || !combat.started) return; const was = turns(combat).nbTurn?.[id] ?? [0, 0]; await saveTurns(combat, { [`nbTurn.${id}`]: [was[1] ?? 0, Date.now()] }); }
+async function markTurn(combat) { hpBaseline(combat); const id = combat.combatant?.tokenId; if (!id || !combat.started) return; const was = turns(combat).nbTurn?.[id] ?? [0, 0]; await saveTurns(combat, { [`nbTurn.${id}`]: [was[1] ?? 0, Date.now()] }); }
 /** Its side's tally: itself and its allies in this fight, counted as standing, down, or fled (an escaped monster no longer in the tracker). */
 function sideOf(combat, tok) {
   const mine = t => t.id === tok.id || !!t.actor?.isAllyOf?.(tok.actor), inFight = combat.combatants.filter(c => c.token && mine(c.token));
@@ -2806,6 +2806,7 @@ function noteEvent(combat, event, actorTok = null, targetTok = null) {
 const gapAt = new Map();
 /** The runner was away (a reload, another scene on its page): every notebook says it missed part of this round, instead of silence (review 2). */
 function noteGap(combat) {
+  hpBaseline(combat);
   if (!isRunner() || !combat?.started || gapAt.get(combat.id) === combat.round) return;
   gapAt.set(combat.id, combat.round);
   booked(() => writeLines(combat, witnessLines({ kind: "gap" }, combat.combatants.filter(c => c.token && keepsBook(c.token) && awake(c.token)).map(c => ({ id: c.tokenId })), { round: combat.round, at: Date.now() })));
@@ -2813,8 +2814,9 @@ function noteGap(combat) {
 const fightOn = sceneId => game.combats.find(c => c.started && c.scene?.id === sceneId) ?? null;
 /** The token a card's actor uuid means: its own token when the uuid names one, else the linked actor's token on the fight's map. */
 const tokenByUuid = (scene, uuid) => { const u = String(uuid ?? ""), t = /Token\.([A-Za-z0-9]+)/.exec(u); if (t) return scene.tokens.get(t[1]) ?? null; const a = /Actor\.([A-Za-z0-9]+)/.exec(u); return a ? (scene.tokens.find(x => x.actorLink && x.actorId === a[1]) ?? scene.tokens.find(x => x.actorId === a[1]) ?? null) : null; };
-/* when each creature's last damage-taken card came, so an HP drop with no card can be told apart */
-const cardAt = new Map();
+/* when each creature's last damage-taken card came, so an HP drop with no card can be told apart; and the HP this page last saw for each */
+const cardAt = new Map(), hpSeen = new Map();
+const hpBaseline = combat => { for (const c of combat?.combatants ?? []) if (c.token?.actor && !hpSeen.has(c.tokenId)) hpSeen.set(c.tokenId, hpNow(c.token)); };
 /** A chat card that says something happened in a fight (the source table in docs/features/memory.md). */
 export function onMemoryCard(message) {
   if (!isRunner()) return;
@@ -2857,8 +2859,12 @@ export function onMemoryUpdate(message, change) {
 }
 /** An HP drop: if no damage-taken card comes for that creature, nobody knows what did it (HP typed by hand): "something hurt it, unsure what". */
 export function onMemoryHp(actor, change, options) {
-  if (!isRunner()) return; const taken = Number(options?.damageTaken) || 0; if (taken <= 0 || !foundry.utils.hasProperty(change ?? {}, "system.attributes.hp")) return;
+  if (!isRunner() || !foundry.utils.hasProperty(change ?? {}, "system.attributes.hp")) return;
   const combat = game.combats.find(c => c.started && c.combatants.some(x => x.actor === actor)), tok = combat?.combatants.find(x => x.actor === actor)?.token; if (!tok || !keepsBook(tok)) return;
+  /* how much: PF2e's own figure when the update carries one (a card's damage, and a linked actor's hand edit), else against the HP this page last
+     saw for it (an unlinked token's hand edit carries none: seen live in 0.25.0's test) */
+  const now = hpNow(tok), was = hpSeen.get(tok.id); hpSeen.set(tok.id, now);
+  const taken = Number(options?.damageTaken) > 0 ? Number(options.damageTaken) : was != null ? was - now : 0; if (taken <= 0) return;
   const at = performance.now();
   setTimeout(() => { if ((cardAt.get(tok.id) ?? -1e9) >= at - 500 || !game.combats.get(combat.id)?.started || !awake(tok)) return;
     booked(() => writeLines(combat, [{ id: tok.id, line: { k: "hurt", s: severity(taken, actor.hitPoints?.max ?? 0), sure: 0, r: combat.round, at: Date.now() } }])); }, HP_WAIT);
@@ -2902,7 +2908,7 @@ export async function rememberAdd(combat, tokenId, text) {
   const conv = previewRemember(combat, tokenId, text); if (!conv.text) throw new Error("Write the line first.");
   const bad = noteRefusal(conv, tok.name); if (bad) throw new Error(bad);
   const key = lineKey(Date.now(), 0, foundry.utils.randomID(3));
-  await combat.update({ [`flags.${ID}.notebook.${tokenId}.${key}`]: { ...gmLine(conv.text, { round: combat.round, at: Date.now() }), user: game.user.name } }, { render: false, [ID]: { quiet: true } });
+  await combat.update({ [`flags.${ID}.notebook.${tokenId}.${key}`]: gmLine(conv.text, { round: combat.round, at: Date.now() }) }, { render: false, [ID]: { quiet: true } });
   await touchTurn(combat, tokenId); return key;
 }
 /** The GM crosses lines out (or puts them back): a field on each line, so the runner's writes and hers never collide (review 7). */
