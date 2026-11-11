@@ -37,7 +37,7 @@
     }
   ],
   "finishList": [
-    "claude/lythara-encounter-builder.md (what changed, what was verified)",
+    "plan/encounter-builder-history.md in the private plan repo: the plan's \"is built\" paragraph that this release replaces moves there (the project doc claude/lythara-encounter-builder.md is the closed log up to 0.23.0: never written to)",
     "the lythara-encounter-builder skill card, only if the one-page skill text changed",
     "claude/foundry-version-baseline.md if the installed version changed",
     "claude/docs-index.md: Last checked for every doc touched, a row for any new doc",
@@ -64,7 +64,7 @@
     },
     "where": [
       "claude/docs-index.md (where each fact lives)",
-      "claude/lythara-encounter-builder.md (history)",
+      "history: plan/encounter-builder-history.md in the private plan repo (from 0.24.0); claude/lythara-encounter-builder.md (closed log, up to 0.23.0)",
       "docs/features/<name>.md (`guide` prints what a change needs)"
     ]
   },
