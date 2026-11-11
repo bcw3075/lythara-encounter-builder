@@ -4,9 +4,12 @@ import { BuildApp, askClear, askReplace } from "./ui/build.mjs";
 import { TurnsApp } from "./ui/turns.mjs";
 import { HistoryApp, onPreDeleteCombat, saveHistory } from "./ui/history.mjs";
 import { onReactionPrompt } from "./ui/react.mjs";
+import { MindsApp, openLibrary, redrawLibrary } from "./ui/minds.mjs";
+import { LINES, MIND_SCHEMA } from "./minds.mjs";
+import { dropLibraryCache, dropOwn, giveOwn, kindFacts, libraryEntries, libraryExport, libraryGet, libraryImport, libraryPut, libraryRemove, mindLayers, mindOf, mindRows, rowProfile, setLines } from "./library.mjs";
 import { doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
 
-const CONTROL = "encounters", apps = new Map(); let turnsApp = null, historyApp = null, historyTimer = null;
+const CONTROL = "encounters", apps = new Map(), mindsApps = new Map(); let turnsApp = null, historyApp = null, historyTimer = null;
 /* the history window fills in live; many flag writes come in a burst during a turn, so one redraw per quarter second */
 const redrawHistory = () => { if (!historyApp?.rendered || historyTimer) return; historyTimer = setTimeout(() => { historyTimer = null; if (historyApp?.rendered) historyApp.render(); }, 250); };
 const openHistory = () => { historyApp ??= new HistoryApp(); historyApp.render(true); };
@@ -27,6 +30,10 @@ Hooks.once("init", () => {
   game.settings.register(ID, "brainLaunch", { scope: "world", config: false, type: String, default: "", onChange: () => { redrawTurns(); } });
   game.settings.register(ID, "treasure", { scope: "world", config: false, type: Object, default: { manual: {}, builds: {} } });
 });
+/* Monster Minds (0.24.0): one window per scene; it redraws when the scene's brief or a token's own profile changes, unless she is in the middle of an edit */
+function openMinds(scene = canvas.scene) { if (!scene || !game.user.isGM) return null; let app = mindsApps.get(scene.id); if (!app) { app = new MindsApp(scene); mindsApps.set(scene.id, app); } app.render(true); return app; }
+const redrawMinds = scene => { const app = scene && mindsApps.get(scene.id); if (app?.rendered && !app.dirty) app.render(); };
+const onLibraryPage = page => { if (!page?.parent?.getFlag?.(ID, "mindsLibrary")) return; dropLibraryCache(); redrawLibrary(); for (const app of mindsApps.values()) if (app.rendered && !app.dirty) app.render(); };
 function openBuild() { const scene = canvas.scene; if (!scene) return; apps.get(scene.id)?.close?.(); const app = new BuildApp(scene); apps.set(scene.id, app); app.render(true); }
 const guard = fn => () => { const s = canvas.scene; if (!s) return; fn(s).catch(e => { ui.notifications.error(e.message); console.error(e); }); };
 Hooks.on("getSceneControlButtons", controls => {
@@ -37,6 +44,8 @@ Hooks.on("getSceneControlButtons", controls => {
       build: { name: "build", title: "Build Encounter on this map", icon: "fa-solid fa-dragon", button: true, order: 2, onChange: () => openBuild() },
       replace: { name: "replace", title: "Re-place the build around the party", icon: "fa-solid fa-people-arrows", button: true, order: 3, onChange: guard(askReplace) },
       turns: { name: "turns", title: "Monster Turns", icon: "fa-solid fa-list-check", button: true, order: 3.5, onChange: () => { turnsApp ??= new TurnsApp(); turnsApp.render(true); } },
+      minds: { name: "minds", title: "Monster Minds", icon: "fa-solid fa-brain", button: true, order: 3.7, onChange: () => { openMinds(); } },
+      library: { name: "library", title: "Minds Library", icon: "fa-solid fa-book", button: true, order: 3.8, onChange: () => { openLibrary(); } },
       journal: { name: "journal", title: "Open this build's journal", icon: "fa-solid fa-book-open", button: true, order: 4, onChange: () => { const id = canvas.scene?.getFlag(ID, "build")?.entry; const e = id && game.journal.get(id); if (e) e.sheet.render(true); else ui.notifications.info("This map has no build."); } },
       clear: { name: "clear", title: "Clear this build", icon: "fa-solid fa-trash", button: true, order: 5, onChange: guard(askClear) }
     } };
@@ -49,6 +58,7 @@ Hooks.on("canvasReady", c => { markReady(c.scene?.id); redrawTurns(); });
 Hooks.on("deleteCombat", combat => { untickParty(combat).catch(e => console.warn(`${ID} | untick`, e)); });
 for (const h of ["createCombat", "deleteCombat", "createCombatant", "updateCombatant", "deleteCombatant", "deleteToken"]) Hooks.on(h, () => { redrawTurns(); });
 /* a brief sent from a chat shows up in an open window */
+Hooks.on("updateScene", (scene, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}`)) redrawMinds(scene); });
 Hooks.on("updateScene", (scene, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}.brief`) && !scene.getFlag(ID, "build")) { const app = apps.get(scene.id); if (app?.rendered) { app.loadBrief(); app.render(); } } });
 /* the party landing beside a hidden monster is worth a word; nothing moves on its own */
 Hooks.on("createToken", (tok, opts, userId) => { if (game.users.activeGM?.id !== game.user.id || !tok.parent?.getFlag(ID, "build") || !tok.isOwner) return; if (!game.actors.party?.members.some(m => m.id === tok.actorId)) return; setTimeout(() => { for (const w of nextToParty(tok.parent)) ui.notifications.warn(w); }, 200); });
@@ -78,7 +88,11 @@ Hooks.on("updateCombat", (combat, change) => { if (foundry.utils.hasProperty(cha
 /* a turn handed on with no `updateCombat` (the current combatant deleted, 0.24.0): `combatTurnChange` on the pages core tells, `deleteCombatant` on every page */
 Hooks.on("combatTurnChange", combat => { onTurnHandedOn(combat); });
 Hooks.on("deleteCombatant", combatant => { onTurnHandedOn(combatant.parent); });
-Hooks.on("updateToken", (tok, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}`)) redrawTurns(); onTokenFlag(tok, change); });
+Hooks.on("updateToken", (tok, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}`)) { redrawTurns(); redrawMinds(tok.parent); } onTokenFlag(tok, change); });
+/* monster minds (0.24.0): the library is pages of one GM-only journal, read from a cache; the windows follow the scene's brief and tokens */
+for (const h of ["createJournalEntryPage", "updateJournalEntryPage", "deleteJournalEntryPage"]) Hooks.on(h, page => { onLibraryPage(page); });
+Hooks.on("deleteJournalEntry", entry => { if (entry.getFlag(ID, "mindsLibrary")) { dropLibraryCache(); redrawLibrary(); } });
+for (const h of ["createToken", "deleteToken"]) Hooks.on(h, tok => { redrawMinds(tok.parent); });
 Hooks.on("userConnected", () => { redrawTurns(); });
 /* the history: opened from Monster Turns; at End Encounter a GM is asked Save or Discard. This pre-hook returns false only to cancel that one delete
    (it then deletes again once asked); otherwise it returns nothing, like every other handler here. */
@@ -90,5 +104,8 @@ Hooks.once("ready", () => {
   onRunnerReady().catch(e => console.error(`${ID} | runner`, e));
   watchStalls();
   game.socket.on(`module.${ID}`, (data, senderId) => { onSocket(data, senderId); });
-  game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty, fight: { current: currentRequest, busy, reactions: openReactions, doReaction, skipReaction, perceived, submitPlan, doIt, hold, playMyself, askAngel, changePlan, rollFor, waitForEvent, checkPlan: checkOnly, reportFailure, state: fightState, saveHistory, openHistory } };
+  game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty, fight: { current: currentRequest, busy, reactions: openReactions, doReaction, skipReaction, perceived, submitPlan, doIt, hold, playMyself, askAngel, changePlan, rollFor, waitForEvent, checkPlan: checkOnly, reportFailure, state: fightState, saveHistory, openHistory },
+    /* monster minds (0.24.0): how a chat reads and writes profiles. `by: "angel"` never replaces a line whose words are the GM's unless `force` */
+    minds: { schema: MIND_SCHEMA, lines: LINES, rows: mindRows, profile: rowProfile, layers: mindLayers, of: mindOf, kindOf: kindFacts, set: setLines, giveOwn, dropOwn, open: openMinds, openLibrary,
+      library: { list: libraryEntries, get: libraryGet, put: libraryPut, remove: libraryRemove, export: libraryExport, import: libraryImport } } };
 });
