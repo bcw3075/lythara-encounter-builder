@@ -44,7 +44,7 @@ Building an encounter from a brief: read the map, place monsters, treasure and j
 - `prepare` creates nothing, and ignores the tokens and treasure of the build it would replace. `place` clears the old build first.
 - **Tokens are unlinked and the imported actors are copies.** One world actor per creature and adjustment per build, in the "Encounter Builder" folder, never a compendium original. Adjustments use `applyAdjustment` on the copy. Items and coins go on the token's own actor, so each creature carries its own. Conditions for asleep use the token's actor too.
 - **A cache** is a loot actor with a core-hidden token. PF2e sets loot actors to LIMITED for all whatever is asked for, which is enough for a player to open it once revealed. Visioner's per-token Stealth DC isn't set by the builder yet.
-- **The journal** has no ownership by default. GM truth goes in `section.secret`. Tactics is a page of its own because monster turns will read it each turn, so editing it mid-fight changes the fight. With no brief text it holds only the maths and creature list: it makes up no story.
+- **The journal** has no ownership by default. GM truth goes in `section.secret`. There is no Tactics page since 0.24.0: how a monster behaves is its mind (`docs/features/minds.md`), and a row's `tactics` text becomes that kind's Notes for the encounter. With no brief text it holds only the maths and creature list: it makes up no story.
 - **Map notes** only where the brief asks, each with its own page. **A clue players may find has OBSERVER on its page, not LIMITED:** core's `Note#_canView` refuses a page with exact LIMITED unless it's an image, and a double-click then does nothing (tested 14.370). LIMITED on the journal itself would list it in their sidebar, so the journal stays at none and an `activateNote` hook shows the page in a small window, with its @Check links working.
 - **Foundry's redraw rule:** never create placeables while a client redraws (see Survey Sheet's DEVELOPING.md). `canvasSettled` waits for `canvasReady` when the GM's canvas is on that scene and a draw just happened.
 - **Survey Sheet's redraw** removes only its own `enc` documents, and its Extend shifts everything else, so builder documents move with the map.
@@ -77,7 +77,7 @@ GM only, from the "Encounters" control group. **The mod can't read Notion, and c
 |---|---|
 | **Ask Angel** (main route) | The dialog sends the map summary as a `design` event through the same wait route as turns. Claude follows lythara-campaign-workflows from Notion and shows Rhea the draft in chat. Once she agrees, it sends the brief. Until the wait route exists (step 3), Claude submits through `run_script` |
 | **By hand** | Editable rows: creature (compendium search), count, weak or elite, role. Always works with no chat open |
-**The brief holds:** name, beat, and the workflow's why here / what they want / what they were doing / how they retreat; **mood** (ambush, lair, patrol, chase, standoff); creatures (UUID, count, adjustment, role, tactics text, Angel-runs default, Opus suggestion); starting state (alert, hidden, asleep) and anchors; treasure list; journal text by layer (GM truth, what locals believe, what the party can learn).
+**The brief holds:** name, beat, and the workflow's why here / what they want / what they were doing / how they retreat; **mood** (ambush, lair, patrol, chase, standoff); creatures (UUID, count, adjustment, role, this encounter's mind lines and single monsters' own profiles (`mind`, `own`; an old `tactics` text is read as the Notes line), `band` and `leader` (stored for the group releases), Angel-runs default, Opus suggestion); starting state (alert, hidden, asleep) and anchors; treasure list; journal text by layer (GM truth, what locals believe, what the party can learn).
 **The maths, fresh each time**
 - `game.pf2e.gm.calculateXP(level, 4, levels, hazards, {})`: four level −1 creatures against a level 1 party of 4 is 80, moderate [LIVE].
 - A figure written in Notion is a claim: if it differs from the calculation, the dialog shows both.
@@ -107,8 +107,8 @@ Scores each square for each role, then places groups together:
 6. **Where it goes:** on creatures that would carry it (Lootable NPCs is on [LIVE]), or a flagged loot actor at an anchor. A cache can be hidden with Visioner's Stealth DC on loot tokens (on in PF2 Test [LIVE]). Not Droppeth, which uses the GM's viewed scene [DOC].
 **Journal and map notes**
 One JournalEntry per build, in a mod-owned folder, default ownership none, linked as the scene's journal.
-- **Pages:** Overview (threat maths, setup), **Tactics**, What can be learned (by layer), Treasure.
-- **The Tactics page is what the packet reads on each of that monster's turns,** so Rhea can edit tactics mid-fight and change the fight.
+- **Pages:** Overview (threat maths, setup), What can be learned (by layer), Treasure. (A Tactics page until 0.23.0.)
+- **A monster's mind is what the packet carries on each of its turns** (0.24.0), read fresh from the brief and the library, so Rhea can edit it mid-fight in Monster Minds and change the fight.
 - GM-only text goes in `section.secret`, verified absent from a player's page [DOC]. Checks as `@Check` links.
 - Map notes only where the brief asks. GM-only by default. A player-visible clue has **OBSERVER** on its page, not LIMITED: core refuses to view a page at exact LIMITED unless it's an image [LIVE, corrected 2026-11-05]. The module opens the page itself, so the journal stays out of the player's sidebar.
 - With no brief text, it writes only the maths and creature list. It doesn't make up story. Nothing is written to Notion.

@@ -1,7 +1,7 @@
 ---
 feature: packet
 files: [scripts/perceive.mjs]
-functions: [fight.mjs:runnable, fight.mjs:onParty, fight.mjs:kindOf, fight.mjs:nameFor, fight.mjs:hpNow, fight.mjs:tokenOf, fight.mjs:lightOn, fight.mjs:enemiesOf, fight.mjs:sense, fight.mjs:healthWords, fight.mjs:isDeadNow, fight.mjs:wordsFor, fight.mjs:gearOf, fight.mjs:actionsOf, fight.mjs:localize, fight.mjs:tacticsOf, fight.mjs:alliesOf, fight.mjs:buildPacket, fight.mjs:noteWhatTheySense, fight.mjs:perceived, fight.mjs:cantOpen, fight.mjs:packetExtras, fight.mjs:isDown, fight.mjs:conditionWords, fight.mjs:conditionsOn]
+functions: [fight.mjs:runnable, fight.mjs:onParty, fight.mjs:kindOf, fight.mjs:nameFor, fight.mjs:hpNow, fight.mjs:tokenOf, fight.mjs:lightOn, fight.mjs:enemiesOf, fight.mjs:sense, fight.mjs:healthWords, fight.mjs:isDeadNow, fight.mjs:wordsFor, fight.mjs:gearOf, fight.mjs:actionsOf, fight.mjs:localize, fight.mjs:alliesOf, fight.mjs:buildPacket, fight.mjs:noteWhatTheySense, fight.mjs:perceived, fight.mjs:cantOpen, fight.mjs:packetExtras, fight.mjs:isDown, fight.mjs:conditionWords, fight.mjs:conditionsOn]
 dependsOn: [distances]
 since: 0.10.0
 ---
@@ -9,7 +9,8 @@ What a monster perceives: the packet built at the start of its turn, senses, lig
 
 ## Decisions
 - **No PC's name to the thinker, on either side (0.18.0):** only an NPC no player owns goes by its name (`nameFor`); anything else (a character, a familiar, a player's companion, which are often named after their master or given a pet's name) goes as what it is (`kindOf`: ancestry and class, "Human Fighter", or "familiar", "companion", "party member"): as the `name` in `you` when Angel runs a party member the GM plays, and as an ally's `name` when the one acting fights on the party's side. Monsters' names are unchanged.
-- **The party's side gets no Tactics (0.18.0 review):** the build's Tactics page is the GM's plans for the monsters, so `tacticsOf` gives a party member, or an NPC with the party, nothing (before, a token with no group got the whole page).
+- **The party's side gets none of the monsters' minds (0.18.0 review, kept in 0.24.0):** a party member, or an NPC with the party, gets only a profile the GM wrote for it herself (`mindLayers` in library.mjs), never the monsters' library or this encounter's lines.
+- **The mind replaces `you.tactics` (0.24.0, schema 2):** `mind` is the packet's first key after `schema`, the same bytes all fight; its free text goes through the name gate (`docs/features/minds.md`).
 - **A character's sheet (0.18.0 review):** its Strikes are only those PF2e has ready and visible (a stowed weapon isn't; an NPC's Strikes all count, since a Goblin's worn shortbow shoots), and its abilities include its feats that are actions, free actions or reactions (a character's actions are mostly feats). Before 0.18.0 an NPC fighting with the party got its party allies' names in `allies` (found while building the party-member tick).
 - **`you.side: "party"` (0.18.0)** for anything on the party's side (PF2e's `alliance`): a party member the GM plays, or an NPC fighting with the party. The prompt (version 20) tells the thinker what it means. Sides themselves (who is an enemy, who an ally) were already PF2e's `isEnemyOf`/`isAllyOf` from the acting creature, so nothing else changes with the side.
 
@@ -61,11 +62,12 @@ Result per pair: `observed / concealed / hidden / undetected / unnoticed`.
 - **Attacks on what it can't clearly see** [RULES]: concealed DC 5 flat, hidden DC 11, undetected means picking a square, with the check and attack secret and no explanation of a miss. Area effects still hit.
 - **Memory:** `lastSeen`, kept at every turn change for each ticked monster, on the Combat flag. Things done where the monster could see aren't built. **No `reactionReady` field:** a monster regains its reaction at the start of its own turn, so it would always say yes.
 ```json
-{ "schema": 1,
+{ "schema": 2,
+  "mind": { "pick": {"mind":"animal","worksWith":"pack"}, "mind": "Animal", "goesFor": "the wounded; turns on whoever hurt it last", "worksWith": "With its pack", "notes": "…" },
   "you": { "label": "M1", "name": "Dire Wolf", "square": [18,20], "size": "lg", "actionsLeft": 3,
            "hp": "50/50", "speed": 35, "conditions": [],
            "strikes": [{"id":"jaws","name":"Jaws","mod":[12,7,2],"reach":10,"damage":"1d10 + 5 piercing","traits":["reach-10","unarmed"],"effects":["grab","knockdown"]}],
-           "abilities": [{"id":"knockdown","name":"Knockdown","kind":"action","cost":1,"text":"…"}], "tactics": "…from the Tactics page…" },
+           "abilities": [{"id":"knockdown","name":"Knockdown","kind":"action","cost":1,"text":"…"}] },
   "allies": [{ "label":"M2", "name":"Goblin Warrior", "square":[16,19], "healthWord":"Barely Hurt", "conditions":[] }],
   "perceived": [{ "label":"E2", "state":"observed", "square":[12,22], "size":"med", "gear":["Longsword"],
                   "conditions":["prone"], "healthWord":"Seen Better Days", "distance":30, "cover":"none" },
@@ -82,7 +84,7 @@ Record every id below in the release's change record when this feature, or a fea
 **What a monster perceives:**:
 - (pk-5) {live} A party member the GM plays, ticked: its packet has `you.side` "party", its own `name` its ancestry and class (not its name), its allies (the PCs) by label and ancestry and class only, the monsters in `perceived`; scan it for every PC name in the fight.
 - (pk-1) {live} `api.fight.perceived(tokenId, combat)` on the runner shows it with no turn needed, so change one thing and read the states: scene darkness at 0.5 and 0.9 with a creature with no senses, one with low-light, one with darkvision; a light on a target; a solid wall with sound on and off; `vis.setVisibility` hidden, undetected, concealed and back; a core-hidden token; invisible, blinded, dazzled.
-- (pk-2) {live} Scan a real packet for PC names, HP, AC, level, saves and slots outside `you`.
+- (pk-2) {live} Scan a real packet for PC names, HP, AC, level, saves and slots outside `you`, and for a party member's name inside `mind` (0.24.0: a line a GM or Angel wrote goes through the name gate).
 - (pk-3) {live} A real Hide changes it, through Visioner's Apply All.
 - (pk-4) {live} Flat checks: pass, fail, and stopped by the `.step` hook then resumed, with one flat card.
 

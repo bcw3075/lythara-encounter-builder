@@ -178,7 +178,7 @@ export async function place(prep) {
   for (const p of plan.placed) { const c = brief.creatures[p.group], a = actors.get(`${c.uuid}|${c.adjust}`), idx = Number(p.key.split("-")[1]);
     const t = (await a.getTokenDocument({ x: ox + p.i * px, y: oy + p.j * px })).toObject();
     Object.assign(t, { x: ox + p.i * px, y: oy + p.j * px, actorLink: false, hidden: p.state === "hidden", disposition: CONST.TOKEN_DISPOSITIONS.HOSTILE, name: c.count > 1 ? `${a.name} ${idx + 1}` : a.name });
-    foundry.utils.setProperty(t, `flags.${ID}`, { built: buildId, key: p.key, group: p.group, role: p.role, run: c.run, auto: false, model: null, opus: c.opus });
+    foundry.utils.setProperty(t, `flags.${ID}`, { built: buildId, key: p.key, group: p.group, role: p.role, run: c.run, auto: false, model: null, opus: c.opus, band: c.band || null, leader: !!c.leader });   /* band and leader: stored for the group releases, nothing acts on them yet (0.24.0) */
     tokenData.push(t); }
   const made = await scene.createEmbeddedDocuments("Token", tokenData), byKey = new Map(made.map(t => [t.getFlag(ID, "key"), t]));
   for (const t of made) if (plan.placed.find(p => p.key === t.getFlag(ID, "key"))?.state === "asleep") await t.actor.increaseCondition("unconscious");

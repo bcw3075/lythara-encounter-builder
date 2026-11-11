@@ -105,7 +105,7 @@ Hooks.once("ready", () => {
   watchStalls();
   game.socket.on(`module.${ID}`, (data, senderId) => { onSocket(data, senderId); });
   game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty, fight: { current: currentRequest, busy, reactions: openReactions, doReaction, skipReaction, perceived, submitPlan, doIt, hold, playMyself, askAngel, changePlan, rollFor, waitForEvent, checkPlan: checkOnly, reportFailure, state: fightState, saveHistory, openHistory },
-    /* monster minds (0.24.0): how a chat reads and writes profiles. `by: "angel"` never replaces a line whose words are the GM's unless `force` */
+    /* monster minds (0.24.0), `api.minds`: how a chat reads and writes profiles (api.minds.set, api.minds.open, api.minds.library.put and the rest). `by: "angel"` never replaces a line whose words are the GM's unless `force` */
     minds: { schema: MIND_SCHEMA, lines: LINES, rows: mindRows, profile: rowProfile, layers: mindLayers, of: mindOf, kindOf: kindFacts, set: setLines, giveOwn, dropOwn, open: openMinds, openLibrary,
       library: { list: libraryEntries, get: libraryGet, put: libraryPut, remove: libraryRemove, export: libraryExport, import: libraryImport } } };
 });
