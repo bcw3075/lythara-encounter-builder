@@ -141,9 +141,9 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     stage.on("pointerdown", on); document.addEventListener("keydown", key, true); Hooks.on("canvasTearDown", torn); this._endPick = end;
   }
   /** While she types in the Change panel, a redraw waits (the field would be replaced mid-word); it happens when the panel loses focus. */
-  _typing() { const a = document.activeElement; return !!a && !!this.element?.contains(a) && (!!a.closest?.(".leb-edit") || !!a.closest?.(".leb-nbadd input")); }
+  _typing() { const a = document.activeElement; return !!a && !!this.element?.contains(a) && (!!a.closest?.(".leb-edit") || !!a.closest?.(".leb-nb")); }
   render(...args) { if (this.rendered && this._typing()) { this._deferred = true; return this; } return super.render(...args); }
-  async _onClose(options) { this._endPick?.(); this._draft = null; this._deferred = false; return super._onClose?.(options); }   /* the window object is reused when reopened: a draft must not come back with it */
+  async _onClose(options) { this._endPick?.(); this._draft = null; this._deferred = false; this._nbDraft = {}; this._nbPrev = {}; return super._onClose?.(options); }   /* the window object is reused when reopened: a draft must not come back with it */
   /** The Change panel's buttons. Sending never waits for Angel: the card follows the request as usual. */
   async _change(a, c, id, r, el) {
     if (a === "change") { this._draft = { id, fp: planPrint(r), edits: [], note: "" }; return this.render(); }
@@ -195,7 +195,9 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     root.querySelectorAll(".leb-nb [data-nbadd]").forEach(el => { const tid = el.closest("[data-nb]").dataset.nb;
       el.addEventListener("input", () => { this._nbDraft[tid] = el.value; delete this._nbPrev[tid]; });
       el.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); el.closest(".leb-nbadd").querySelector('[data-nbdo="add"]')?.click(); } });
-      el.addEventListener("focusout", () => setTimeout(() => { if (this._deferred && !this._typing()) { this._deferred = false; this.render(); } }, 0)); });
+    });
+    /* focus anywhere in a fold-out holds a redraw back (review 1: a redraw between the press and the release of a click on Add or a cross lost the click); it comes when focus leaves */
+    root.querySelectorAll("details.leb-nb").forEach(d => d.addEventListener("focusout", () => setTimeout(() => { if (this._deferred && !this._typing()) { this._deferred = false; this.render(); } }, 0)));
     root.querySelectorAll(".leb-nb [data-nbdo]").forEach(el => el.addEventListener("click", async ev => { ev.preventDefault(); ev.stopPropagation(); const tid = el.closest("[data-nb]").dataset.nb, a = el.dataset.nbdo, keys = (el.dataset.keys ?? "").split(",").filter(Boolean);
       if (this._nbBusy) return; this._nbBusy = true; el.disabled = true;
       try {

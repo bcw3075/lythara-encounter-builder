@@ -51,10 +51,12 @@ export function witnessLines(event, witnesses = [], stamp = {}) {
     const a = w.actor ?? {}, t = w.target ?? {}, who = whoWords(a.state, a.label);
     if (event.kind === "gap") { put(w, { k: "gap" }); continue; }
     if (event.kind === "damage") {
-      const types = (event.types ?? []).map(damageWord).filter(Boolean), iwr = (event.iwr ?? []).filter(x => damageWord(x.type));
+      const iwr = (event.iwr ?? []).filter(x => damageWord(x.type));
       if (w.isTarget && event.amount > 0) put(w, event.sure === false ? { k: "hurt", s: severity(event.amount, event.max), sure: 0 } : event.persistent ? { k: "hurt", s: severity(event.amount, event.max), p: damageWord(event.persistent) ?? "lasting" } : { k: "hurt", a: event.actor ? who : null, s: severity(event.amount, event.max), ...(event.actor ? {} : { sure: 0 }) });
       /* its own attack came to nothing: something it tried that failed */
-      if (w.isActor && !w.isTarget && event.amount <= 0 && sees(t)) put(w, { k: "nothing", t: t.label, ...(types[0] ? { d: types[0] } : {}) });
+      /* only when the card shows why (an immunity or a resistance took all of it; a shield taking it all is no failure of the attack), and without
+         the damage type: which kind did nothing is the tactician's line below, not a Simple mind's (review 3) */
+      if (w.isActor && !w.isTarget && event.amount <= 0 && iwr.length && sees(t)) put(w, { k: "nothing", t: t.label });
       /* a weakness, resistance or immunity it saw applied to an enemy (Rhea's exception, review 3: words only, from an outcome it perceived) */
       if (!w.isTarget && w.targetIs === "enemy" && sees(t)) for (const x of iwr) { const k = x.category === "weakness" ? "weak" : x.category === "resistance" ? "resist" : x.category === "immunity" ? "immune" : null; if (k) put(w, { k, t: t.label, d: damageWord(x.type) }); }
       continue;
@@ -111,8 +113,8 @@ export function render(book, { rung = 3, since = 0 } = {}) {
       case "gap": return `It missed part of round ${l.r}.`;
       case "miss": return n === 1 ? `It missed ${l.t}.` : `It keeps missing ${l.t}.`;
       case "saved": return n === 1 ? `${l.t} shrugged off its ${l.i ?? "magic"}.` : `${l.t} keeps shrugging off its ${l.i ?? "magic"}.`;
-      case "nothing": return `Its ${l.d ? `${l.d} ` : ""}attack did nothing to ${l.t}.`;
-      case "heal": return n === 1 ? `${l.a} healed ${l.t ?? "the one it was fighting"}.` : `${l.a} keeps healing its side.`;
+      case "nothing": return n === 1 ? `Its attack did nothing to ${l.t}.` : `Its attacks keep doing nothing to ${l.t}.`;
+      case "heal": return n === 1 ? `${l.a} healed ${l.t ?? "itself or someone beside it"}.` : `${l.a} keeps healing its side.`;
       case "cast": return `${l.a} cast ${l.n ? `the spell it knows as ${l.n.replace(/-/g, " ")}` : `a spell: ${l.w}`}${n > 1 ? ` (${times(n)})` : ""}.`;
       case "reactive": return `${l.a} strikes at those who move away from it or lower their guard beside it.`;
       case "block": return `${l.a} blocks blows with a shield.`;
@@ -162,4 +164,4 @@ export function rethinkFor(book, { rung = 3, after = 0 } = {}) {
 }
 
 /** The whole notebooks flag as a short signature, so the history can tell whether what it saved still matches. */
-export function bookPrint(books) { let n = 0, x = 0, last = ""; for (const b of Object.values(books ?? {})) for (const [k, l] of Object.entries(b ?? {})) { if (!l) continue; n++; if (l.x) x++; if (k > last) last = k; } return `${n}.${x}.${last}`; }
+export function bookPrint(books) { let n = 0, x = 0, last = ""; for (const b of Object.values(books ?? {})) for (const [k, l] of Object.entries(b ?? {})) { if (!l) continue; n++; if (l.x) { for (let i = 0; i < k.length; i++) x = (x * 31 + k.charCodeAt(i)) | 0; } if (k > last) last = k; } return `${n}.${x}.${last}`; }
