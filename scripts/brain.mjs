@@ -111,10 +111,19 @@ export function cleanChoice(raw) {
   if (!CHOICE_KINDS.includes(p.choice)) return bad(`"choice" is "repent" or "refuse", not "${text(String(p.choice ?? ""), 30)}".`);
   return { ok: true, choice: p.choice, reason: text(p.reason, 200), seq: Number.isFinite(p.seq) ? p.seq : null };   /* the event's own number, when the thinker passes it back */
 }
-/** What the thinker receives for a choice: the monster's packet as it last was (its mind, its notebook, how the fight stood), and the question. */
+/** The packet a choice goes out with, cut down to what the choice rests on (seen live 2026-11-11: the whole packet again cost about 1,500 tokens a
+    choice): its mind, band and notebook, its own HP and conditions, and who it perceives and fights beside with their health words. */
+export function choicePacket(p) {
+  if (!p) return null;
+  const who = x => ({ label: x.label, ...(x.name ? { name: x.name } : {}), ...(x.state ? { state: x.state } : {}), ...(x.healthWord ? { healthWord: x.healthWord } : {}), ...(x.distance != null ? { distance: x.distance } : {}), ...(x.conditions?.length ? { conditions: x.conditions } : {}) });
+  return { schema: p.schema, ...(p.mind ? { mind: p.mind } : {}), ...(p.band ? { band: p.band } : {}), ...(p.bandNow ? { bandNow: p.bandNow } : {}), ...(p.notebook ? { notebook: p.notebook } : {}),
+    you: { label: p.you?.label ?? null, name: p.you?.name ?? null, hp: p.you?.hp ?? null, conditions: p.you?.conditions ?? [], ...(p.you?.side ? { side: p.you.side } : {}) },
+    allies: (p.allies ?? []).map(who), perceived: (p.perceived ?? []).filter(x => x?.label).map(who), round: p.round ?? null };
+}
+/** What the thinker receives for a choice: the question, and the monster's packet as it last was, cut down (`choicePacket`). */
 export function choiceOut(ev, req, packet = null) {
   return { seq: ev.seq, kind: "choice", combatId: ev.combatId, requestId: ev.requestId, round: req.round, monster: packet?.you?.label ?? null,
-    choice: { about: req.choice.kind, on: req.choice.ally ?? null, words: req.choice.words, answers: CHOICE_KINDS, answerWith: `{ "choice": "repent" | "refuse", "reason": "a few words", "seq": ${ev.seq} } where a plan would go` }, packet };
+    choice: { about: req.choice.kind, on: req.choice.ally ?? null, words: req.choice.words, answers: CHOICE_KINDS, answerWith: `{ "choice": "repent" | "refuse", "reason": "a few words", "seq": ${ev.seq} } where a plan would go` }, packet: choicePacket(packet) };
 }
 
 /* ---------- stalls (Rhea, 2026-11-08) ---------- */

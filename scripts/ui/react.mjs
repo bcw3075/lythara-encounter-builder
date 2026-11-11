@@ -8,7 +8,8 @@ import { esc } from "../journal.mjs";
 import { answerReaction } from "../fight.mjs";
 
 const ROLLS = ["reactive-strike", "attack-of-opportunity"], open = new Map();
-const STYLE = ".leb-rx .leb-count{opacity:.8}.leb-rx .form-footer{flex-wrap:wrap}";
+/* a group's buttons are one under the other: three names side by side wrapped inside their buttons (seen live, 2026-11-11) */
+const STYLE = ".leb-rx .leb-count{opacity:.8}.leb-rx .form-footer{flex-wrap:wrap}.leb-rx.leb-many .form-footer{flex-direction:column;align-items:stretch}.leb-rx.leb-many .form-footer button{width:100%;flex:0 0 auto}";
 /** "ask" and "close" from the runner. A close can name one row (its creature's reaction went on another row). */
 export function onReactionPrompt(data) {
   if (!data || game.user.isGM) return;
@@ -31,7 +32,7 @@ async function show(data, group, rows) {
     : (x.lines?.length ? x.lines : [x.words]).map(w => `<p>${esc(w)}</p>`).join("");
   const buttons = many ? [...rows.map((r, n) => ({ action: `react:${n}`, label: `React: ${r.label ?? r.name}`, icon: "fa-solid fa-bolt", default: n === 0 })), { action: "pass", label: "Pass", icon: "fa-solid fa-xmark" }]
     : [{ action: "react", label: x.labels?.react ?? "React", icon: "fa-solid fa-bolt", default: !x.labels }, { action: "pass", label: x.labels?.pass ?? "Pass", icon: x.labels ? "fa-solid fa-bolt" : "fa-solid fa-xmark", default: !!x.labels }];
-  const ask = new D({ window: { title: x.reaction }, classes: ["leb-rx"], position: { width: x.lines?.length || many ? 440 : 360 },
+  const ask = new D({ window: { title: x.reaction }, classes: many ? ["leb-rx", "leb-many"] : ["leb-rx"], position: { width: x.lines?.length || many ? 440 : 360 },
     content: `${body}${data.until ? `<p class="leb-count">${x.labels ? `${esc(x.labels.pass)} in` : "It passes in"} <b>${left()}</b> s.</p>` : ""}`,
     buttons,
     submit: async result => { answered = true;

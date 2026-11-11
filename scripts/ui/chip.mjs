@@ -6,7 +6,10 @@ import { ID } from "../builder.mjs";
 import { esc } from "../journal.mjs";
 import { partyReactors, setReactionUsed } from "../fight.mjs";
 
-const EL = "leb-chip", SETTING = "chipPlace", DEFAULT = { left: 130, top: 12 }, DRAG_PX = 4;
+const EL = "leb-chip", SETTING = "chipPlace", DRAG_PX = 4;
+/* where it starts: the top of the map, just left of the sidebar, clear of the scene tabs, PF2e HUD's bar and tracker and the hotbar (seen on a
+   player's page, 2026-11-11: the top-left corner sat on the scene tabs) */
+const startPlace = el => { const sb = document.getElementById("sidebar")?.getBoundingClientRect(), edge = sb && sb.left > 300 ? sb.left : window.innerWidth; return { left: edge - (el.offsetWidth || 180) - 12, top: 12 }; };
 const STYLE = `#${EL}{position:fixed;z-index:60;display:flex;flex-direction:column;gap:3px;padding:4px 6px 4px 4px;border-radius:6px;background:#1c1c1ce6;border:1px solid #0009;box-shadow:0 0 6px #000a;cursor:grab;user-select:none;touch-action:none;font-size:13px;color:#eee}#${EL}.leb-drag{cursor:grabbing;opacity:.85}#${EL} button{display:flex;align-items:center;gap:6px;width:auto;height:auto;min-height:24px;line-height:1.2;margin:0;padding:2px 8px;border:1px solid #fff3;border-radius:4px;background:#2e7d32;color:#fff;cursor:pointer;white-space:nowrap}#${EL} button.leb-used{background:#555;color:#ccc}#${EL} button.leb-used .leb-chip-s{text-decoration:line-through}#${EL} button.leb-off{background:#444;color:#aaa}#${EL} .leb-chip-g{opacity:.6;font-size:11px;padding:0 2px}`;
 export function registerChip() { game.settings.register(ID, SETTING, { scope: "client", config: false, type: Object, default: {} }); }
 /** The player's own characters in a running fight: [{ combat, id, name, used, delaying }]. */
@@ -28,7 +31,7 @@ export function drawChip() {
     const tip = x.delaying ? "A Delaying character can't use reactions until it is back in the initiative order." : x.used ? `Used${x.used.reaction ? `: ${x.used.reaction}` : ""}. Click to undo. It comes back when your turn begins.` : "Click when you use your reaction. It comes back when your turn begins.";
     return `<button type="button" class="${cls}" data-combat="${esc(x.combat)}" data-token="${esc(x.id)}" data-used="${x.used ? 1 : 0}" ${x.delaying ? "data-off=1" : ""} title="${esc(tip)}"><i class="fa-solid ${x.used || x.delaying ? "fa-ban" : "fa-bolt"}"></i><span>${list.length > 1 ? `${esc(x.name)}: ` : ""}<span class="leb-chip-s">${state}</span></span></button>`; }).join("");
   /* a redraw keeps the chip where it is (a fight update in the middle of a drag must not send it back: review 15) */
-  place(el, fresh ? { ...DEFAULT, ...(game.settings.get(ID, SETTING) ?? {}) } : { left: el.offsetLeft, top: el.offsetTop });
+  place(el, fresh ? { ...startPlace(el), ...(game.settings.get(ID, SETTING) ?? {}) } : { left: el.offsetLeft, top: el.offsetTop });
 }
 /* a press that doesn't travel is a click on the row under it; one that does moves the chip, and where it is let go is remembered */
 function wire(el) {
