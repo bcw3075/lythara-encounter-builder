@@ -150,3 +150,17 @@ pf2e-hud.delayed
 setInitiativeFromDrop
 flags.pf2e-hud.delayed
 game.world.lastPlayed
+
+# PF2e and Toolbelt card fields quoted in the fight memory source table (docs/features/memory.md; probed live 2026-11-11)
+context.target.token
+context.origin.token
+flags.pf2e.origin.actor
+flags.pf2e.origin
+flags.pf2e.casting
+context.action
+cast-a-spell
+context.sourceType
+flags.pf2e-toolbelt.targetHelper.saveVariants.null.saves
+appliedDamage.isHealing
+appliedDamage.persistent
+appliedDamage.shield

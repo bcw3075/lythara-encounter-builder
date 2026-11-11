@@ -18,6 +18,7 @@ The brain interface: events with a cursor and a generation, plans handed in from
 - **`suggestOpus`:** spellcasters, many abilities, or a level well above the party. Stored here, used at step 5.
 
 ## How it works
+- **Prompt version 25, packet schema 3 (0.25.0):** the prompt explains the packet's `notebook` (what it remembers, its allies' deeds, its side's tally, what "(unsure)" and "someone it couldn't see" mean, and that it never overrides the order of who wins); `docs/features/memory.md`.
 - **Waiting for a reaction (0.20.0):** `stallOf` counts a request with an open `react` as a wait on a person (state `reacting`, 3 minutes), whatever its step's state.
 - **Prompt version 24, packet schema 2 (0.24.0):** the monster's mind: what each line means, the five Minds and the four ways of working with others (their words come from `minds.mjs`), "never plan above its Mind", who wins when they pull apart, and to ask for the hello again after a summarized chat. "Play the monster as its tactics and nature say" is gone with `you.tactics`.
 - **Prompt version 23 (0.20.0):** the thinker is told that players are asked for their reactions (which of its actions draw them, and that a Step out of reach avoids Reactive Strike), replacing "plan as if it did".

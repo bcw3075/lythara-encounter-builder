@@ -3,10 +3,11 @@
    "Monster Turns history", one entry per game night (the date), one page per fight. At End Encounter a GM is asked Save or Discard. GM only. */
 import { ID } from "../builder.mjs";
 import { esc } from "../journal.mjs";
-import { historyHTML, historyOf, journalHTML } from "../history.mjs";
-import { runnerName } from "../fight.mjs";
+import { historyHTML, historyOf, journalHTML, namer, notebooksHTML } from "../history.mjs";
+import { notebookOf, runnerName } from "../fight.mjs";
+import { bookPrint } from "../memory.mjs";
 
-const STYLE = `.leb-history .window-content{overflow-y:auto;padding:6px 10px}.leb-history .leb-h-top{display:flex;gap:6px;align-items:center;margin-bottom:6px}.leb-history .leb-h-top span{flex:1;opacity:.8}.leb-history h3{margin:10px 0 4px;border-bottom:1px solid #0004}.leb-history details{border:1px solid #0003;border-radius:4px;padding:3px 7px;margin:4px 0}.leb-history details.leb-h-cur{border-color:#4caf50}.leb-history summary{cursor:pointer}.leb-history .leb-h-plan{margin:4px 0}.leb-history ol,.leb-history ul{margin:2px 0 4px 18px;padding:0}.leb-history .leb-h-why{opacity:.75;font-style:italic}.leb-history .leb-h-res{opacity:.95}.leb-history .leb-h-by{opacity:.65;font-size:.9em}.leb-history .leb-h-warn,.leb-history .leb-h-stall,.leb-history .leb-h-end{color:#e07050}.leb-history .leb-h-stall{color:#e0a030}.leb-history .leb-h-press{opacity:.7;list-style:"⏵ "}.leb-history .leb-h-note{color:#c08040}.leb-history .leb-h-gm{opacity:.65;margin:3px 0}.leb-history .leb-h-card{margin-left:4px;cursor:pointer}.leb-history hr.leb-h-sep{margin:6px 0;border-color:#0003}.chat-message.leb-h-flash{outline:2px solid #e0a030}`;
+const STYLE = `.leb-history .leb-h-grey{opacity:.6;font-style:italic}.leb-history details.leb-h-nb{border:none;padding:0 0 0 4px;margin:2px 0;font-size:12px}.leb-history details.leb-h-nb ul{margin:2px 0;padding-left:16px}.leb-history .window-content{overflow-y:auto;padding:6px 10px}.leb-history .leb-h-top{display:flex;gap:6px;align-items:center;margin-bottom:6px}.leb-history .leb-h-top span{flex:1;opacity:.8}.leb-history h3{margin:10px 0 4px;border-bottom:1px solid #0004}.leb-history details{border:1px solid #0003;border-radius:4px;padding:3px 7px;margin:4px 0}.leb-history details.leb-h-cur{border-color:#4caf50}.leb-history summary{cursor:pointer}.leb-history .leb-h-plan{margin:4px 0}.leb-history ol,.leb-history ul{margin:2px 0 4px 18px;padding:0}.leb-history .leb-h-why{opacity:.75;font-style:italic}.leb-history .leb-h-res{opacity:.95}.leb-history .leb-h-by{opacity:.65;font-size:.9em}.leb-history .leb-h-warn,.leb-history .leb-h-stall,.leb-history .leb-h-end{color:#e07050}.leb-history .leb-h-stall{color:#e0a030}.leb-history .leb-h-press{opacity:.7;list-style:"⏵ "}.leb-history .leb-h-note{color:#c08040}.leb-history .leb-h-gm{opacity:.65;margin:3px 0}.leb-history .leb-h-card{margin-left:4px;cursor:pointer}.leb-history hr.leb-h-sep{margin:6px 0;border-color:#0003}.chat-message.leb-h-flash{outline:2px solid #e0a030}`;
 
 /** What the history needs from a fight: the Combat flag, the order, names, and card numbers. */
 export function rounds(combat) {
@@ -42,24 +43,32 @@ const hhmm = ms => { const d = new Date(ms); return `${String(d.getHours()).padS
 /** One closed folder, one entry per game night (this browser's date), one page per fight: saving the same fight again replaces its page. GM-only (no ownership). */
 export async function saveHistory(combat) {
   if (!game.user.isGM) throw new Error("Only a GM can save the history.");
-  const reqs = Object.values(combat.getFlag(ID, "turns")?.requests ?? {}); if (!reqs.length) throw new Error("There's no monster turn to save yet.");
+  const reqs = Object.values(combat.getFlag(ID, "turns")?.requests ?? {}), nbs = notebooks(combat); if (!reqs.length && !nbs.length) throw new Error("There's no monster turn or notebook to save yet.");   /* a fight where she played every monster still has its notebooks (0.25.0 design review 8) */
   const folder = game.folders.find(f => f.type === "JournalEntry" && f.getFlag(ID, "history")) ?? await Folder.implementation.create({ name: "Monster Turns history", type: "JournalEntry", sorting: "a", flags: { [ID]: { history: true } } });
   const date = today(), name = `Monster Turns · ${date}`;
   const entry = game.journal.find(e => e.folder?.id === folder.id && e.getFlag(ID, "historyDate") === date) ?? await JournalEntry.implementation.create({ name, folder: folder.id, flags: { [ID]: { historyDate: date } } });
-  const first = Math.min(...reqs.map(r => r.at ?? Date.now())), title = `${combat.scene?.name ?? "A fight"} · ${hhmm(first)}`;
-  const content = journalHTML(rounds(combat), esc, { title, when: `${date}, ${reqs.length} plan${reqs.length === 1 ? "" : "s"}, round ${combat.round}` });
+  const first = reqs.length ? Math.min(...reqs.map(r => r.at ?? Date.now())) : Date.now(), title = `${combat.scene?.name ?? "A fight"} · ${hhmm(first)}`;
+  const content = journalHTML(rounds(combat), esc, { title, when: `${date}, ${reqs.length} plan${reqs.length === 1 ? "" : "s"}, round ${combat.round}` }) + notebooksHTML(nbs, esc, { fold: false });
   /* saved again after midnight: the page stays in the night it was first saved */
   const page = game.journal.filter(e => e.folder?.id === folder.id).flatMap(e => e.pages.contents).find(p => p.getFlag(ID, "historyCombat") === combat.id);
   if (page) await page.update({ name: title, "text.content": content });
   else await entry.createEmbeddedDocuments("JournalEntryPage", [{ name: title, type: "text", text: { content, format: 1 }, flags: { [ID]: { historyCombat: combat.id } } }]);
-  await combat.update({ [`flags.${ID}.turns.historySaved`]: signature(combat.getFlag(ID, "turns")?.requests) }, { render: false, [ID]: { quiet: true } });
+  await combat.update({ [`flags.${ID}.turns.historySaved`]: signature(combat.getFlag(ID, "turns")?.requests, combat.getFlag(ID, "notebook")) }, { render: false, [ID]: { quiet: true } });
   return entry;
 }
 /** Has anything happened since it was last saved? */
-const unsaved = combat => { const t = combat.getFlag(ID, "turns") ?? {}; if (!Object.keys(t.requests ?? {}).length) return false; return t.historySaved !== signature(t.requests); };
+const unsaved = combat => { const t = combat.getFlag(ID, "turns") ?? {}, nb = combat.getFlag(ID, "notebook"); /* with no monster turn, only her own notebook lines and cross-outs are worth the question at End Encounter: a fight she played herself isn't interrupted for notebooks nobody touched */
+  if (!Object.keys(t.requests ?? {}).length && !Object.values(nb ?? {}).some(b => Object.values(b ?? {}).some(l => l?.k === "gm" || l?.x))) return false; return t.historySaved !== signature(t.requests, nb); };
+/** Every creature's notebook as the Remembers fold-out shows it, in names, for the window's last section and the saved page. */
+function notebooks(combat) {
+  const labels = combat.getFlag(ID, "turns")?.labels ?? {}, n = namer(labels, Object.fromEntries(combat.scene?.tokens.map(t => [t.id, t.name]) ?? []));
+  return Object.keys(combat.getFlag(ID, "notebook") ?? {}).map(id => { const tok = combat.scene?.tokens.get(id), nb = tok ? notebookOf(combat, id) : null; if (!nb) return null;
+    const words = x => `${n.named(x.text)}${x.sure === false ? " (unsure)" : ""}${x.by === "gm" ? " (the GM's line)" : ""}`;
+    return { name: tok.name, mind: nb.mind, sent: [...nb.remembers.map(words), ...nb.allies.map(x => `Ally: ${n.named(x.text)}`)], unused: nb.unused.map(words), crossed: nb.crossed.map(words), side: nb.side }; }).filter(Boolean);
+}
 /** What the saved page was made from: many writes don't move a request's `since` (saves, notes, presses), and the server clock restarts with the server,
     so a time can't say whether anything changed (found by the review). A short hash of the requests can. */
-function signature(requests) { const s = JSON.stringify(requests ?? {}); let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return `${s.length}:${h}`; }
+function signature(requests, books = null) { const s = JSON.stringify(requests ?? {}) + bookPrint(books); let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return `${s.length}:${h}`; }
 
 /* ---------- End Encounter: Save or Discard (Rhea, 2026-11-08) ---------- */
 /** preDeleteCombat: for a GM ending a fight that has unsaved history, stop the delete, ask, then delete again marked as asked. The runner's page and
@@ -89,7 +98,7 @@ export class HistoryApp extends foundry.applications.api.ApplicationV2 {
     const rds = rounds(c), last = rds.at(-1)?.round;
     const open = (key, t) => this.folds.has(key) ? this.folds.get(key) : t.current || rds.find(r => r.turns.includes(t))?.round === last;
     const saved = c.getFlag(ID, "turns")?.historySaved;
-    return `<div class="leb-h-top"><span>${esc(c.scene?.name ?? "")} · round ${c.round}${saved ? (unsaved(c) ? " · changed since saved" : " · saved") : ""}</span><button type="button" data-do="save"><i class="fa-solid fa-book"></i> Save to journal</button></div>${historyHTML(rds, esc, { open })}`;
+    return `<div class="leb-h-top"><span>${esc(c.scene?.name ?? "")} · round ${c.round}${saved ? (unsaved(c) ? " · changed since saved" : " · saved") : ""}</span><button type="button" data-do="save"><i class="fa-solid fa-book"></i> Save to journal</button></div>${historyHTML(rds, esc, { open })}${notebooksHTML(notebooks(c), esc)}`;
   }
   _replaceHTML(html, content) {
     const atEnd = content.scrollHeight - content.scrollTop - content.clientHeight < 40, top = content.scrollTop;

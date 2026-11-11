@@ -2774,7 +2774,7 @@ async function writeLines(combat, pairs, fresh = {}) {
   for (const [id, lines] of Object.entries(added)) {
     const gone = new Set(evict({ ...(books(combat)[id] ?? {}), ...lines }, STORE_MAX, deedsSince(combat, id)));
     for (const [key, line] of Object.entries(lines)) if (!gone.has(key)) change[`flags.${ID}.notebook.${id}.${key}`] = line;
-    for (const key of gone) if (!(key in lines)) change[`flags.${ID}.notebook.${id}.-=${key}`] = null;
+    for (const key of gone) if (!(key in lines)) change[`flags.${ID}.notebook.${id}.${key}`] = foundry.data.operators.ForcedDeletion.create();
   }
   for (const [k, v] of Object.entries(fresh)) change[`flags.${ID}.turns.labels.${k}`] = v;
   if (Object.keys(change).length) await combat.update(change, { render: false, [ID]: { quiet: true } });

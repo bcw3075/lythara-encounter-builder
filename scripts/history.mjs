@@ -96,7 +96,9 @@ function partOf(id, r, look, n) {
   if (end) lines.push({ kind: "end", text: end });
   return { id, at: r.at ?? 0, by: r.by ? `${ROUTE[r.by.by] ?? "a GM"}${r.by.model ? `, ${r.by.model}` : ""}` : null, reason: plan?.reason ? n.named(plan.reason) : null,
     asked: r.why && r.parent ? n.named(describeChanges(r.why, n.nameOf)) : null, plan: steps.map((s, i) => ({ text: n.named(describeStep(s)), why: plan?.steps?.[i]?.why ? n.named(plan.steps[i].why) : null })),
-    lines, state: r.state, waiting: asking && !r.gaveUp };
+    lines, state: r.state, waiting: asking && !r.gaveUp,
+    /* what it remembered when this plan was asked for (0.25.0): the notebook as it was sent, read from the request's own packet */
+    remembered: r.packet?.notebook ? [...(r.packet.notebook.remembers ?? []), ...(r.packet.notebook.alliesDid ?? []).map(x => `Ally: ${x}`), ...(r.packet.notebook.side ? [r.packet.notebook.side] : [])].map(x => n.named(x)) : [] };
 }
 
 /** The whole fight, by round. t: the Combat's turns flag. fight: { round, turn (index), order: [{ id, name, npc }] } in initiative order (npc: a monster, not one on the party's side); names: tokenId → name.
@@ -139,7 +141,17 @@ function partHTML(p, esc, { links }) {
   const lines = p.lines.map(l => l.kind === "step" ? `<li class="leb-h-act"><b>${l.n}.</b> ${esc(l.text)}${l.why ? ` <span class="leb-h-why">— ${esc(l.why)}</span>` : ""}<br><span class="leb-h-res">→ ${esc(l.result)}</span>${link(l.cards)}</li>`
     : l.kind === "refused" ? `<li class="leb-h-warn">${esc(l.text)}${l.plan ? `<br><span class="leb-h-by">Its plan: ${esc(l.plan.reason || "")} ${esc(l.plan.steps.join("; "))}</span>` : ""}</li>`
     : `<li class="leb-h-${l.kind}">${esc(l.text)}</li>`).join("");
-  return `${head}${plan}${lines ? `<ul class="leb-h-lines">${lines}</ul>` : ""}`;
+  const nb = p.remembered?.length ? (links ? `<details class="leb-h-nb"><summary>Remembered (${p.remembered.length})</summary><ul>${p.remembered.map(x => `<li>${esc(x)}</li>`).join("")}</ul></details>` : `<p><b>Remembered:</b> ${p.remembered.map(esc).join(" ")}</p>`) : "";
+  return `${head}${nb}${plan}${lines ? `<ul class="leb-h-lines">${lines}</ul>` : ""}`;
+}
+/** The notebooks as they stand (0.25.0), for the end of the window and of the journal page: every creature's, the ones the GM played included.
+    books: [{ name, mind, sent: [text], unused: [text], crossed: [text], side }], already in names. */
+export function notebooksHTML(books = [], esc, { fold = true } = {}) {
+  const list = (title, xs, cls = "") => xs?.length ? `<p class="leb-h-by">${title}</p><ul class="${cls}">${xs.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
+  const one = b => { const body = `${list("Uses:", b.sent)}${b.side ? `<p class="leb-h-by">${esc(b.side)}</p>` : ""}${list("Saw it, makes nothing of it:", b.unused, "leb-h-grey")}${list("Crossed out by the GM:", b.crossed, "leb-h-grey")}`;
+    return fold ? `<details class="leb-h-turn"><summary><b>${esc(b.name)}</b> <span class="leb-h-by">· ${esc(b.mind)}</span></summary>${body || "<p><em>Nothing.</em></p>"}</details>` : `<h3>${esc(b.name)} (${esc(b.mind)})</h3>${body || "<p><em>Nothing.</em></p>"}`; };
+  const kept = books.filter(b => b.sent?.length || b.unused?.length || b.crossed?.length);
+  return kept.length ? `${fold ? `<section class="leb-h-round"><h3>What they remember now</h3>` : "<h2>What they remembered at the end</h2>"}${kept.map(one).join("")}${fold ? "</section>" : ""}` : "";
 }
 /** The window's HTML. open(key) says whether a turn is unfolded. */
 export function historyHTML(rounds, esc, { links = true, open = () => true } = {}) {
