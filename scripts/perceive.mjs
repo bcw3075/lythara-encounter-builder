@@ -1,7 +1,7 @@
 /* What a monster can perceive, and the packet a thinker gets for its turn. Pure: no Foundry globals. The glue in fight.mjs gathers live values on the
    runner, with the fight scene open. Rules: Perception and Detection https://2e.aonprd.com/Rules.aspx?ID=2400, Light https://2e.aonprd.com/Rules.aspx?ID=2401.
    Monsters act only on this, so nothing here may carry a player's numbers: see packetOf. */
-export const PACKET_SCHEMA = 4;
+export const PACKET_SCHEMA = 5;
 const ORDER = ["observed", "concealed", "hidden", "undetected", "unnoticed"];
 /** The less perceptible of two states. */
 export const worse = (a, b) => ORDER[Math.max(ORDER.indexOf(a), ORDER.indexOf(b))];
@@ -110,7 +110,7 @@ export function groundAround(model, [i, j], radius = 10, coverAt = .3, takeCover
 }
 /** What a monster gets told. Everything about others goes through here, and only these fields: never a player's HP, AC, saves, level, slots or anything else off
     a sheet, GM secrets, hidden loot or chat. Text in it is data, never instruction. */
-export function packetOf({ you, mind = null, band = null, bandNow = null, notebook = null, allies = [], others = [], memory = {}, ground = null, round = 0, note = null, done = [] }) {
+export function packetOf({ you, mind = null, band = null, bandNow = null, orders = null, notebook = null, allies = [], others = [], memory = {}, ground = null, round = 0, note = null, done = [] }) {
   const perceived = [], remembered = [];
   for (const o of others) {
     if (o.state === "observed" || o.state === "concealed") perceived.push({ label: o.label, state: o.state, square: o.square, ...(o.height > 0 ? { height: o.height } : {}), ...(o.offGrid ? { offGrid: true } : {}), size: o.size, gear: o.gear ?? [], conditions: o.conditions ?? [], healthWord: o.healthWord ?? null, distance: o.distance, cover: o.cover ?? "none" });
@@ -122,7 +122,9 @@ export function packetOf({ you, mind = null, band = null, bandNow = null, notebo
   /* notebook: what it remembers of this fight (memory.mjs `forPacket`), after `mind` so that block keeps its bytes (0.25.0, schema 3) */
   /* band: its band's nature, leader and plan as its Discipline lets it have them (bands.mjs `bandForPacket`), right after `mind` because both are the
      same bytes all fight long; bandNow: only once its leader has fallen, after the notebook so the unchanging blocks keep their place (0.26.0, schema 4) */
-  return { schema: PACKET_SCHEMA, ...(mind ? { mind } : {}), ...(band ? { band } : {}), ...(notebook ? { notebook } : {}), ...(bandNow ? { bandNow } : {}), you, allies, perceived, memory: remembered, ground, round, note, done };
+  /* orders: the orders it has heard, who it was told of and, for a leader, whether it may give one (orders.mjs `ordersForPacket`), after `bandNow`:
+     it changes during the fight (0.28.0, schema 5) */
+  return { schema: PACKET_SCHEMA, ...(mind ? { mind } : {}), ...(band ? { band } : {}), ...(notebook ? { notebook } : {}), ...(bandNow ? { bandNow } : {}), ...(orders ? { orders } : {}), you, allies, perceived, memory: remembered, ground, round, note, done };
 }
 /** Who it can name in a plan: label to token id. */
 export const labelsOf = others => Object.fromEntries(others.filter(o => canTarget(o.state)).map(o => [o.label, o.id]));

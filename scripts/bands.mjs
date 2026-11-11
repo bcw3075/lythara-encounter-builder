@@ -1,7 +1,9 @@
 /* Lythara Encounter Builder: bands (0.26.0, monster minds release 3, tier 3a). A band is a group of monsters that fight as one: its nature (how its
    leader leads, what happens when the leader falls, its way of fighting, how its members stand toward each other, what they want), who leads it and
    a plan written when the encounter is built (the objective, who does what, where "fall back" leads). Pure: no Foundry globals, so the unit tests
-   run it in Node. Rhea's decisions R3-1 to R3-13 (2026-11-11) and what the design review asked for are in docs/features/bands.md. */
+   run it in Node. Rhea's decisions R3-1 to R3-13 (2026-11-11) and what the design review asked for are in docs/features/bands.md. Since 0.28.0
+   (tier 3b) a band can name a second, who takes over first when "Next in line takes over" is its pick; what happens in the fight (orders, the
+   leader's fall acted on) is orders.mjs. */
 import { noteForThinker } from "./turn.mjs";
 import { BY, cutWords, slug } from "./minds.mjs";
 
@@ -69,10 +71,12 @@ function cleanFallBack(f, by = null) {
     in a brief: a leader or a job pointing past them is dropped. `lib` names a kind of group in the Minds Library that its nature starts from. */
 export function cleanBand(b = {}, { rows = null, by = null } = {}) {
   const name = str(b.name).slice(0, BAND_CAPS.name), key = bandId(b.key || name); if (!key) return null;
-  const lead = cleanRef(b.leader, { rows, single: true }), seen = new Set(), jobs = [];
+  const lead = cleanRef(b.leader, { rows, single: true }), sec = cleanRef(b.second, { rows, single: true }), seen = new Set(), jobs = [];
   for (const j of Array.isArray(b.plan?.jobs) ? b.plan.jobs : []) { const ref = cleanRef(j, { rows }), l = ref ? cleanPart(j, { by, cap: BAND_CAPS.job }) : null; if (!l || seen.has(refKey(ref)) || jobs.length >= 30) continue; seen.add(refKey(ref)); jobs.push({ ...ref, text: l.text, by: l.by, ...(l.at ? { at: l.at } : {}) }); }
   const objective = cleanPart(b.plan?.objective, { by });
   return { key, name: name || key, lib: typeof b.lib === "string" && b.lib.startsWith("band:") ? b.lib.slice(0, 80) : null, leader: lead ? { ...lead, by: who(b.leader.by, by) } : null,
+    /* the named second (0.28.0): first in line when the leader falls; never the leader itself */
+    second: sec && !(lead && refKey(sec) === refKey(lead) && (sec.n ?? null) === (lead.n ?? null)) ? { ...sec, by: who(b.second.by, by) } : null,
     nature: cleanNature(b.nature, { by }), plan: { ...(objective ? { objective } : {}), jobs, fallBack: cleanFallBack(b.plan?.fallBack, by) } };
 }
 /** A list of bands, cleaned: one of each key, at most BAND_CAPS.bands. */
@@ -93,7 +97,7 @@ export function briefBands(list, rawRows = [], rows = [], { by = null } = {}) {
     if (rawRows[g]?.leader === true && !b.leader) b.leader = { row: g, n: 0, by: "angel" }; });
   /* a leader or a job must point at a row of its own band (0.26.0 review 4): a mark on another band's row would have the band told its leader is
      gone from the first round, and that row's job sent as one of the band's */
-  for (const b of bands) { if (b.leader?.row != null && rows[b.leader.row]?.band !== b.key) b.leader = null; b.plan.jobs = b.plan.jobs.filter(j => j.row == null || rows[j.row]?.band === b.key); }
+  for (const b of bands) { if (b.leader?.row != null && rows[b.leader.row]?.band !== b.key) b.leader = null; if (b.second?.row != null && rows[b.second.row]?.band !== b.key) b.second = null; b.plan.jobs = b.plan.jobs.filter(j => j.row == null || rows[j.row]?.band === b.key); }
   return bands;
 }
 /** A change laid over a band. Angel never replaces the GM's words or choices unless `force` (the same rule as a mind's lines): what was skipped comes
@@ -105,6 +109,7 @@ export function applyBand(current, change = {}, { by = "gm", force = false, now 
   if (typeof change.name === "string" && str(change.name)) b.name = str(change.name).slice(0, BAND_CAPS.name);
   if ("lib" in change) b.lib = typeof change.lib === "string" && change.lib.startsWith("band:") ? change.lib : null;
   if ("leader" in change) { if (hers(b.leader)) skipped.push("leader"); else { const l = cleanRef(change.leader, { rows, single: true }); b.leader = l ? { ...l, by } : null; } }
+  if ("second" in change) { if (hers(b.second)) skipped.push("second"); else { const l = cleanRef(change.second, { rows, single: true }); b.second = l ? { ...l, by } : null; } }
   for (const k of NATURE) { if (!(k in (change.nature ?? {}))) continue; if (hers(b.nature[k])) { skipped.push(k); continue; }
     const v = change.nature[k], l = v === null ? null : cleanPart(typeof v === "string" ? { text: v, by } : { ...v, by }, { by, picks: NATURE_PICKS[k] ?? null }); if (l) b.nature[k] = stamp(l); else delete b.nature[k]; }
   const plan = change.plan ?? {};
@@ -180,14 +185,15 @@ export function guessLeader(members = []) {
   const able = (members ?? []).filter(m => PLANNED.includes(m.discipline)); if (!able.length) return null;
   return [...able].sort((a, b) => (b.speaks ? 1 : 0) - (a.speaks ? 1 : 0) || (b.level ?? 0) - (a.level ?? 0))[0].id;
 }
-/** Next in line (R3-2): the highest-level member still standing that follows a leader, the fallen leader left out. A named second comes with tier 3b. */
+/** Next in line (R3-2): the highest-level member still standing that follows a leader, the fallen leader left out. A named second goes first
+    (orders.mjs `fallOutcome`). */
 export const nextInLine = (members = [], leaderId = null) => guessLeader((members ?? []).filter(m => m.id !== leaderId && m.standing));
 /** Rally spots moved with the map's content when the map grows north or west (the squares' numbers shift). Out: the bands, changed or not. */
 export const shiftSpots = (bands = [], dx = 0, dy = 0) => (bands ?? []).map(b => b?.plan?.fallBack?.at && (dx || dy) ? { ...b, plan: { ...b.plan, fallBack: { ...b.plan.fallBack, at: [b.plan.fallBack.at[0] + dx, b.plan.fallBack.at[1] + dy] } } } : b);
 /** A brief row was taken out (the Build window): marks and jobs pointing at it go, and those pointing past it move up one. */
 export function rowRemoved(bands = [], g = 0) {
   const fix = r => r?.row == null ? r : r.row === g ? null : r.row > g ? { ...r, row: r.row - 1 } : r;
-  return (bands ?? []).map(b => ({ ...b, leader: fix(b.leader), plan: { ...b.plan, jobs: (b.plan?.jobs ?? []).map(fix).filter(Boolean) } }));
+  return (bands ?? []).map(b => ({ ...b, leader: fix(b.leader), second: fix(b.second), plan: { ...b.plan, jobs: (b.plan?.jobs ?? []).map(fix).filter(Boolean) } }));
 }
 /** What the turn card calls a band line the name gate held back. */
 export const HELD_LABEL = { leadsBy: "its band: Leader leads by", ifLeaderFalls: "its band: If the leader falls", way: "its band: Way of fighting", toward: "its band: Toward each other", want: "its band: What they want", objective: "its band's objective", yourJob: "its job in the band's plan", jobs: "the others' jobs in the band's plan", fallBack: "when its band falls back" };

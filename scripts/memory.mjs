@@ -114,7 +114,7 @@ export function render(book, { rung = 3, since = 0 } = {}) {
       case "miss": return n === 1 ? `It missed ${l.t}.` : `It keeps missing ${l.t}.`;
       case "saved": return n === 1 ? `${l.t} shrugged off its ${l.i ?? "magic"}.` : `${l.t} keeps shrugging off its ${l.i ?? "magic"}.`;
       case "nothing": return n === 1 ? `Its attack did nothing to ${l.t}.` : `Its attacks keep doing nothing to ${l.t}.`;
-      case "heal": return n === 1 ? `${l.a} healed ${l.t ?? "itself or someone beside it"}.` : `${l.a} keeps healing its side.`;
+      case "heal": return n === 1 ? `${l.a} healed ${l.t && l.t !== l.a ? l.t : l.t ? "itself" : "itself or someone beside it"}.` : `${l.a} keeps healing its side.`;   /* "M5 healed M5." read badly (0.28.0) */
       case "cast": return `${l.a} cast ${l.n ? `the spell it knows as ${l.n.replace(/-/g, " ")}` : `a spell: ${l.w}`}${n > 1 ? ` (${times(n)})` : ""}.`;
       case "reactive": return `${l.a} strikes at those who move away from it or lower their guard beside it.`;
       case "block": return `${l.a} blocks blows with a shield.`;

@@ -6,6 +6,7 @@ import { ID } from "./builder.mjs";
 import { builtRef, briefOf, kindFacts, libraryGet, mindLayers, partyPeople, writeBrief } from "./library.mjs";
 import { assemble } from "./minds.mjs";
 import { PLANNED, applyBand, bandForPacket, bandId, cleanBand, cleanBands, guessLeader, leaderFell, natureOf, nextInLine, shiftSpots } from "./bands.mjs";
+export { PLANNED };
 
 const gmOnly = () => { if (!game.user.isGM) throw new Error("Only a GM can do this."); };
 const isMonster = t => !!t?.actor && t.actor.isOfType?.("npc") && t.actor.alliance !== "party" && !t.getFlag(ID, "cache");
@@ -23,16 +24,37 @@ export const bandOf = (scene, tok) => { const key = bandKeyOf(scene, tok); retur
 export const membersOf = (scene, key) => key ? (scene?.tokens.contents ?? []).filter(t => bandKeyOf(scene, t) === key) : [];
 /** A monster's Discipline as its mind stands (its pick; Loose when a line of words has no pick under it). */
 export function disciplineOf(scene, tok, combat = null) { return assemble(mindLayers(scene, tok, combat)).lines.discipline?.pick ?? "loose"; }
-const speaks = actor => (actor?.system?.details?.languages?.value ?? []).length > 0;
+/** The languages on a creature's sheet (their slugs). Telepathy and a language it understands but can't speak aren't told apart. */
+export const langsOf = actor => [...(actor?.system?.details?.languages?.value ?? [])];
+const speaks = actor => langsOf(actor).length > 0;
+/** What this fight has changed of a band (0.28.0, the Combat's `bands` flag, written by the runner when a leader falls): { leader: { token },
+    fell: { was, state, round, pick }, planGone, objective, nature }. */
+export const fightBand = (combat, key) => combat?.getFlag(ID, "bands")?.[key] ?? null;
 const fact = (scene, t, combat) => ({ id: t.id, level: t.actor?.level ?? 0, speaks: speaks(t.actor), discipline: disciplineOf(scene, t, combat) });
 /** Who leads a band: the monster marked (in the Monster Minds window or by the brief), else the module's guess (bands.mjs `guessLeader`: the
     highest-level member that follows a leader and can speak), counted over every member, fallen or not, so the guess doesn't move on when the leader
     drops. Out: { tok, guessed, gone } (`gone`: one was marked and its token is no longer on the scene); `tok` null when the band has no leader. */
 export function leaderOf(scene, band, combat = null) {
   if (!band) return { tok: null, guessed: false, gone: false }; const members = membersOf(scene, band.key), mark = band.leader;
+  /* the one who took over in this fight (0.28.0: "Next in line takes over", acted on by the module) leads for as long as its token is there */
+  const took = fightBand(combat, band.key)?.leader?.token, heir = took ? members.find(t => t.id === took) : null; if (heir) return { tok: heir, guessed: false, gone: false, took: true };
   if (mark) { const tok = mark.token ? members.find(t => t.id === mark.token) : members.find(t => { const r = builtRef(scene, t); return r?.row === mark.row && r.n === mark.n; }); return { tok: tok ?? null, guessed: false, gone: !tok }; }
   const id = guessLeader(members.map(t => fact(scene, t, combat)));
   return { tok: id ? scene.tokens.get(id) : null, guessed: true, gone: false };
+}
+/** A band's named second (0.28.0), or null. */
+export function secondOf(scene, band) { const mark = band?.second; if (!mark) return null; const members = membersOf(scene, band.key);
+  return (mark.token ? members.find(t => t.id === mark.token) : members.find(t => { const r = builtRef(scene, t); return r?.row === mark.row && r.n === mark.n; })) ?? null; }
+/** The kinds of creature in a band, each with the id an order names its job by (orders.mjs `jobKey`: "r2" for a build row, "k0" for a kind the
+    build didn't place, by its place among those), its name and its monsters. */
+export function jobGroups(scene, band) {
+  const rows = briefOf(scene)?.creatures ?? [], groups = new Map(), loose = [];
+  rows.forEach((c, g) => { if (c.band === band.key) groups.set(`r${g}`, { id: `r${g}`, ref: { row: g }, name: c.name || "Creature", tokens: [] }); });
+  for (const t of membersOf(scene, band.key)) { const r = builtRef(scene, t);
+    if (r) { groups.get(`r${r.row}`)?.tokens.push(t.id); continue; }
+    const kind = kindFacts(t.actor); let n = loose.indexOf(kind.key); if (n < 0) { n = loose.push(kind.key) - 1; groups.set(`k${n}`, { id: `k${n}`, ref: { kind: kind.key }, name: kind.kindName, tokens: [] }); }
+    groups.get(`k${n}`).tokens.push(t.id); }
+  return [...groups.values()];
 }
 /** The layers a band's nature is read from (bands.mjs `natureOf`): this fight's (the Combat's `bands` flag: nothing writes it before tier 3b), this
     encounter's, the kind of group in the library it starts from, and the brief's own "what they want". */
@@ -43,9 +65,12 @@ export function natureLayers(scene, band, combat = null) {
   const want = briefOf(scene)?.want; if (want) layers.push({ from: "brief", nature: cleanBand({ key: band.key, nature: { want: { text: want, by: "module" } } }).nature });
   return layers;
 }
-/** A band's plan as a member is told it: the band's own, with the brief's "how they retreat" as when it falls back when the band says nothing. */
-function planOf(scene, band) { const retreat = briefOf(scene)?.retreat, f = band.plan.fallBack ?? {};
-  return !f.when && retreat ? { ...band.plan, fallBack: cleanBand({ key: band.key, plan: { fallBack: { ...f, when: { text: retreat, by: "module" } } } }).plan.fallBack } : band.plan; }
+/** A band's plan as a member is told it: the band's own, with the brief's "how they retreat" as when it falls back when the band says nothing.
+    In a fight (0.28.0): a band that fell apart has no plan left, and one that fights harder has its new objective. */
+export function planOf(scene, band, combat = null) { const retreat = briefOf(scene)?.retreat, f = band.plan.fallBack ?? {}, now = fightBand(combat, band.key);
+  if (now?.planGone) return { jobs: [], fallBack: {} };
+  const plan = !f.when && retreat ? { ...band.plan, fallBack: cleanBand({ key: band.key, plan: { fallBack: { ...f, when: { text: retreat, by: "module" } } } }).plan.fallBack } : band.plan;
+  return now?.objective ? { ...plan, objective: { text: String(now.objective), by: "module" } } : plan; }
 /** What a monster's packet carries of its band, and the keys of any lines held back by the name gate.
     labelOf(tokenId): the label of a creature this monster is told of (itself, an ally it knows, an enemy it perceives), else null.
     fallen(tok): "down" | "dead" | "fled" | null, as the fight sees that creature now. Out: { band, bandNow, held }. */
@@ -56,10 +81,13 @@ export function bandPacket(scene, tok, combat, { labelOf = () => null, fallen = 
   const nameOf = j => j.row != null ? rows[j.row]?.name ?? "" : (() => { const t = members.find(m => !builtRef(scene, m) && kindFacts(m.actor)?.key === j.kind); return t ? kindFacts(t.actor).kindName : ""; })();
   /* a leader the GM has hidden isn't there for the thinker, fallen or not (0.26.0 review 9); one that got away is hidden too, and that is told */
   const unseen = t => !!t?.hidden && !t.getFlag(ID, "escaped"), state = lead.gone ? "gone" : lead.tok && !unseen(lead.tok) ? fallen(lead.tok) : null, leads = !!lead.tok && lead.tok.id === tok.id;
-  const { band: out, held } = bandForPacket({ discipline: mine, nature, plan: planOf(scene, band), me: { row: ref?.row, kind: ref ? null : kindFacts(tok.actor)?.key, leads: leads && !state }, leader: lead.tok && !leads ? labelOf(lead.tok.id) : null, nameOf, people: partyPeople(scene, labelOf) });
+  const { band: out, held } = bandForPacket({ discipline: mine, nature, plan: planOf(scene, band, combat), me: { row: ref?.row, kind: ref ? null : kindFacts(tok.actor)?.key, leads: leads && !state }, leader: lead.tok && !leads ? labelOf(lead.tok.id) : null, nameOf, people: partyPeople(scene, labelOf) });
   let bandNow = null;
   if (state && (lead.tok || lead.gone) && !leads) { const next = nature.ifLeaderFalls?.pick === "next" ? nextInLine(members.filter(t => !unseen(t)).map(t => ({ ...fact(scene, t, combat), standing: !fallen(t) })), lead.tok?.id ?? null) : null;
     bandNow = leaderFell({ discipline: mine, state, falls: nature.ifLeaderFalls?.pick ?? null, next: next ? (next === tok.id ? "you" : labelOf(next) ?? "another of its band") : null }); }
+  /* the leader that fell earlier in this fight, once the module has acted on it (0.28.0): the band is still told, and who leads now */
+  const fell = fightBand(combat, band.key)?.fell;
+  if (!bandNow && fell?.state && !state) bandNow = leaderFell({ discipline: mine, state: fell.state, falls: fell.pick ?? null, next: lead.took && lead.tok ? (leads ? "you" : labelOf(lead.tok.id) ?? "another of its band") : null });
   return { band: out, bandNow, held };
 }
 
@@ -88,7 +116,7 @@ export async function joinBand(scene, ref, key) {
     if (id && !brief.bands.some(b => b.key === id)) { const moved = bandsOf(scene).find(b => b.key === id); brief.bands.push(moved); await scene.update({ [`flags.${ID}.==bands`]: cleanBands(scene.getFlag(ID, "bands")).filter(b => b.key !== id) }); }
     const was = row.band; row.band = id;
     /* a leader mark or a job that pointed at this row in the band it leaves goes with it */
-    for (const b of brief.bands) if (b.key === was && was !== id) { if (b.leader?.row === ref.row) b.leader = null; b.plan.jobs = b.plan.jobs.filter(j => j.row !== ref.row); }
+    for (const b of brief.bands) if (b.key === was && was !== id) { if (b.leader?.row === ref.row) b.leader = null; if (b.second?.row === ref.row) b.second = null; b.plan.jobs = b.plan.jobs.filter(j => j.row !== ref.row); }
     await writeBrief(scene, brief); return id; }
   const toks = ref?.token ? [scene.tokens.get(ref.token)].filter(Boolean) : typeof ref?.kind === "string" ? scene.tokens.contents.filter(t => isMonster(t) && !builtRef(scene, t) && kindFacts(t.actor)?.key === ref.kind) : [];
   if (!toks.length) throw new Error("Which monsters? Give a row, a kind or a token.");
@@ -99,6 +127,7 @@ export async function joinBand(scene, ref, key) {
   const bands = bandsOf(scene); let changed = false;
   for (const b of bands) { if (![...left.values()].includes(b.key)) continue;
     if (b.leader?.token && left.get(b.leader.token) === b.key) { b.leader = null; changed = true; }
+    if (b.second?.token && left.get(b.second.token) === b.key) { b.second = null; changed = true; }
     const kinds = new Set(membersOf(scene, b.key).filter(t => !builtRef(scene, t)).map(t => kindFacts(t.actor)?.key)), jobs = b.plan.jobs.filter(j => j.kind == null || kinds.has(j.kind)); if (jobs.length !== b.plan.jobs.length) { b.plan.jobs = jobs; changed = true; } }
   if (changed) await store(scene, bands);
   return id;
@@ -126,5 +155,5 @@ export function bandViews(scene, combat = null) {
       if (!groups.has(k)) groups.set(k, { ref: r ? { row: r.row } : { kind: kindFacts(t.actor).key }, name: r ? rows[r.row]?.name ?? t.name : kindFacts(t.actor).kindName, tokens: [], count: 0 });
       groups.get(k).tokens.push({ id: t.id, name: t.name, discipline: disciplineOf(scene, t, combat), leaderRef: r ? { row: r.row, n: r.n } : { token: t.id } }); }
     const layers = natureLayers(scene, band, combat), follows = toks.some(t => PLANNED.includes(disciplineOf(scene, t, combat)));
-    return { band, groups: [...groups.values()], members: toks.length, leader: lead.tok ? { token: lead.tok.id, name: lead.tok.name, guessed: lead.guessed } : null, leaderGone: lead.gone, follows, layers, nature: natureOf(layers), plan: planOf(scene, band) }; });
+    return { band, groups: [...groups.values()], members: toks.length, leader: lead.tok ? { token: lead.tok.id, name: lead.tok.name, guessed: lead.guessed, ...(lead.took ? { took: true } : {}) } : null, leaderGone: lead.gone, second: (() => { const t = secondOf(scene, band); return t ? { token: t.id, name: t.name } : null; })(), follows, layers, nature: natureOf(layers), plan: planOf(scene, band, combat) }; });
 }

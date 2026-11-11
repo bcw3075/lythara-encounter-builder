@@ -2,7 +2,7 @@
   "id": "lythara-encounter-builder",
   "title": "Lythara Encounter Builder",
   "description": "Reads an encounter map, then places monsters, treasure and GM notes from a brief, and carries out monster turns from a plan one action at a time, which a Claude chat or the API can hand in through one brain interface. Each monster acts through its mind: a behaviour profile the GM can read and edit, kept in a reusable library.",
-  "version": "0.27.0",
+  "version": "0.28.0",
   "compatibility": { "minimum": "14", "verified": "14.370" },
   "authors": [{ "name": "Rhea and Claude" }],
   "url": "https://github.com/bcw3075/lythara-encounter-builder",

@@ -7,7 +7,7 @@ import { PROMPT_VERSION, promptText } from "./prompt.mjs";
 
 export const PLAN_SCHEMA = 1;
 /** Every kind a plan may name. The module carries out only those in turn.mjs's COSTS so far; checkPlan turns down the rest by name. */
-export const STEP_KINDS = ["stride", "step", "crawl", "fly", "swim", "climb", "burrow", "release", "strike", "ability", "spell", "stand", "drop-prone", "seek", "hide", "sneak", "take-cover", "flee", "interact", "delay", "none"];
+export const STEP_KINDS = ["stride", "step", "crawl", "fly", "swim", "climb", "burrow", "release", "strike", "ability", "spell", "stand", "drop-prone", "seek", "hide", "sneak", "take-cover", "flee", "interact", "delay", "order", "none"];
 export const MAX_STEPS = 8, MAX_TRIES = 2, LISTEN_MS = 120000, MAX_WAIT_S = 100;   /* run_script stops at 120 s */
 const LABEL = /^[EM]\d{1,3}$/, ITEM = /^[\w-]{1,80}$/, BY = ["chat", "api", "gm"];
 
@@ -47,6 +47,11 @@ export function cleanPlan(raw) {
     if (s.after != null) { if (typeof s.after !== "string" || !LABEL.test(s.after)) return bad(`${at}: "after" isn't a label like E1.`); out.after = s.after; }
     /* a Burrow that comes up to the surface at its end (0.16.0) */
     if (s.up != null) { if (typeof s.up !== "boolean") return bad(`${at}: "up" is true or false.`); if (s.up) out.up = true; }
+    /* an order to its band (0.28.0): which part of the plan it changes, the kind whose job it changes, and the sentence said aloud (for the chat
+       line and the History only: what the hearers are sent is written by the module from the label or the place) */
+    if (s.part != null) { if (!["objective", "job", "fallBack"].includes(s.part)) return bad(`${at}: "part" is "objective", "job" or "fallBack".`); out.part = s.part; }
+    if (s.job != null) { if (typeof s.job !== "string" || !/^[rk]\d{1,3}$/.test(s.job)) return bad(`${at}: "job" is the id of a kind in "orders.give.jobs", like "r0".`); out.job = s.job; }
+    if (s.say != null) { if (typeof s.say !== "string") return bad(`${at}: "say" is one sentence of text.`); const w = text(s.say, 160); if (w) out.say = w; }
     /* its own short reason, for the GM's history window (Rhea, 2026-11-08); never read by the check */
     if (s.why != null) { const w = text(String(s.why), 160); if (w) out.why = w; }
     steps.push(out);

@@ -4,7 +4,7 @@
 import { ID } from "../builder.mjs";
 import { esc } from "../journal.mjs";
 import { historyHTML, historyOf, journalHTML, namer, notebooksHTML } from "../history.mjs";
-import { notebookOf, runnerName } from "../fight.mjs";
+import { bandLogWords, notebookOf, runnerName } from "../fight.mjs";
 import { bookPrint } from "../memory.mjs";
 import { MINDS } from "../minds.mjs";
 
@@ -13,8 +13,8 @@ const STYLE = `.leb-history .leb-h-grey{opacity:.6;font-style:italic}.leb-histor
 /** What the history needs from a fight: the Combat flag, the order, names, and card numbers. */
 export function rounds(combat) {
   const scene = combat.scene, names = Object.fromEntries((scene?.tokens.contents ?? []).map(t => [t.id, t.name]));
-  const fight = { round: combat.round, turn: combat.turn, current: combat.combatant?.id ?? null, order: combat.turns.map(c => ({ id: c.id, name: c.token?.name ?? c.name, npc: !!c.actor?.isOfType?.("npc") && c.actor.alliance !== "party" })) };
-  return historyOf(combat.getFlag(ID, "turns") ?? {}, fight, names, look(names));
+  const fight = { round: combat.round, turn: combat.turn, current: combat.combatant?.id ?? null, order: combat.turns.map(c => ({ id: c.id, tokenId: c.tokenId, name: c.token?.name ?? c.name, npc: !!c.actor?.isOfType?.("npc") && c.actor.alliance !== "party" })) };
+  return historyOf(combat.getFlag(ID, "turns") ?? {}, fight, names, look(names), bandLogWords(combat));
 }
 /** Numbers read off chat cards: a roll's total, the DC or AC it was against (GM only), and damage types; a save on Toolbelt's row. Null when the card is gone. */
 function look(names) {
@@ -54,12 +54,13 @@ export async function saveHistory(combat) {
   const page = game.journal.filter(e => e.folder?.id === folder.id).flatMap(e => e.pages.contents).find(p => p.getFlag(ID, "historyCombat") === combat.id);
   if (page) await page.update({ name: title, "text.content": content });
   else await entry.createEmbeddedDocuments("JournalEntryPage", [{ name: title, type: "text", text: { content, format: 1 }, flags: { [ID]: { historyCombat: combat.id } } }]);
-  await combat.update({ [`flags.${ID}.turns.historySaved`]: signature(combat.getFlag(ID, "turns")?.requests, combat.getFlag(ID, "notebook")) }, { render: false, [ID]: { quiet: true } });
+  await combat.update({ [`flags.${ID}.turns.historySaved`]: signature(combat.getFlag(ID, "turns")?.requests, combat.getFlag(ID, "notebook"), combat.getFlag(ID, "turns")?.orders?.log) }, { render: false, [ID]: { quiet: true } });
   return entry;
 }
 /** Has anything happened since it was last saved? */
 const unsaved = combat => { const t = combat.getFlag(ID, "turns") ?? {}, nb = combat.getFlag(ID, "notebook"); /* with no monster turn, only her own notebook lines and cross-outs are worth the question at End Encounter: a fight she played herself isn't interrupted for notebooks nobody touched */
-  if (!Object.keys(t.requests ?? {}).length && !Object.values(nb ?? {}).some(b => Object.values(b ?? {}).some(l => l?.k === "gm" || l?.x))) return false; return t.historySaved !== signature(t.requests, nb); };
+  /* nor for a band log with nothing of hers in it (0.28.0): an order she gave from the Give orders box is hers */
+  if (!Object.keys(t.requests ?? {}).length && !Object.values(nb ?? {}).some(b => Object.values(b ?? {}).some(l => l?.k === "gm" || l?.x)) && !Object.values(t.orders?.log ?? {}).some(e => e?.k === "order" && e.by === "gm")) return false; return t.historySaved !== signature(t.requests, nb, t.orders?.log); };
 /** Every creature's notebook as the Remembers fold-out shows it, in names, for the window's last section and the saved page. */
 function notebooks(combat) {
   const labels = combat.getFlag(ID, "turns")?.labels ?? {}, n = namer(labels, Object.fromEntries(combat.scene?.tokens.map(t => [t.id, t.name]) ?? []));
@@ -69,7 +70,7 @@ function notebooks(combat) {
 }
 /** What the saved page was made from: many writes don't move a request's `since` (saves, notes, presses), and the server clock restarts with the server,
     so a time can't say whether anything changed (found by the review). A short hash of the requests can. */
-function signature(requests, books = null) { const s = JSON.stringify(requests ?? {}) + bookPrint(books); let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return `${s.length}:${h}`; }
+function signature(requests, books = null, bandLog = null) { const s = JSON.stringify(requests ?? {}) + bookPrint(books) + (bandLog && Object.keys(bandLog).length ? JSON.stringify(bandLog) : ""); let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return `${s.length}:${h}`; }
 
 /* ---------- End Encounter: Save or Discard (Rhea, 2026-11-08) ---------- */
 /** preDeleteCombat: for a GM ending a fight that has unsaved history, stop the delete, ask, then delete again marked as asked. The runner's page and

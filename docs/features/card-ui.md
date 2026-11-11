@@ -31,6 +31,8 @@ Its own GM-only window, **Monster Turns**, listing NPC combatants: "Angel runs t
 **The card's buttons:** **Do it**; **Change** (edit any step, or type a note that goes back to the thinker; built in 0.19.0: `docs/features/change.md`); **Play it myself** (always there, and ends the mod's part in that turn); **Hold** (pauses before the next step).
 - **0.27.0:** the Party reactions block (a box for each creature on the party's side that can react, with how it was ticked), a reaction row's own button labels, and the open repent-or-refuse question with Repent and Refuse (`choiceHtml`) under the turn's card or a monster's reaction: all described in `reactions.md`. The redraw that follows a fight also redraws the player's chip (`main.mjs`).
 
+- **0.28.0 (`docs/features/orders.md`):** the Give orders box (`_orderBox`: on the card when the creature whose turn it is leads a band and isn't ticked; its draft is kept on the window object, and a redraw waits while one of its text fields has focus), the hearing ticks (`_hearHtml`, on the box and on the leader's card while its plan holds an order to come), and a member's "Order heard" or "Didn't hear" line.
+
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.
 **The Monster Turns window** (any change to `ui/turns.mjs` or its hooks in `main.mjs`):

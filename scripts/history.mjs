@@ -44,6 +44,8 @@ export function stepResult(step, rec = {}, look = {}, n = namer(), done = false)
   else if (step.do === "take-cover") text = rec.covered ? "took cover" : rec.gm ? "left to you" : "";
   else if (step.do === "climb") { tag(rec.climb?.message); const c = card(rec.climb?.message); text = join([rec.climb ? `Athletics ${c?.total ?? "?"} vs DC ${rec.climb.dc}: ${CHECK_OUTCOMES[rec.climb.degree] ?? "unknown"}` : step.climbSpeed ? "its climb Speed, no check" : "", rec.moved || rec.fell || rec.climb ? climbResult(step, rec).replace(rec.climb ? " (a critical failure)" : "", "") : rec.started ? "climb started, not finished" : ""]); }
   else if (step.do === "release") { tag(rec.posted?.message); text = join([flat, rec.dropped ? `dropped its ${step.itemName ?? "item"} on its square` : rec.started ? "started, not confirmed" : ""]); }
+  else if (step.do === "order") { tag(rec.message); const who = id => look.name?.(id) ?? "a creature", missed = Object.entries(rec.missed ?? {});   /* 0.28.0: who heard the leader's order, who didn't and why */
+    text = rec.given ? join([(rec.heard ?? []).length ? `heard by ${rec.heard.map(who).join(", ")}` : "nobody heard it", missed.length ? `not by ${missed.map(([id, why]) => `${who(id)} (${why})`).join(", ")}` : ""]) : rec.skipped ? `not given: ${rec.skipped}` : ""; }
   else if (step.do === "interact") { tag(rec.posted?.message); text = join([flat, rec.posted ? "its card posted for you to apply" : rec.started ? "card started, not confirmed" : ""]); }
   else if (step.do === "delay") text = rec.moved ? `turn ended; back in the order right after ${n.nameOf(step.after) ?? step.after}` : rec.ended ? "turn ended; its place in the order may not have moved (check the tracker)" : "";
   else if (step.do === "hide" || step.do === "seek") { tag(rec.card?.message); const c = card(rec.card?.message); text = join([c?.total != null ? `secret roll ${c.total}` : "", rec.applied === "applied" ? "Visioner applied the result" : rec.applied === "none" ? "Visioner changed nothing" : rec.gm ? "left to you on its card" : ""]); }
@@ -101,9 +103,11 @@ function partOf(id, r, look, n) {
     remembered: r.packet?.notebook ? [...(r.packet.notebook.remembers ?? []), ...(r.packet.notebook.alliesDid ?? []).map(x => `Ally: ${x}`), ...(r.packet.notebook.side ? [r.packet.notebook.side] : [])].map(x => n.named(x)) : [] };
 }
 
-/** The whole fight, by round. t: the Combat's turns flag. fight: { round, turn (index), order: [{ id, name, npc }] } in initiative order (npc: a monster, not one on the party's side); names: tokenId → name.
+/** The whole fight, by round. `bandLog` (0.28.0): the band log in the GM's words ([{ key, r, k, by, from, text, msg }], fight.mjs `bandLogWords`);
+    an order the GM gave and every fall of a leader get a line of their own in their round (an order from a plan is a step of that plan).
+    t: the Combat's turns flag. fight: { round, turn (index), order: [{ id, name, npc }] } in initiative order (npc: a monster, not one on the party's side); names: tokenId → name.
     Monsters with no request in a round that has passed them were played by the GM (one line each), so the rounds read in order. */
-export function historyOf(t = {}, fight = {}, names = {}, look = {}) {
+export function historyOf(t = {}, fight = {}, names = {}, look = {}, bandLog = []) {
   const n = namer(t.labels ?? {}, names), reqs = Object.entries(t.requests ?? {}).filter(([, r]) => r && Number.isFinite(r.round));
   const order = fight.order ?? [], at = id => { const i = order.findIndex(c => c.id === id); return i < 0 ? 999 : i; };
   const rounds = new Map();
@@ -122,13 +126,16 @@ export function historyOf(t = {}, fight = {}, names = {}, look = {}) {
   for (const [reqId, e] of Object.entries(t.escaped ?? {})) { if (!e?.returned || !Number.isFinite(e.returned.round)) continue;
     const turns = rounds.get(e.returned.round) ?? new Map(); rounds.set(e.returned.round, turns);
     turns.set(`${e.returned.round}.back.${reqId}`, { key: `${e.returned.round}.back.${reqId}`, combatantId: null, name: e.name ?? names[e.tokenId] ?? "A monster", angel: false, returned: true, parts: [], idx: 998 }); }
+  for (const e of bandLog ?? []) { if (!e || !Number.isFinite(e.r) || (e.k === "order" && e.by !== "gm")) continue;
+    const turns = rounds.get(e.r) ?? new Map(); rounds.set(e.r, turns); const c = order.find(x => x.tokenId === e.from);
+    turns.set(`${e.r}.band.${e.key}`, { key: `${e.r}.band.${e.key}`, combatantId: null, name: e.text, angel: false, band: true, cards: e.msg ? [e.msg] : [], parts: [], idx: e.k === "order" && c ? at(c.id) + 0.2 : 997, at: e.key }); }
   for (let round = 1; round <= (fight.round ?? 0); round++) {
     const turns = rounds.get(round) ?? new Map();
     order.forEach((c, i) => { if (!c.npc || turns.has(`${round}.${c.id}`)) return; if (round === fight.round && i >= (fight.turn ?? 0)) return;
       turns.set(`${round}.${c.id}`, { key: `${round}.${c.id}`, combatantId: c.id, name: c.name, angel: false, parts: [], idx: i }); });
     if (turns.size) rounds.set(round, turns);
   }
-  return [...rounds.entries()].sort((a, b) => a[0] - b[0]).map(([round, turns]) => ({ round, turns: [...turns.values()].sort((a, b) => a.idx - b.idx || (a.parts[0]?.at ?? 0) - (b.parts[0]?.at ?? 0))
+  return [...rounds.entries()].sort((a, b) => a[0] - b[0]).map(([round, turns]) => ({ round, turns: [...turns.values()].sort((a, b) => a.idx - b.idx || (a.band && b.band ? (a.at < b.at ? -1 : 1) : (a.parts[0]?.at ?? 0) - (b.parts[0]?.at ?? 0)))
     .map(x => ({ ...x, parts: x.parts.sort((a, b) => a.at - b.at), current: round === fight.round && x.combatantId === fight.current && !x.delayedOn })) }));
 }
 
@@ -158,12 +165,14 @@ export function historyHTML(rounds, esc, { links = true, open = () => true } = {
   if (!rounds.length) return "<p><em>Nothing yet: monster turns show here as they happen.</em></p>";
   return rounds.map(rd => `<section class="leb-h-round"><h3>Round ${rd.round}</h3>${rd.turns.map(t => t.angel
     ? `<details class="leb-h-turn${t.current ? " leb-h-cur" : ""}" data-key="${esc(t.key)}" ${open(t.key, t) ? "open" : ""}><summary><b>${esc(t.name)}</b>${t.current ? " (now)" : ""}${t.parts.length > 1 ? ` <span class="leb-h-by">· asked ${t.parts.length - 1} more time${t.parts.length > 2 ? "s" : ""}</span>` : ""}</summary>${t.parts.map(p => partHTML(p, esc, { links })).join('<hr class="leb-h-sep">')}</details>`
+    : t.band ? `<p class="leb-h-gm leb-h-band"><i class="fa-solid fa-bullhorn"></i> ${esc(t.name)}${links && t.cards?.length ? ` ${t.cards.map(id => `<a class="leb-h-card" data-message="${esc(id)}" title="Show this order's line in chat"><i class="fa-solid fa-comment-dots"></i></a>`).join("")}` : ""}</p>`
     : `<p class="leb-h-gm"><b>${esc(t.name)}</b>: ${t.returned ? "brought back into the fight." : "played by the GM."}</p>`).join("")}</section>`).join("");
 }
 /** The journal page: the same, plain, everything unfolded, no buttons. */
 export function journalHTML(rounds, esc, { title = "", when = "" } = {}) {
   const body = rounds.map(rd => `<h2>Round ${rd.round}</h2>${rd.turns.map(t => t.angel
     ? `<h3>${esc(t.name)}</h3>${t.parts.map(p => partHTML(p, esc, { links: false })).join("<hr>")}`
+    : t.band ? `<p><em>${esc(t.name)}</em></p>`
     : `<p><b>${esc(t.name)}</b>: ${t.returned ? "brought back into the fight." : "played by the GM."}</p>`).join("")}`).join("");
   return `<p><em>${esc(title)}${when ? ` · ${esc(when)}` : ""}</em></p>${body || "<p>No monster turns were recorded.</p>"}`;
 }

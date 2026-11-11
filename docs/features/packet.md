@@ -81,6 +81,8 @@ Result per pair: `observed / concealed / hidden / undetected / unnoticed`.
 - **Unusual abilities as text:** every monster's ability text goes in its packet, so a thinker can understand it even if the mod doesn't.
 - **Checked during step 1 (2026-11-05):** the module's own sight test against core's `testCollision` on a real woods map agreed on 2,997 of 3,000 pairs, so core counts one-way trunk rings once and sees past one medium trunk, not two. Sight past trunks is no longer unverified.
 
+- **Orders (0.28.0, schema 5):** `orders` comes after `bandNow`, since it changes during the fight: what the monster has heard from its leader, whom it was told of and hasn't perceived (a label and nothing else: no square, no health word, never a target), and for a leader whether it may give this round's order (`docs/features/orders.md`).
+
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.
 **What a monster perceives:**:

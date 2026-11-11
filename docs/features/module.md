@@ -49,6 +49,8 @@ Checked against `claude/foundry-section-8-modules.md` and a live settings scan (
 The "Encounters" control group uses no Ctrl or Shift click variants; both are taken (section 8.3).
 - **0.27.0:** the client setting `chipPlace` (where a player put their reaction chip, registered by `registerChip`); `createChatMessage` also calls `onReactionCard` (a reaction's card ticks its owner's box); `updateCombat` and every redraw of Monster Turns call `drawChip` (a no-op on a GM's page), and so does `ready`; on the api's `fight`: `partyReactions` (`list(combat)`, `set(combat, tokenId, used)`) and `choose` (`choose(combat, requestId, "repent" | "refuse")`, which is `chooseFor`).
 
+- **0.28.0:** `renderChatMessageHTML` also calls `onRenderOrder` (a GM's page shows an order's words on its chat line); `api.fight.orders` (`preview`, `give`, `hear`, `card`, `log`, `words`).
+
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.
 - (mod-1) {live} The module's main flows that use this feature still work (no checklist was written for it before 0.10.0; add real items as it changes)

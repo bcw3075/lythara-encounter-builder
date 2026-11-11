@@ -36,6 +36,8 @@ The GM looks back through what each monster did and why: the card's words flash 
 - **End Encounter:** `preDeleteCombat` runs on the deleting user's browser; for a GM (not the runner) with unsaved history it cancels the delete (returns false, the one handler that does), asks, saves if chosen and deletes again with `{ [ID]: { asked: true } }`. A script deleting a fight from a GM page that isn't the runner should pass that option, or the dialog opens there. PF2e's End Encounter asks first ("End this combat?"), so there are two questions.
 - **Redraws:** `main.mjs` throttles the window to one redraw per 250 ms on flag writes, turn changes and fight or scene changes.
 
+- **0.28.0 (`docs/features/orders.md`):** `historyOf` takes the band log in the GM's words as a fifth argument: an order the GM gave and every fall of a leader are lines of their own in their round (`band: true`), an order from a plan is that plan's step (`stepResult`: who heard, who didn't and why, with a link to its chat line). The saved-or-not signature includes the band log, and a fight with no monster turn asks at End Encounter when the GM gave an order from her box.
+
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.
 **The history window** (any change to `history.mjs`, `ui/history.mjs`, the records it reads, or the prompt's `why`):
