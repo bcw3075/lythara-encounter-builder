@@ -1,0 +1,179 @@
+/* Lythara Encounter Builder: monster minds (0.24.0, release 1 of 4). A monster's behaviour profile: six lines plus notes, kept in layers that each
+   store only what they change, put together fresh for every packet. Pure: no Foundry globals, so the unit tests run it in Node.
+   Rhea's decisions (2026-11-10) and the design review's findings are in docs/features/minds.md. */
+import { noteForThinker } from "./turn.mjs";
+
+export const MIND_SCHEMA = 1;
+/** The profile's lines, in the order they are shown and sent. */
+export const LINES = ["mind", "goesFor", "fightsBy", "givesUp", "worksWith", "knows", "notes"];
+export const LINE_LABEL = { mind: "Mind", goesFor: "Goes for", fightsBy: "Fights by", givesUp: "Gives up", worksWith: "Works with others", knows: "Knows about its enemies", notes: "Notes" };
+/** Only these two keep a fixed pick underneath, because the module acts on them (Rhea's decision 2): how clever a plan may be, and who shares a group plan.
+    The words are the prompt's (one place: prompt.mjs prints them), never repeated in a packet. */
+export const MINDS = {
+  mindless: { label: "Mindless", words: "no thought at all: it goes for whatever is nearest or last touched it, uses no tactics, never hides, waits or retreats on its own" },
+  animal: { label: "Animal", words: "instinct and habit: it hunts, defends itself or its young and runs when hurt, with the tricks of its kind (a pack surrounds, an ambusher lies in wait) but no plans" },
+  simple: { label: "Simple", words: "it thinks, slowly: obvious choices, one idea at a time, easily drawn off by whoever is in front of it" },
+  cunning: { label: "Cunning", words: "quick and practical: it uses the ground, cover, numbers and dirty tricks, picks its targets and knows when a fight is lost" },
+  tactician: { label: "Trained tactician", words: "drilled or brilliant: it plans the whole turn, sets up its allies, denies the enemy their best moves and keeps to a plan under pressure" }
+};
+export const WORKS = {
+  alone: { label: "On its own", words: "it doesn't coordinate with anyone: what its allies do is only part of the scenery" },
+  pack: { label: "With its pack", words: "by instinct it fights beside its own: it joins an ally on a target and helps surround, with no plan behind it" },
+  follows: { label: "Follows a leader's plan", words: "it does its part in its group's plan and listens to its leader; told nothing, it fights sensibly beside its allies" },
+  leads: { label: "Is the leader", words: "the others look to it: it fights where it can see the whole fight and thinks of the group before itself" }
+};
+export const PICKS = { mind: MINDS, worksWith: WORKS };
+/** Suggestions only (Rhea: "I hope those were just examples"): every free line takes her own words. */
+export const SUGGEST = {
+  goesFor: ["the nearest", "the wounded", "whoever hurt it last", "casters and healers", "the biggest threat", "its goal"],
+  fightsBy: ["charging straight in", "swarming one target", "hit and run", "keeping its distance", "ambush from hiding", "holding a spot"],
+  givesUp: ["never", "when badly hurt", "when half its side is down", "when its leader falls", "when the prize is lost"],
+  knows: ["nothing about them", "the basics: armour means tough, robes mean spells", "it has watched them fight before"],
+  notes: []
+};
+/** Hard caps (design review 13): what a layer may store, and what one packet carries. Blank lines are never sent. */
+export const CAPS = { store: 600, storeNotes: 2000, send: 240, sendNotes: 600, name: 80 };
+/** "Knows about its enemies" belongs to one encounter, one monster or one fight: never the library (design review 10). */
+export const LIBRARY_LINES = LINES.filter(l => l !== "knows");
+export const BY = ["gm", "angel", "module"];
+export const ENTRY_TYPES = ["people", "kind", "band"];
+
+const str = (v, max) => String(v ?? "").replace(/\r/g, "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim().slice(0, max);
+const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+/** One line as a layer stores it, or null when it says nothing. A string is her words. `blank: true` is a line deliberately left empty, which stops
+    the layers below from filling it (explicit blank against inherit, design review 9). `by` says whose words they are. */
+export function cleanLine(key, v, by = null) {
+  if (!LINES.includes(key) || v == null) return null;
+  const o = typeof v === "string" ? { text: v } : v; if (typeof o !== "object") return null;
+  const who = BY.includes(o.by) ? o.by : BY.includes(by) ? by : "gm", at = Number.isFinite(o.at) ? o.at : null;
+  if (o.blank === true) return { blank: true, by: who, ...(at ? { at } : {}) };
+  const text = str(o.text, key === "notes" ? CAPS.storeNotes : CAPS.store), pick = PICKS[key] && Object.hasOwn(PICKS[key], o.pick) ? o.pick : null;
+  if (!text && !pick) return null;
+  return { ...(pick ? { pick } : {}), text, by: who, ...(at ? { at } : {}) };
+}
+/** A layer's lines: known keys only, each cleaned. library: true drops "knows". */
+export function cleanLines(lines, { by = null, library = false } = {}) {
+  const out = {}; if (!lines || typeof lines !== "object") return out;
+  for (const k of library ? LIBRARY_LINES : LINES) { const l = cleanLine(k, lines[k], by); if (l) out[k] = l; }
+  return out;
+}
+/** A library key from a name: lower case, words joined by dashes. */
+export const slug = s => String(s ?? "").toLowerCase().normalize("NFKD").replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+export const peopleKey = name => `people:${slug(name)}`;
+export const bandKey = name => `band:${slug(name)}`;
+/** What kind of creature this is, as a key that holds across encounters and worlds (design review 8): its compendium source when it has one; otherwise
+    its name and level. Elite and Weak are the same kind as the creature they adjust: the prefix PF2e adds to the name is taken off and the level is the
+    base creature's. facts: { source, name, level, adjustment } (adjustment "elite" | "weak" | null, as PF2e or the builder marks it). */
+export function kindKey({ source = null, name = "", level = 0, adjustment = null } = {}) {
+  if (typeof source === "string" && source.startsWith("Compendium.")) return `src:${source}`;
+  return `name:${slug(baseName(name, adjustment))}|${baseLevel(level, adjustment)}`;
+}
+export const baseName = (name, adjustment = null) => { const n = String(name ?? "").trim(); return adjustment === "elite" ? n.replace(/^elite\s+/i, "") : adjustment === "weak" ? n.replace(/^weak\s+/i, "") : n; };
+export const baseLevel = (level, adjustment = null) => (Number(level) || 0) - (adjustment === "elite" ? 1 : adjustment === "weak" ? -1 : 0);
+
+/** A library entry, cleaned: { schema, type, key, name, people, lines }. A kind names its people explicitly (their key, or null): the module never
+    guesses it. A people or a band has none. */
+export function cleanEntry(e = {}) {
+  const type = ENTRY_TYPES.includes(e.type) ? e.type : "kind", name = str(e.name, CAPS.name);
+  const key = str(e.key, 200) || (type === "people" ? peopleKey(name) : type === "band" ? bandKey(name) : "");
+  if (!key || !name) return null;
+  return { schema: MIND_SCHEMA, type, key, name, people: type === "kind" && typeof e.people === "string" && e.people.startsWith("people:") ? e.people : null, lines: cleanLines(e.lines, { library: true }) };
+}
+/** The Mind and Works with others a stat block alone suggests, so that nothing plays blank. A guess, and marked as the module's: the Mindless trait;
+    otherwise Intelligence (-4 or less animal, -3 or -2 simple, -1 to +2 cunning, +3 or more a trained tactician); a mindless creature works alone, an
+    animal with Pack Attack with its pack and alone without it, anything that thinks follows a leader's plan. facts: { traits, int, abilities } */
+export function fromStatBlock({ traits = [], int = null, abilities = [] } = {}) {
+  const t = (traits ?? []).map(x => String(x).toLowerCase()), n = Number(int);
+  const mind = t.includes("mindless") ? "mindless" : !Number.isFinite(n) || int === null ? "simple" : n <= -4 ? "animal" : n <= -2 ? "simple" : n <= 2 ? "cunning" : "tactician";
+  const works = mind === "mindless" ? "alone" : mind === "animal" ? ((abilities ?? []).some(a => /pack attack/i.test(String(a))) ? "pack" : "alone") : "follows";
+  return { mind: { pick: mind, text: "", by: "module" }, worksWith: { pick: works, text: "", by: "module" } };
+}
+/** The layers a profile is read from, most specific first (Rhea's decisions 6 and 8, design review 7): what was agreed in this fight; the monster's
+    own; this encounter's for its kind; its kind in the library; its people in the library; the stat block. */
+export const LAYERS = ["fight", "own", "encounter", "kind", "people", "statblock"];
+export const LAYER_WORDS = { fight: "this fight", own: "its own", encounter: "this encounter", kind: "kind", people: "people", statblock: "stat block" };
+/** One profile from its layers: for each line the most specific layer that says anything wins, whole (a pick and its words go together); a line a
+    layer left deliberately blank stays blank. A monster with its own profile stops following its kind's (decision 6): an own layer is the whole
+    profile, so nothing below it is read except the stat block's Mind when its own gives none. layers: [{ from, name, lines }] in any order.
+    Out: { lines: { key: { pick, text, by, from, name } }, own } with only lines that say something. */
+export function assemble(layers = []) {
+  const byFrom = new Map(); for (const l of layers ?? []) if (l && LAYERS.includes(l.from) && l.lines) byFrom.set(l.from, l);
+  const own = byFrom.has("own"), order = LAYERS.filter(f => byFrom.has(f) && !(own && ["encounter", "kind", "people"].includes(f)));
+  const lines = {};
+  for (const k of LINES) for (const f of order) { const layer = byFrom.get(f), l = layer.lines[k]; if (!l) continue;
+    if (!l.blank) lines[k] = { ...(l.pick ? { pick: l.pick } : {}), text: l.text ?? "", by: l.by ?? "gm", from: f, ...(layer.name ? { name: layer.name } : {}) };
+    break; }
+  return { lines, own };
+}
+/** A line in words, for the packet and the windows: a pick's label, then her words. */
+export function lineWords(key, l) {
+  if (!l) return ""; const label = l.pick ? PICKS[key]?.[l.pick]?.label ?? "" : "", text = String(l.text ?? "").trim();
+  return label && text ? `${label}. ${text}` : label || text;
+}
+/** What one packet carries (design reviews 1 and 13): each line in words, capped, blank ones left out, in the fixed order. Free text goes through the
+    same gate as the GM's note to Angel: a name of someone on the party's side becomes that creature's label when this monster perceives it, and a
+    line naming anyone it doesn't perceive (or a name that fits several it does) is held back whole, since even "someone" would tell it they exist.
+    people: [{ names, label }] as for `noteForThinker`, label null for a creature it doesn't perceive. Out: { mind, held: [{ key, unknown, ambiguous }] };
+    `mind` is null when nothing is left to send. The picks' ids ride along ("pick": { mind, worksWith }) so the prompt's meaning for them is found. */
+export function forPacket(assembled, people = []) {
+  const out = {}, pick = {}, held = [];
+  for (const k of LINES) { const l = assembled?.lines?.[k]; if (!l) continue;
+    const max = k === "notes" ? CAPS.sendNotes : CAPS.send, g = noteForThinker(String(l.text ?? ""), people, max);
+    if (g.unknown.length || g.ambiguous.length) { held.push({ key: k, unknown: g.unknown, ambiguous: g.ambiguous }); if (!l.pick) continue; }
+    const words = lineWords(k, { pick: l.pick, text: g.unknown.length || g.ambiguous.length ? "" : g.text }); if (!words) continue;
+    out[k] = words; if (l.pick) pick[k] = l.pick; }
+  if (!Object.keys(out).length) return { mind: null, held };
+  return { mind: { ...(Object.keys(pick).length ? { pick } : {}), ...out }, held };
+}
+/** Words that read like numbers off a sheet (design review 1): a warning at save, nothing more. */
+const STAT_WORDS = /\b(AC|HP|hit points?|armor class|saves?|saving throws?|fortitude|reflex|will save|perception DC|DC ?\d+|level ?\d+|\d+(st|nd|rd|th)[- ]level|spell slots?|\+\d+ to hit)\b/i;
+/** What to warn the GM of when a line is saved: names of people on the party's side (a monster only gets that line while it perceives them), and stat
+    words. people: [{ names }]. Out: { names: [...], stats: bool }. Library text should name nobody: it is used in every encounter. */
+export function lineWarnings(text, people = []) {
+  const g = noteForThinker(String(text ?? ""), (people ?? []).map(p => ({ names: p.names, label: null })), CAPS.storeNotes);
+  return { names: g.unknown, stats: STAT_WORDS.test(String(text ?? "")) };
+}
+/** New lines over a layer's own. Angel never replaces hers unasked (design review 9): a line whose words are the GM's is left alone unless `force`
+    (she asked) or the writer is the GM. `null` for a key removes that line (back to inherit); the same rule protects hers. `now` stamps each line
+    written with when. Out: { lines, skipped }. */
+export function applyLines(current = {}, incoming = {}, { by = "gm", force = false, library = false, now = null } = {}) {
+  const lines = { ...cleanLines(current, { library }) }, skipped = [];
+  for (const k of library ? LIBRARY_LINES : LINES) { if (!(k in (incoming ?? {}))) continue;
+    if (by !== "gm" && !force && lines[k]?.by === "gm") { skipped.push(k); continue; }
+    const l = incoming[k] === null ? null : cleanLine(k, typeof incoming[k] === "string" ? { text: incoming[k], by } : { ...incoming[k], by: incoming[k]?.by ?? by }, by);
+    if (l) lines[k] = now ? { ...l, at: now } : l; else delete lines[k]; }
+  return { lines, skipped };
+}
+/** Save to library, line by line with a preview (design review 10): what an encounter's lines would change in the kind's library entry. "knows" never
+    goes; a line already the same isn't listed. Out: [{ key, from, to }] in words. */
+export function libraryChanges(encounterLines = {}, entryLines = {}) {
+  const out = []; for (const k of LIBRARY_LINES) { const a = encounterLines?.[k]; if (!a || a.blank) continue;
+    const b = entryLines?.[k], to = lineWords(k, a), from = b && !b.blank ? lineWords(k, b) : ""; if (to && to !== from) out.push({ key: k, from, to }); }
+  return out;
+}
+/** The library as a file: { schema, exported, entries }. */
+export const exportData = (entries = [], now = Date.now()) => ({ module: "lythara-encounter-builder", what: "minds-library", schema: MIND_SCHEMA, exported: now, entries: (entries ?? []).map(cleanEntry).filter(Boolean).sort((a, b) => a.key.localeCompare(b.key)) });
+/** An import, before anything is written (design review 8): each incoming entry is `new` (no such key here), `match` (the same lines, name and
+    people) or `collision` (the key is here with something different; the GM chooses which to keep). A file from a newer schema is refused whole.
+    Out: { ok, reason, rows: [{ status, entry, mine }] }. */
+export function importPlan(existing = [], data = null) {
+  if (!data || data.what !== "minds-library" || !Array.isArray(data.entries)) return { ok: false, reason: "That file isn't a Minds Library export.", rows: [] };
+  if (!Number.isFinite(data.schema) || data.schema > MIND_SCHEMA) return { ok: false, reason: `That file is from a newer version of the module (schema ${data.schema}; this one reads ${MIND_SCHEMA}).`, rows: [] };
+  const mine = new Map((existing ?? []).map(cleanEntry).filter(Boolean).map(e => [e.key, e])), rows = [], seen = new Set();
+  const core = e => ({ type: e.type, name: e.name, people: e.people, lines: Object.fromEntries(Object.entries(e.lines).map(([k, l]) => [k, { pick: l.pick ?? null, text: l.text ?? "", blank: !!l.blank }])) });
+  for (const raw of data.entries) { const e = cleanEntry(raw); if (!e || seen.has(e.key)) continue; seen.add(e.key);
+    const m = mine.get(e.key); rows.push({ status: !m ? "new" : same(core(m), core(e)) ? "match" : "collision", entry: e, mine: m ?? null }); }
+  return { ok: true, reason: null, rows };
+}
+/** A brief row's encounter mind (decision 11: profiles replace the Tactics page). A row's old `tactics` text is that kind's notes for the encounter
+    when the row has no notes of its own. Out: lines. */
+export function rowLines(row = {}) {
+  const lines = cleanLines(row.mind); if (!lines.notes && String(row.tactics ?? "").trim()) lines.notes = cleanLine("notes", { text: row.tactics, by: "gm" });
+  return lines;
+}
+/** A row's single-monster profiles, by the monster's number in the row ("0", "1", ...): each a whole profile (decision 6). */
+export function rowOwn(row = {}, count = 30) {
+  const out = {}; for (const [k, v] of Object.entries(row.own && typeof row.own === "object" ? row.own : {})) { const n = Number(k); if (!Number.isInteger(n) || n < 0 || n >= count) continue; const l = cleanLines(v); if (Object.keys(l).length) out[String(n)] = l; }
+  return out;
+}

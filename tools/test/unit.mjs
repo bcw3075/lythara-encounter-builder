@@ -6,7 +6,7 @@ import { adjustedLevel, chooseTreasure, claimDiffers, coinsOf, ledgerLine, level
 import { esc, journalPages } from "../../scripts/journal.mjs";
 import { buildModel, summarise } from "../../scripts/mapread.mjs";
 import { hiddenNextTo, layout, nearestFree } from "../../scripts/place.mjs";
-import { actionsFor, assignLabels, canTarget, describeKnows, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, tacticsFor, visibleConditions, worse } from "../../scripts/perceive.mjs";
+import { actionsFor, assignLabels, canTarget, describeKnows, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, visibleConditions, worse } from "../../scripts/perceive.mjs";
 import { MAX_TRIES, STALL_MS, STEP_KINDS, cleanMeta, cleanPlan, eventOut, hello, listening, live, nextSeq, pickEvent, stale, stallLive, stallOf, stallWords, text, waitSeconds } from "../../scripts/brain.mjs";
 import { CHECK_WORD, FOLLOW_UPS, SAVE_MULT, abilityCost, followUpOutcome, lastAction, nextAbility, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets } from "../../scripts/turn.mjs";
 import { MAX_REPLANS, changesSince, checkPlan, coverAfterTaking, currentOf, endsCover, nextCover, damageOptions, describeChange, describeChanges, absorbOwn, describeStep, doneStep, isMove, latestNote, nextAction, nextMove, nextPosture, requestBusy, situationOf, spentBy, strikeIds } from "../../scripts/turn.mjs";
@@ -48,8 +48,8 @@ check("expand", expandCreatures(br, () => ({ n: 2 })).length === 30 && expandCre
 
 /* ---- journal ---- */
 const jb = cleanBrief({ beat: "b", why: "<script>", creatures: [{ name: "Wolf", tactics: "Bite @Check[perception|dc:15]" }], journal: { truth: "secret truth", locals: "they say", learn: "you find" } }), pages = journalPages(jb, { threat: { rating: "moderate", xp: 80, size: 4, level: 1 }, setup: ["Wolf: beast"], treasure: ["5 gp"] }), byName = n => pages.find(p => p.name === n)?.content ?? "";
-check("escaped", !byName("Overview").includes("<script>") && byName("Overview").includes("&lt;script&gt;")); check("tactics and check link", byName("Tactics").includes("@Check[perception|dc:15]")); check("truth is secret", /<section class="secret">.*secret truth.*<\/section>/s.test(byName("What can be learned"))); check("locals not secret", !/<section class="secret">[^]*they say[^]*<\/section>/.test(byName("What can be learned")));
-const bare = journalPages(cleanBrief({ creatures: [{ name: "Wolf" }] }), {}); check("no made-up story", bare.length === 3 && !bare.some(p => p.name === "What can be learned") && !/Why here/.test(bare[0].content)); check("esc", esc(`a<"&`) === "a&lt;&quot;&amp;");
+check("escaped", !byName("Overview").includes("<script>") && byName("Overview").includes("&lt;script&gt;")); check("no Tactics page (0.24.0)", !pages.some(p => p.name === "Tactics")); check("a row's tactics become its notes", jb.creatures[0].mind.notes?.text === "Bite @Check[perception|dc:15]" && jb.creatures[0].mind.notes.by === "gm" && !("tactics" in jb.creatures[0]) && jb.minds === 1); check("truth is secret", /<section class="secret">.*secret truth.*<\/section>/s.test(byName("What can be learned"))); check("locals not secret", !/<section class="secret">[^]*they say[^]*<\/section>/.test(byName("What can be learned")));
+const bare = journalPages(cleanBrief({ creatures: [{ name: "Wolf" }] }), {}); check("no made-up story", bare.length === 2 && !bare.some(p => p.name === "What can be learned") && !/Why here/.test(bare[0].content)); check("esc", esc(`a<"&`) === "a&lt;&quot;&amp;");
 
 /* ---- a turn ---- */
 const tctx = { actions: 3, strikes: [{ id: "jaws", name: "Jaws", reach: 5 }, { id: "bow", name: "Bow", reach: 5, ranged: true, maxRange: 60 }], targets: { E1: { name: "Hero", distance: 5 }, E2: { name: "Far", distance: 70 } } };
@@ -165,8 +165,6 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("custom health entries", healthWord({ value: 5, max: 10 }, healthEntries({ dead: "x", full: "y", entries: [{ label: "low", marker: 1 }, { label: "mid", marker: 40 }] })) === "mid");
   check("visible conditions only", visibleConditions(["prone", "frightened", "prone", "sickened", "grabbed"]).join() === "grabbed,prone");
   check("plain text", plainText('<p><strong>Requirements</strong> Has a creature @UUID[Compendium.pf2e.conditionitems.Item.x]{Grabbed}.</p><p>@Check[reflex|dc:20] &amp; @Damage[(1d6+3)[fire]]</p><p>@Localize[K]</p>', k => k === "K" ? "<p>Grab text</p>" : k) === "Requirements Has a creature Grabbed.\nDC 20 reflex & (1d6+3) fire\nGrab text");
-  const page = '<h3 data-group="0">Wolf (beast)</h3><p>Circle.</p><h3 data-group="1">Hob (brute)</h3><p>Charge.</p><section class="secret"><p>He is the mayor.</p></section>';
-  check("tactics by group", tacticsFor(page, 0) === "Wolf (beast)\nCircle."); check("tactics, secret out", !tacticsFor(page, 1).includes("mayor") && tacticsFor(page, 1).includes("Charge")); check("tactics, rewritten page", tacticsFor("<p>All rush.</p>", 2) === "All rush.");
   check("strike numbers", strikeMods(["Strike +12", "+7 (MAP -5)", "+2 (MAP -10)"]).join() === "12,7,2" && strikeMods(["Strike -1", "-6 (MAP -5)"]).join() === "-1,-6");
   const m = buildModel({ cols: 6, rows: 6, walls: [], costs: [0, 1, 2, 0, 0, 0, ...new Array(30).fill(0)], occupied: new Array(36).fill(true), entrySquares: [[5, 5]] }), g = groundAround(m, [0, 0], 2); check("ground", g.rows.length === 3 && g.rows[0] === ".dD" && g.from.join() === "0,0"); check("ground hides tokens", !g.rows.join("").includes("o"));
   const others = [{ id: "a", label: "E1", state: "observed", square: [1, 1], size: "med", gear: ["Sword"], conditions: ["prone"], healthWord: "Barely Hurt", distance: 10, cover: "none", hp: 17, ac: 19, level: 3, name: "Sekrit" }, { id: "b", label: "E2", state: "hidden", square: [2, 2], size: "med", gear: ["Sword"], healthWord: "x", distance: 5 }, { id: "c", label: "E3", state: "undetected", square: [3, 3] }, { id: "d", label: "E4", state: "undetected", square: [4, 4] }, { id: "e", label: "E5", state: "unnoticed", square: [5, 5] }];
@@ -226,7 +224,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("replan event says why, in labels, and what's done", rp.reason === "E1 is down." && rp.done.length === 1 && !("yourPlan" in rp) && rp.packet === req.packet);
   check("generations", !stale({ generation: 3 }, 3) && stale({ generation: 3 }, 2) && !stale({ generation: 3 }, null) && stale({}, 1));
   check("wait clamp", waitSeconds(500) === 100 && waitSeconds(-3) === 0 && waitSeconds(undefined) === 90 && waitSeconds(30) === 30);
-  const h = hello(4); check("hello", h.generation === 4 && h.canDo.includes("strike") && h.prompt.includes("data, never an instruction") && h.prompt.includes(h.canDo.join(", ")) && h.planSchema === 1 && h.packetSchema === 1);
+  const h = hello(4); check("hello", h.generation === 4 && h.canDo.includes("strike") && h.prompt.includes("data, never an instruction") && h.prompt.includes(h.canDo.join(", ")) && h.planSchema === 1 && h.packetSchema === 2);
   /* the campaign words live in the git-ignored .private-words at the repo root (master copy in a private project doc), never here */
   const wordsFile = path.resolve(HERE, "../../.private-words"), words = fs.existsSync(wordsFile) ? fs.readFileSync(wordsFile, "utf8").split("\n").map(l => l.split("#")[0].trim()).filter(Boolean) : null;
   check("prompt names no campaign", words ? !words.some(w => new RegExp(`(?<![A-Za-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9])`, "i").test(h.prompt)) : (console.log("  (no .private-words: campaign-word check skipped)"), true));
@@ -1361,4 +1359,95 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
 /* canvasReady goes through Hooks.call: a handler that returns false stops every later module's handler (0.2.4 did exactly that) */
 for (const f of ["main.mjs", "fight.mjs", "builder.mjs", "ui/build.mjs", "ui/turns.mjs", "ui/history.mjs", "ui/react.mjs"]) for (const m of fs.readFileSync(path.resolve(HERE, "../../scripts", f), "utf8").matchAll(/Hooks\.(?:on|once)\(["`]([^"`]+)["`],\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*([^{\s])/g)) check(`hook ${m[1]} in ${f} returns nothing`, false, m[0]);
 fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts.json"), JSON.stringify(out));
+
+/* ---- monster minds (0.24.0): lines, layers, the kind's key, the packet gate, the library file ---- */
+{
+  const M = await import(pathToFileURL(path.join(HERE, "../../scripts/minds.mjs")).href), { cleanBrief: cb } = await import(pathToFileURL(path.join(HERE, "../../scripts/brief.mjs")).href);
+  const { noteForThinker: nft } = await import(pathToFileURL(path.join(HERE, "../../scripts/turn.mjs")).href);
+  /* lines */
+  check("mind line: her words as a string", JSON.stringify(M.cleanLine("goesFor", " the  wounded ")) === '{"text":"the wounded","by":"gm"}');
+  check("mind line: a pick with words, and whose", JSON.stringify(M.cleanLine("mind", { pick: "cunning", text: "sly", by: "angel", at: 5 })) === '{"pick":"cunning","text":"sly","by":"angel","at":5}');
+  check("mind line: an unknown pick is dropped, a pick on a free line too", M.cleanLine("mind", { pick: "genius" }) === null && !("pick" in M.cleanLine("fightsBy", { pick: "cunning", text: "x" })));
+  check("mind line: nothing said is no line, an unknown line is none", M.cleanLine("goesFor", "  ") === null && M.cleanLine("mood", "x") === null && M.cleanLine("goesFor", null) === null);
+  check("mind line: deliberately blank is kept as blank", JSON.stringify(M.cleanLine("givesUp", { blank: true, text: "ignored" })) === '{"blank":true,"by":"gm"}');
+  check("mind line: caps", M.cleanLine("goesFor", "x".repeat(5000)).text.length === M.CAPS.store && M.cleanLine("notes", "x".repeat(5000)).text.length === M.CAPS.storeNotes);
+  check("mind lines: the library never keeps what it knows of its enemies", !("knows" in M.cleanLines({ knows: "the wizard is weak", goesFor: "a" }, { library: true })) && "knows" in M.cleanLines({ knows: "x" }));
+  /* the kind's key */
+  check("kind: a compendium creature goes by its source", M.kindKey({ source: "Compendium.pf2e.pathfinder-monster-core.Actor.abc", name: "Wolf", level: 1 }) === "src:Compendium.pf2e.pathfinder-monster-core.Actor.abc");
+  check("kind: Elite and Weak are the base kind", M.kindKey({ name: "Elite Bandit", level: 3, adjustment: "elite" }) === M.kindKey({ name: "Bandit", level: 2 }) && M.kindKey({ name: "Weak Bandit", level: 1, adjustment: "weak" }) === "name:bandit|2");
+  check("kind: two creatures of one name and different levels differ; a world actor's own id is no source", M.kindKey({ name: "Bandit", level: 2 }) !== M.kindKey({ name: "Bandit", level: 5 }) && M.kindKey({ source: "Actor.xyz", name: "Bandit", level: 2 }) === "name:bandit|2");
+  check("kind: a name that only starts with Elite keeps it", M.baseName("Elite Guard", null) === "Elite Guard" && M.baseName("Elite Guard", "elite") === "Guard");
+  /* the stat block */
+  const sb = (traits, int, abilities = []) => { const r = M.fromStatBlock({ traits, int, abilities }); return `${r.mind.pick}/${r.worksWith.pick}/${r.mind.by}`; };
+  check("stat block: mindless", sb(["undead", "mindless"], -5) === "mindless/alone/module");
+  check("stat block: an animal alone and with Pack Attack", sb(["animal"], -4) === "animal/alone/module" && sb(["animal"], -4, ["Pack Attack", "Knockdown"]) === "animal/pack/module");
+  check("stat block: simple, cunning, tactician by Intelligence", sb([], -2) === "simple/follows/module" && sb([], 0) === "cunning/follows/module" && sb([], 2) === "cunning/follows/module" && sb([], 3) === "tactician/follows/module" && sb([], null) === "simple/follows/module");
+  /* layers */
+  const L = (from, lines, name) => ({ from, lines: M.cleanLines(lines), ...(name ? { name } : {}) });
+  const people = L("people", { mind: { pick: "cunning" }, goesFor: "the smallest", fightsBy: "swarm", givesUp: "when badly hurt" }, "Goblins"), kind = L("kind", { goesFor: "whatever burns", givesUp: { blank: true } }, "Goblin Pyro");
+  const stat = { from: "statblock", lines: M.fromStatBlock({ int: -1 }) }, enc = L("encounter", { notes: "hold the bridge", knows: "the basics" });
+  let a = M.assemble([stat, people, kind, enc]);
+  check("layers: the most specific that speaks wins, line by line", a.lines.goesFor.text === "whatever burns" && a.lines.goesFor.from === "kind" && a.lines.goesFor.name === "Goblin Pyro" && a.lines.fightsBy.from === "people" && a.lines.notes.from === "encounter" && a.lines.mind.from === "people" && a.lines.worksWith.from === "statblock");
+  check("layers: a blank line stops the ones below", !("givesUp" in a.lines));
+  check("layers: order given doesn't matter", JSON.stringify(M.assemble([enc, kind, people, stat])) === JSON.stringify(a));
+  const own = L("own", { goesFor: "the one who killed its brother", mind: { pick: "simple" } });
+  a = M.assemble([stat, people, kind, enc, own]);
+  check("layers: a monster with its own profile stops following its kind's", a.own && a.lines.goesFor.from === "own" && !("fightsBy" in a.lines) && !("notes" in a.lines) && a.lines.mind.pick === "simple" && a.lines.worksWith.from === "statblock");
+  a = M.assemble([stat, people, own, L("fight", { givesUp: "now: its leader fell" })]);
+  check("layers: what was agreed in this fight is on top, even of its own", a.lines.givesUp.from === "fight" && a.lines.goesFor.from === "own");
+  check("layers: nothing but the stat block still gives a Mind", M.assemble([stat]).lines.mind.pick === "cunning" && Object.keys(M.assemble([]).lines).length === 0);
+  /* words and the packet */
+  check("words: a pick's label, then her words", M.lineWords("mind", { pick: "cunning", text: "and patient" }) === "Cunning. and patient" && M.lineWords("mind", { pick: "animal", text: "" }) === "Animal" && M.lineWords("goesFor", { text: "the nearest" }) === "the nearest");
+  const party = [{ names: ["Valeros", "Val"], label: null }, { names: ["Merisiel"], label: "E2" }, { names: ["Kyra"], label: "E3" }, { names: ["Kyra"], label: "E4" }];
+  a = M.assemble([stat, L("encounter", { goesFor: "Merisiel first, she killed the chief", notes: "Rush Valeros at the fallen tree", fightsBy: "from the trees", knows: "Kyra heals" })]);
+  let p = M.forPacket(a, party);
+  check("packet: a perceived name becomes its label", p.mind.goesFor === "E2 first, she killed the chief");
+  check("packet: a line naming someone it doesn't perceive is held back whole", !("notes" in p.mind) && p.held.some(h => h.key === "notes" && h.unknown.includes("Valeros")));
+  check("packet: a name that fits two it perceives is held back too", !("knows" in p.mind) && p.held.some(h => h.key === "knows" && h.ambiguous.includes("Kyra")));
+  check("packet: fixed order, picks' ids alongside, no name of a party member anywhere", JSON.stringify(Object.keys(p.mind)) === '["pick","mind","goesFor","fightsBy","worksWith"]' && p.mind.pick.mind === "cunning" && p.mind.pick.worksWith === "follows" && !/Valeros|Merisiel|Kyra/.test(JSON.stringify(p.mind)));
+  check("packet: the same profile twice is the same bytes", JSON.stringify(M.forPacket(a, party).mind) === JSON.stringify(p.mind));
+  a = M.assemble([L("encounter", { mind: { pick: "tactician", text: "trained by Valeros" } })]); p = M.forPacket(a, party);
+  check("packet: a held line with a pick keeps the pick, never the words", p.mind.mind === "Trained tactician" && p.held.length === 1);
+  a = M.assemble([L("encounter", { goesFor: "g".repeat(590), notes: "n".repeat(1900) })]); p = M.forPacket(a, []);
+  check("packet: caps per line and for notes", p.mind.goesFor.length === M.CAPS.send && p.mind.notes.length === M.CAPS.sendNotes);
+  check("packet: nothing to say is no mind", M.forPacket(M.assemble([]), party).mind === null && M.forPacket(M.assemble([L("encounter", { notes: "ask Valeros" })]), party).mind === null);
+  check("the note gate still cuts a GM's note at 300 and takes a longer text when asked", nft("x".repeat(900), []).text.length === 300 && nft("x".repeat(900), [], 600).text.length === 600);
+  /* warnings at save */
+  let w = M.lineWarnings("Rush Valeros, his AC is 18", party);
+  check("warn: a party member's name and a number off a sheet", w.names.includes("Valeros") && w.stats === true);
+  w = M.lineWarnings("Swarm the smallest, never a fair fight", party);
+  check("warn: nothing to warn of", w.names.length === 0 && w.stats === false);
+  check("warn: 'level ground' and 'will' aren't stat words, 'level 3' and 'Will save' are", !M.lineWarnings("fights on level ground at will", []).stats && M.lineWarnings("they are level 3", []).stats && M.lineWarnings("weak Will save", []).stats);
+  /* whose words: Angel never replaces hers unasked */
+  let r = M.applyLines({ goesFor: { text: "hers", by: "gm" }, fightsBy: { text: "angel's", by: "angel" } }, { goesFor: "new", fightsBy: "newer", givesUp: "never" }, { by: "angel" });
+  check("whose: Angel's write leaves the GM's line and says so", r.lines.goesFor.text === "hers" && r.skipped.join() === "goesFor" && r.lines.fightsBy.text === "newer" && r.lines.givesUp.by === "angel");
+  r = M.applyLines({ goesFor: { text: "hers", by: "gm" } }, { goesFor: "new" }, { by: "angel", force: true, now: 77 });
+  check("whose: asked to, Angel replaces it; the time is stamped", r.lines.goesFor.text === "new" && r.lines.goesFor.by === "angel" && r.lines.goesFor.at === 77 && !r.skipped.length);
+  r = M.applyLines({ goesFor: { text: "hers", by: "gm" }, notes: { text: "a", by: "angel" } }, { goesFor: null, notes: null }, { by: "angel" });
+  check("whose: taking a line away follows the same rule", r.lines.goesFor?.text === "hers" && !("notes" in r.lines) && r.skipped.join() === "goesFor");
+  r = M.applyLines({ goesFor: { text: "angel's", by: "angel" } }, { goesFor: "mine now", knows: "x" }, { by: "gm", library: true });
+  check("whose: the GM replaces anything; a library write drops knows", r.lines.goesFor.by === "gm" && !("knows" in r.lines));
+  /* save to library, line by line */
+  const ch = M.libraryChanges(M.cleanLines({ goesFor: "the wounded", fightsBy: "swarm", knows: "secret", notes: "n", givesUp: { blank: true } }), M.cleanLines({ fightsBy: "swarm", goesFor: "the nearest" }));
+  check("library preview: only lines that differ, never knows, never a blank", ch.map(c => c.key).join() === "goesFor,notes" && ch[0].from === "the nearest" && ch[0].to === "the wounded");
+  /* entries and the library file */
+  const e1 = M.cleanEntry({ type: "people", name: "Goblins", lines: { mind: { pick: "cunning" }, knows: "no" } }), e2 = M.cleanEntry({ type: "kind", key: "name:goblin-pyro|1", name: "Goblin Pyro", people: "people:goblins", lines: { goesFor: "whatever burns" } });
+  check("entry: a people's key from its name, a kind names its people, knows never stored", e1.key === "people:goblins" && e1.people === null && !("knows" in e1.lines) && e2.people === "people:goblins" && e1.schema === 1);
+  check("entry: no name or no key is no entry; a people can't have a people", M.cleanEntry({ type: "kind", name: "x" }) === null && M.cleanEntry({ type: "people", key: "people:a" }) === null && M.cleanEntry({ type: "people", name: "A", people: "people:b" }).people === null);
+  const file = M.exportData([e2, e1], 123);
+  check("library file: marked, versioned, sorted", file.what === "minds-library" && file.schema === 1 && file.exported === 123 && file.entries.map(e => e.key).join() === "name:goblin-pyro|1,people:goblins");
+  let plan = M.importPlan([e1], file);
+  check("import: match and new", plan.ok && plan.rows.find(x => x.entry.key === e1.key).status === "match" && plan.rows.find(x => x.entry.key === e2.key).status === "new");
+  plan = M.importPlan([M.cleanEntry({ ...e2, lines: { goesFor: "the nearest" } }), e1], file);
+  check("import: a collision shows both", plan.rows.find(x => x.entry.key === e2.key).status === "collision" && plan.rows.find(x => x.entry.key === e2.key).mine.lines.goesFor.text === "the nearest");
+  check("import: who wrote a line or when doesn't make a collision", M.importPlan([M.cleanEntry({ ...e2, lines: { goesFor: { text: "whatever burns", by: "angel", at: 9 } } })], file).rows[0].status === "match");
+  check("import: a newer schema or another file is refused", !M.importPlan([], { ...file, schema: 2 }).ok && !M.importPlan([], { what: "other", entries: [] }).ok && !M.importPlan([], null).ok);
+  /* the brief carries the encounter layer */
+  const b = cb({ creatures: [{ name: "Goblin Warrior", count: 4, tactics: "old tactics", mind: { goesFor: "the wounded", knows: "the basics", junk: "x" }, own: { 2: { goesFor: "the dwarf" }, 9: { goesFor: "out of range" }, x: {} }, band: "warband", leader: true }, { name: "Wolf", mind: { notes: "kept" }, tactics: "ignored: the row has notes" }] });
+  check("brief: a row's mind, cleaned", b.creatures[0].mind.goesFor.text === "the wounded" && b.creatures[0].mind.knows.text === "the basics" && !("junk" in b.creatures[0].mind) && b.creatures[0].mind.notes.text === "old tactics");
+  check("brief: single monsters' own profiles by their number, in range only", Object.keys(b.creatures[0].own).join() === "2" && b.creatures[0].own[2].goesFor.text === "the dwarf");
+  check("brief: band and leader are kept for the group releases", b.creatures[0].band === "warband" && b.creatures[0].leader === true && b.creatures[1].band === "" && b.creatures[1].leader === false);
+  check("brief: a row's own notes win over old tactics text", b.creatures[1].mind.notes.text === "kept");
+  check("brief: cleaning twice changes nothing", JSON.stringify(cb(b)) === JSON.stringify(b));
+}
 console.log(`${good} passed, ${bad} failed`); process.exit(bad ? 1 : 0);

@@ -21,7 +21,7 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
   async _renderHTML() {
     await this.rowFacts(); ensureStyle();
     const b = this.brief, t = this.threat(), lv = b.partyLevel, line = ledgerFor(lv), gp = t ? treasureFor(lv, t.rating) : 0, built = this.scene.getFlag(ID, "build"), sizeNote = partySizeNote(partySize());
-    const rows = b.creatures.map((c, k) => { const i = this.rowInfo.get(c.uuid); return `<div class="leb-row" data-row="${k}"><b title="${esc(c.uuid)}">${esc(c.name)}${i ? ` (${i.level})` : ""}</b><input type="number" name="count" min="1" max="30" value="${c.count}" title="How many"><select name="adjust" title="Adjustment">${options(ADJUSTMENTS, c.adjust, v => v || "normal")}</select><select name="role" title="Role">${options(ROLES, c.role)}</select><select name="state" title="How it starts">${options(STATES, c.state)}</select><input type="checkbox" name="run" ${c.run ? "checked" : ""} title="Angel runs this (used once monster turns exist)"><a data-action="removeRow" title="Remove"><i class="fa-solid fa-xmark"></i></a></div><textarea name="tactics" data-row="${k}" placeholder="Tactics for ${esc(c.name)} (goes on the Tactics page)">${esc(c.tactics)}</textarea>`; }).join("");
+    const rows = b.creatures.map((c, k) => { const i = this.rowInfo.get(c.uuid); return `<div class="leb-row" data-row="${k}"><b title="${esc(c.uuid)}">${esc(c.name)}${i ? ` (${i.level})` : ""}</b><input type="number" name="count" min="1" max="30" value="${c.count}" title="How many"><select name="adjust" title="Adjustment">${options(ADJUSTMENTS, c.adjust, v => v || "normal")}</select><select name="role" title="Role">${options(ROLES, c.role)}</select><select name="state" title="How it starts">${options(STATES, c.state)}</select><input type="checkbox" name="run" ${c.run ? "checked" : ""} title="Angel runs this (used once monster turns exist)"><a data-action="removeRow" title="Remove"><i class="fa-solid fa-xmark"></i></a></div><textarea name="notes" data-row="${k}" placeholder="Notes for ${esc(c.name)} in this encounter: how they fight here, what they are told to do (the Notes line of their mind; the rest is in Monster Minds once built)">${esc(c.mind?.notes?.blank ? "" : c.mind?.notes?.text ?? "")}</textarea>`; }).join("");
     return `<form class="leb-form"><div class="leb-scroll">
       ${built ? `<p class="leb-warn">This map already has a build. Placing replaces what that build made. Anything placed by hand stays.</p>` : ""}
       ${this.fromChat ? `<p>Brief filled in from what's stored on this map. You can still change it.</p>` : ""}
@@ -49,7 +49,8 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
   /* whatever the form holds goes into the brief at once, so a re-render loses nothing */
   readForm(el) {
     const n = el.name, row = el.closest("[data-row]")?.dataset.row ?? el.dataset.row, c = row === undefined ? null : this.brief.creatures[+row];
-    if (c) { if (n === "count") c.count = Math.max(1, Math.min(30, +el.value || 1)); else if (n === "run") c.run = el.checked; else if (["adjust", "role", "state", "tactics"].includes(n)) c[n] = el.value; return; }
+    if (c) { if (n === "count") c.count = Math.max(1, Math.min(30, +el.value || 1)); else if (n === "run") c.run = el.checked; else if (["adjust", "role", "state"].includes(n)) c[n] = el.value;
+      else if (n === "notes") { c.mind ??= {}; if (el.value.trim()) c.mind.notes = { text: el.value, by: "gm" }; else delete c.mind.notes; } return; }
     if (n === "partyLevel") this.brief.partyLevel = Math.round(+el.value || 0); else if (n === "claimedXP") this.brief.claimedXP = el.value === "" ? null : +el.value; else if (["name", "mood", "why", "want", "doing", "retreat", "treasureMode"].includes(n)) this.brief[n] = el.value;
   }
   _onRender() {
@@ -67,7 +68,7 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
   bindActions() { this.element.querySelectorAll("[data-action]").forEach(el => { if (el.dataset.bound) return; el.dataset.bound = "1"; el.addEventListener("click", ev => { ev.preventDefault(); this.act(el).catch(e => { ui.notifications.error(e.message); console.error(e); }); }); }); }
   async act(el) {
     const a = el.dataset.action;
-    if (a === "addResult") { const r = this.results[+el.dataset.k]; if (r) { this.brief.creatures.push({ uuid: r.uuid, name: r.name, count: 1, adjust: "", role: "brute", state: this.brief.mood === "ambush" ? "hidden" : "alert", tactics: "", anchor: "", run: true, opus: false }); this.results = []; this.render(); } }
+    if (a === "addResult") { const r = this.results[+el.dataset.k]; if (r) { this.brief.creatures.push({ uuid: r.uuid, name: r.name, count: 1, adjust: "", role: "brute", state: this.brief.mood === "ambush" ? "hidden" : "alert", mind: {}, own: {}, band: "", leader: false, anchor: "", run: true, opus: false }); this.results = []; this.render(); } }
     else if (a === "removeRow") { this.brief.creatures.splice(+el.closest("[data-row]").dataset.row, 1); this.render(); }
     else if (a === "askAngel") { const s = await summary(this.scene); await this.scene.setFlag(ID, "design", { requested: Date.now(), summary: s }); this.message = `Asked. In your chat, say "build an encounter on ${this.scene.name}". The brief appears here when it's sent.`; this.render(); }
     else if (a === "preview") { /* out of the way while she looks at the map */

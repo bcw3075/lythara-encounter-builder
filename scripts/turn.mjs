@@ -730,9 +730,10 @@ export function applyEdits(raw = [], edits = []) {
 /** The GM's note in the thinker's words (the module's rule: no PC's name reaches the thinker). people: [{ names: [...], label }], label null for a
     creature (or a person) the monster doesn't perceive. Each whole-word name, case aside, the longest first ("Test Hero" before "Hero"), becomes its
     label. Returns { text, unknown, ambiguous }: `unknown`, names of creatures it doesn't perceive (left as typed: the card refuses to send, since
-    even "someone" would tell it they exist); `ambiguous`, names that fit several creatures it perceives (two Goblin Warriors), also refused. */
-export function noteForThinker(note, people = []) {
-  const clean = String(note ?? "").replace(/\s+/g, " ").trim().slice(0, NOTE_MAX), unknown = [], ambiguous = [], byName = new Map();
+    even "someone" would tell it they exist); `ambiguous`, names that fit several creatures it perceives (two Goblin Warriors), also refused.
+    max: how long the text may be (a note's 300 characters unless a caller with longer text says otherwise: monster minds, 0.24.0). */
+export function noteForThinker(note, people = [], max = NOTE_MAX) {
+  const clean = String(note ?? "").replace(/\s+/g, " ").trim().slice(0, max), unknown = [], ambiguous = [], byName = new Map();
   for (const p of people) for (const n of p.names ?? []) { const k = String(n ?? "").trim(); if (k.length < 2) continue;
     const e = byName.get(k.toLowerCase()) ?? { name: k, labels: new Set(), hidden: false }; if (p.label) e.labels.add(p.label); else e.hidden = true; byName.set(k.toLowerCase(), e); }
   const names = [...byName.keys()].sort((a, b) => b.length - a.length);
