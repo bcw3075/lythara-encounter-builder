@@ -2256,7 +2256,12 @@ const shiftFor = side => [side === "west" ? EXTEND_SQUARES * 100 : 0, side === "
     monster last saw someone) move with the content; the token's movement history is cleared if the shift was recorded as movement, so the next
     Stride isn't charged for it. */
 async function afterExtend(combat, requestId, side, tok, { shifted = shiftFor(side), history = 0 } = {}) {
-  const scene = combat.scene, g = scene.grid.size, dx = Math.round((shifted?.[0] ?? 0) / g), dy = Math.round((shifted?.[1] ?? 0) / g), change = { [`requests.${requestId}.extended`]: side, [`requests.${requestId}.extending`]: null };
+  /* how far the squares' numbers moved: the new strip only, and only when the map grew west or north. The Survey Sheet's `shifted` is in pixels
+     and includes the change of the scene's padding, which moves every token but no square's number (seen live in 0.26.0: a 40-column map grown
+     west gave 1,100 px, and the old pixel sum moved remembered squares and a rally spot by 11 where the tokens moved 10; grown east or south it
+     moved them by 1 where nothing moved). The size before is on the request since 0.25.0. */
+  const scene = combat.scene, from = request(combat, requestId)?.extendFrom, [cols, rows] = mapSquares(scene);
+  const dx = side === "west" ? (Array.isArray(from) ? Math.max(0, cols - from[0]) : EXTEND_SQUARES) : 0, dy = side === "north" ? (Array.isArray(from) ? Math.max(0, rows - from[1]) : EXTEND_SQUARES) : 0, change = { [`requests.${requestId}.extended`]: side, [`requests.${requestId}.extending`]: null };
   if (dx || dy) for (const [who, mem] of Object.entries(turns(combat).memory ?? {})) for (const [id, m] of Object.entries(mem ?? {})) if (Array.isArray(m?.square)) change[`memory.${who}.${id}.square`] = [m.square[0] + dx, m.square[1] + dy];
   await saveTurns(combat, change);
   await shiftBandSpots(scene, dx, dy).catch(e => console.error(`${ID} | rally spots`, e));   /* a band's rally spot is a square too */
