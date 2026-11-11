@@ -1,7 +1,7 @@
 ---
 feature: fleeing
 files: []
-functions: [turn.mjs:edgeSides, fight.mjs:mapSquares, fight.mjs:surveyApi, fight.mjs:extendProblem, fight.mjs:escapeXP, fight.mjs:escapedOf, fight.mjs:escapeRecord, fight.mjs:shiftFor, fight.mjs:letGo, fight.mjs:extendMap, fight.mjs:runExtend, fight.mjs:afterExtend, fight.mjs:escapedList, fight.mjs:bringBack]
+functions: [fight.mjs:bandStillFighting, fight.mjs:letBandGo, fight.mjs:leaveWithBand, turn.mjs:edgeSides, fight.mjs:mapSquares, fight.mjs:surveyApi, fight.mjs:extendProblem, fight.mjs:escapeXP, fight.mjs:escapedOf, fight.mjs:escapeRecord, fight.mjs:shiftFor, fight.mjs:letGo, fight.mjs:extendMap, fight.mjs:runExtend, fight.mjs:afterExtend, fight.mjs:escapedList, fight.mjs:bringBack]
 dependsOn: [turn-loop, moves, card-ui, history, brain]
 since: 0.11.0
 ---
@@ -21,6 +21,7 @@ Designed with Rhea one question at a time on 2026-11-08; she chose the recommend
 9. **Too far from the edge to arrive this turn:** the thinker runs toward the nearest edge with ordinary Strides (already legal) and plans `flee` once the edge is within what its remaining actions can reach. A Fleeing monster must move away from the source; checked the same way.
 10. **What players see:** the token has already stood on the edge square; when the GM presses Let it get away the module hides it, so the table watches it run off and vanish. **No chat message** (her standing rule: no whispered or extra chat cards). The card and history carry the record.
 11. **End Encounter leaves escaped tokens hidden (Rhea, 2026-11-09):** asked whether escaped tokens should be unhidden when the encounter ends, she answered "stay hidden". No change: they keep their hidden state and flag.
+12. **A whole band running: the first prompt offers both (Rhea, 2026-11-11, R3-13).** When a member of a band reaches the edge while others of its band are still in the fight, the card has **Let this one go** and **Let the whole band go**; after the second, the rest leave without stopping as each reaches the edge; after the first, the next member asks again. A monster fleeing alone (in no band, or the last of its band) asks as before with **Let it get away** (decision 1 stands for single monsters). She chose this over a prompt for every monster and over one silent choice for the band. Settled by Angel: bringing one of them back takes the band's leave away, so the others ask again.
 
 Build choices (Angel, 2026-11-08, within the design; Rhea can change them):
 - **The outermost ring is read from the scene's current bounds** (`scene.dimensions` ÷ grid size), never a stored size, so an extended map has new edges at once.
@@ -31,6 +32,7 @@ Build choices (Angel, 2026-11-08, within the design; Rhea can change them):
 - **XP not earned** is PF2e's own `calculateXP` for one creature of the monster's level against the party's level (the Build window's suggested level) and the party size setting.
 
 ## How it works
+- **A whole band running (0.26.0):** `bandStillFighting(combat, tokenId)` counts the other members of the monster's band still in the tracker and not defeated or dead; with at least one, the card's button reads **Let this one go** and a second, **Let the whole band go**, calls `letBandGo`: it writes `bandGo.<band key>` on the Combat's turns flag and lets this one go. In `runTurn`, a flee that reaches its square saves `fled` as before and then `leaveWithBand` lets the monster go at once when its band has that leave (on the runner's page, which is a GM's), so the turn doesn't stop, on Auto or not; its note says it got away with its band. `bringBack` of a member takes the leave away. The leave is on the Combat, so it ends with the fight. When an extension shifts the squares' numbers, `afterExtend` also moves the bands' rally spots (`docs/features/bands.md`).
 - **A runner reload during an extension (0.25.0):** the request keeps the map's size from before (`extendFrom`). After the reload a map that grew is treated as extended (the thinker is asked again, squares shifted as usual); one that didn't goes back to `fled` with the buttons and a note that the page reloaded and the map didn't grow. The Survey Sheet's job runs on the runner's page and dies with it, so offering Extend again there can't grow the map twice. Before 0.25.0 the request was closed as extended either way (seen live in the 0.25.0 close-out: the card said the map was extended when it wasn't, and with no actions left the monster stood on the old edge).
 - `turn.mjs`: `flee` is in `COSTS`, `MOVES` and `WORD`; `edgeSides(square, size, cols, rows)` says which edges a creature's space touches. In `checkPlan` a flee goes through the move branch (prone, Speed, route and cost like a Stride), then needs `ctx.edgeAt(to, size)` to return at least one side, and sets `fled` so a later step is refused. The resolved step carries `sides`. `describeStep` says so on the card; `doneStep` gives the thinker "reached the map's edge".
 - `fight.mjs`: `gather` passes `edgeAt` from `mapSquares(scene)`. In `runTurn`, after `runStride` moved it: short of its square → the usual "stopped" re-plan (also for a flee, though it is the last step); at its square → the request is saved `state: "fled"` with `fled: { sides, at }` and the loop ends. `endAfter` isn't reached, so Auto never ends a fled turn. The stall check treats `fled` as waiting on a person and `extending` as machine work.
@@ -53,6 +55,8 @@ Build choices (Angel, 2026-11-08, within the design; Rhea can change them):
 - (fl-8) {live} A reload of the runner while the buttons wait: the card still shows them after it rejoins; a reload during extending: if the map grew, the thinker is asked again once it is back; if it didn't (the job went with the page), the buttons come back with a note saying so, and Extend works again.
 - (fl-9) {live} Smoke test as regression (the project's smoke-test doc): an ordinary Stride-and-Strike turn still runs, and a Stride ending on the ring triggers nothing.
 - (fl-10) {live} Let it get away with a monster ticked for Angel next in the order (0.24.0), by a real click as AI: that monster's plan request comes within a few seconds, once (before 0.24.0 it was never asked: the turn passes with no `updateCombat` carrying `turn`; `docs/features/turn-loop.md` Traps).
+- (fl-11) {live} A band at the edge (0.26.0), by real clicks as AI with two monsters of one band and one in no band, each fleeing to the edge in turn: the one in no band shows Let it get away; the first of the band shows Let this one go and Let the whole band go; after Let this one go the second asks again; in a fresh fight, after Let the whole band go the second leaves without a press when it reaches the edge (hidden, flagged, its combatant gone, the turn moved on once, its note "got away with its band"), on Auto too; Bring back one, and the next to reach the edge asks again; the history shows the press by its name.
+- (fl-12) {live} Extend map north or west with a band's rally spot set: the spot's square moves by the strip (read it through `api.minds.bands` and on the band's page).
 
 ## Traps
 - **Test trap: the dungeon test scene's middle has no reachable edge** (0.20.1 close-out): from the Sod Hound's square no Stride then flee reaches the outer ring, so test flees on an outdoor map.
@@ -63,6 +67,7 @@ Build choices (Angel, 2026-11-08, within the design; Rhea can change them):
 - **A timeout on another module's job doesn't stop the job:** offering Extend again after a Survey Sheet timeout would have grown the map twice.
 
 ## Open items
+- "Let the whole band go" makes nobody run: each member still flees by its own mind, and one that fights on stays. Nothing tells the thinker the band was let go.
 - After a reload that didn't grow the map and a second Extend that did, the first note ("...the map didn't grow...") stays on the finished request and can still be read in the history (seen live on 0.25.0).
 - A Fleeing monster with no reachable edge: the prompt tells the thinker to Stride away from the source; the checker doesn't enforce "away from the source".
 - The thinker gets no hint that the edge is in reach beyond the map's size and its square; it works it out.

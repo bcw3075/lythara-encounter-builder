@@ -1,5 +1,6 @@
 /* The Build Encounter window: the brief by hand or from a chat, the live threat and treasure numbers, then a preview with GM-only drawings. */
 import { ADJUSTMENTS, MOODS, ROLES, STATES, cleanBrief } from "../brief.mjs";
+import { rowRemoved } from "../bands.mjs";
 import { adjustedLevel, partySizeNote, treasureFor } from "../budget.mjs";
 import { esc } from "../journal.mjs";
 import { ID, applyReplace, clear, clearPreview, findCreatures, ledgerFor, partyLevels, partySize, place, prepare, prepareReplace, setManualTreasure, showPreview, suggestedLevel, summary, threatOf } from "../builder.mjs";
@@ -17,7 +18,10 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
     this.rowInfo = new Map();
   }
   /* the minds as the scene now has them, for rows that are still the same creature at the same place (the notes box shows them) */
-  takeMinds(stored) { const rows = cleanBrief(stored ?? {}).creatures; this.brief.creatures.forEach((c, i) => { const s = rows[i]; if (s && s.uuid === c.uuid) { c.mind = s.mind; c.own = s.own; c.band = s.band; c.leader = s.leader; } }); }
+  takeMinds(stored) { const rows = cleanBrief(stored ?? {}).creatures; this.brief.creatures.forEach((c, i) => { const s = rows[i]; if (s && s.uuid === c.uuid) { c.mind = s.mind; c.own = s.own; } });
+    /* bands (0.26.0): the scene's are taken whole, and each row that is still the scene's takes its band; a mark or a job pointing at a row that isn't
+       in the band any more is dropped when the brief is cleaned (0.26.0 review 5: all-or-nothing lost a band edit made while a row was being added) */
+    this.brief.creatures.forEach((c, i) => { const s = rows[i]; if (s && s.uuid === c.uuid) c.band = s.band; }); this.brief.bands = cleanBrief(stored ?? {}).bands; }
   async rowFacts() { for (const c of this.brief.creatures) if (c.uuid && !this.rowInfo.has(c.uuid)) { const a = await fromUuid(c.uuid); if (a) { this.rowInfo.set(c.uuid, { level: a.level, name: a.name }); c.name ||= a.name; } } }
   threat() { const levels = this.brief.creatures.flatMap(c => { const i = this.rowInfo.get(c.uuid); return i ? Array(c.count).fill(adjustedLevel(i.level, c.adjust)) : []; }); return levels.length ? threatOf(levels, this.brief.partyLevel, this.brief.claimedXP) : null; }
   async _renderHTML() {
@@ -71,7 +75,7 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
   async act(el) {
     const a = el.dataset.action;
     if (a === "addResult") { const r = this.results[+el.dataset.k]; if (r) { this.brief.creatures.push({ uuid: r.uuid, name: r.name, count: 1, adjust: "", role: "brute", state: this.brief.mood === "ambush" ? "hidden" : "alert", mind: {}, own: {}, band: "", leader: false, anchor: "", run: true, opus: false }); this.results = []; this.render(); } }
-    else if (a === "removeRow") { this.brief.creatures.splice(+el.closest("[data-row]").dataset.row, 1); this.render(); }
+    else if (a === "removeRow") { const g = +el.closest("[data-row]").dataset.row; this.brief.creatures.splice(g, 1); this.brief.bands = rowRemoved(this.brief.bands, g); this.render(); }
     else if (a === "askAngel") { const s = await summary(this.scene); await this.scene.setFlag(ID, "design", { requested: Date.now(), summary: s }); this.message = `Asked. In your chat, say "build an encounter on ${this.scene.name}". The brief appears here when it's sent.`; this.render(); }
     else if (a === "preview") { /* out of the way while she looks at the map */
       await this.minimize();

@@ -6,6 +6,7 @@ import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, POSTURES
 import { BURROW_DEPTH, FT, distanceBetween, burrowWorld, crossesWalls, cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, heightWhenCut, rockSquares, routeWords, swimWorld, glideWorld, treeTop, treesBeside, wallSquares, waterKinds, waterUnder } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, visibleConditions } from "./perceive.mjs";
 import { mindOf } from "./library.mjs";
+import { bandKeyOf, bandPacket, membersOf, shiftBandSpots } from "./bandlib.mjs";
 import { RUNGS, STORE_MAX, GM_LINE_MAX, evict, forPacket, gmLine, lineKey, render, rethinkFor, rungOf, severity, sideWords, spellWords, witnessLines } from "./memory.mjs";
 import { readMap, partySize, suggestedLevel } from "./builder.mjs";
 import { aimArea, aimWords, alliesCaught, burstReachable, caughtBy, shapeOf, squaresNear } from "./area.mjs";
@@ -300,12 +301,20 @@ async function buildPacket(combat, tok, turn = {}) {
      naming someone else held back (the same gate as the GM's note); `mindHeld` goes with the request so the GM can be told why a line was left out */
   const nameable = new Set([tok.id, ...allies.map(x => x.id), ...others.filter(o => canTarget(o.state)).map(o => o.id)]), minded = mindOf(scene, tok, combat, id => nameable.has(id) ? labels[id] ?? null : null);
   /* its notebook (0.25.0): what it remembers of this fight that its Mind can use, its allies' deeds since its last turn, its side's tally */
-  const notebook = forPacket(books(combat)[tok.id], { rung: rungOf(minded.mind?.pick?.mind), since: deedsSince(combat, tok.id), side: sideOf(combat, tok) });
-  const packet = packetOf({ you, mind: minded.mind, notebook, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], ground: groundAround(model, square, GROUND_RADIUS, undefined, takeCoverSquares(scene), water, soil && !glides ? (x, y) => !soil(x, y) && !model.blocked[model.idx(x, y)] && !water(x, y) : null),
+  /* its band (0.26.0): by its Discipline, the band's nature, who leads and the plan written at build, and once the leader has fallen, that it has
+     (the band knows at once: Rhea, R3-10). A creature with no Discipline shares nothing: no band, and nothing of what the others did or how its
+     side stands. The leader is named only by a label this monster already has (a GM-hidden ally stays unnamed). */
+  const discipline = minded.assembled.lines.discipline?.pick ?? "loose", banded = onParty(a) ? { band: null, bandNow: null, held: [] } : bandPacket(scene, tok, combat, { labelOf: id => nameable.has(id) ? labels[id] ?? null : null, fallen: fallenWord, discipline });
+  const notebook = forPacket(books(combat)[tok.id], { rung: rungOf(minded.mind?.pick?.mind), since: deedsSince(combat, tok.id), side: sideOf(combat, tok), shares: onParty(a) || discipline !== "none" });
+  const packet = packetOf({ you, mind: minded.mind, band: banded.band, bandNow: banded.bandNow, notebook, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], ground: groundAround(model, square, GROUND_RADIUS, undefined, takeCoverSquares(scene), water, soil && !glides ? (x, y) => !soil(x, y) && !model.blocked[model.idx(x, y)] && !water(x, y) : null),
     allies: allies.map(x => ({ label: labels[x.id], name: nameFor(x), square: squareOf(x, scene), ...(heightUp(x) ? { height: heightUp(x) } : {}), ...(isBelow(x) ? { below: true } : {}), healthWord: wordsFor(x.actor), conditions: visibleConditions(conditionsOn(x.actor)) })),
     others: others.map(o => ({ id: o.id, state: o.state, label: labels[o.id], square: o.square, height: heightUp(o.token), offGrid: offGrid(o.token, scene), size: o.token.actor.size, distance: o.distance, gear: gearOf(o.token.actor), conditions: visibleConditions(conditionsOn(o.token.actor)), healthWord: wordsFor(o.token.actor), cover: cover?.getAutoCoverState?.(tok.object, o.token.object) ?? "none" })) });
-  return { packet, labels: labelsOf(others.map(o => ({ id: o.id, state: o.state, label: labels[o.id] }))), fresh, others, mindHeld: minded.held.map(h => h.key) };
+  return { packet, labels: labelsOf(others.map(o => ({ id: o.id, state: o.state, label: labels[o.id] }))), fresh, others, mindHeld: [...minded.held.map(h => h.key), ...banded.held.map(k => `band.${k}`)] };
 }
+/** Has this creature fallen, as its band counts it (R3-2: down, dead or fled)? */
+function fallenWord(tok) { const a = tok?.actor; if (!a) return "gone";
+  /* asleep is not fallen: the builder puts Unconscious on a monster built asleep, and its band must not run while the boss sleeps (0.26.0 review 1) */
+  return tok.getFlag(ID, "escaped") ? "fled" : isDeadNow(a) ? "dead" : (a.hitPoints?.value ?? 1) <= 0 || a.hasCondition?.("dying") ? "down" : null; }
 /* Keep what each ticked monster can perceive as the fight moves, so a monster's memory is where it last perceived someone and not where they stood on its own last turn. */
 async function noteWhatTheySense(combat) {
   if (!onFightScene(combat)) return;
@@ -2112,7 +2121,9 @@ async function runTurn(combat, requestId) {
       /* a Climb that made no progress (a failed check): the rest was planned from higher up, so ask again, as for a Stride stopped short */
       if (step.do === "climb" && result !== "gm" && request(combat, requestId).log?.[i]?.climb?.degree === 1 && i + 1 < r.steps.length && request(combat, requestId).state !== "manual") return replan(combat, { ...request(combat, requestId), id: requestId }, i + 1, [{ who: "me", what: "noClimb", height: heightUp(tok) }], tok);
       /* at the map's edge (Rhea, 2026-11-08): the turn stops, Auto or not, and the GM chooses Extend map or Let it get away on the card */
-      if (step.do === "flee" && result !== "gm" && request(combat, requestId).state !== "manual") return save(combat, requestId, { pos: i + 1, coverSettled: i + 1, state: "fled", fled: { sides: edgeSides(at, sizeOf(tok), ...mapSquares(combat.scene)), at } });
+      if (step.do === "flee" && result !== "gm" && request(combat, requestId).state !== "manual") { const out = await save(combat, requestId, { pos: i + 1, coverSettled: i + 1, state: "fled", fled: { sides: edgeSides(at, sizeOf(tok), ...mapSquares(combat.scene)), at } });
+        /* its band was let go as a whole (Rhea, R3-13): it leaves without stopping */
+        await leaveWithBand(combat, requestId, tok).catch(e => console.error(`${ID} | band leaves`, e)); return out; }
       /* an ability whose effects are the GM's to apply: the turn waits for Next step, Auto or not (the look before the next action then sees what changed) */
       if (result === "gm" && request(combat, requestId).state !== "manual") { const end = i + 1 >= r.steps.length;
         if (!end) await addNote(combat, requestId, "Then press Next step.");
@@ -2176,19 +2187,38 @@ const escapedOf = combat => turns(combat).escaped ?? {};   /* keyed by the reque
 const escapeRecord = (combat, tokenId) => Object.entries(escapedOf(combat)).filter(([, e]) => e?.tokenId === tokenId && !e.returned).sort((a, b) => (b[1].at ?? 0) - (a[1].at ?? 0))[0] ?? null;
 /** Let it get away (Rhea, 2026-11-08): the monster leaves the fight. Its token stays on the scene, hidden and flagged, HP and conditions kept; nothing is
     deleted but its combatant. The threat stays as built; the XP not earned is noted on the card and in the history. No chat message. Any GM may press it. */
-export async function letGo(combat, requestId) {
+export async function letGo(combat, requestId, { withBand = false } = {}) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
   const r = request(combat, requestId); if (r?.state !== "fled") throw new Error("That monster isn't at the map's edge.");
   const tok = combat.scene?.tokens.get(r.tokenId), combatant = combat.combatants.get(r.combatantId); if (!tok) throw new Error("Its token is gone.");
   if (escapedOf(combat)[requestId]) throw new Error("Already done.");   /* two GMs pressing together: the record is written first, so the second press stops here */
   const xp = escapeXP(tok), name = tok.name, at = Date.now(), xpWords = xp != null ? ` (${xp} XP not earned)` : "";
   await saveTurns(combat, { [`escaped.${requestId}`]: whole({ tokenId: tok.id, name, xp, round: combat.round, at, combatantId: r.combatantId }) });
-  await save(combat, requestId, { state: "done", extend: null, escaped: { name, xp, at }, note: [r.note, `${name} got away${xpWords}.`].filter(Boolean).join(" ") });
+  await save(combat, requestId, { state: "done", extend: null, escaped: { name, xp, at }, note: [r.note, `${name} got away${withBand ? " with its band (you let the whole band go)" : ""}${xpWords}.`].filter(Boolean).join(" ") });
   await tok.update({ hidden: true, [`flags.${ID}.escaped`]: { round: combat.round, at, xp, combat: combat.id } });
   /* deleting the current combatant is enough: core's Combatant._preDeleteOperation hands the turn to the next survivor with turn events
      (14.370). Calling nextTurn first and then deleting skipped the next creature's turn (seen live 2026-11-08: round 1 → 2, Test Hero's turn lost). */
   if (combatant) await combat.deleteEmbeddedDocuments("Combatant", [combatant.id]);
   return { name, xp };
+}
+/** How many others of its band are still in the fight (in the tracker, not defeated or dead): the flee card offers "Let the whole band go" when
+    there is at least one (Rhea, 2026-11-11, R3-13). */
+export function bandStillFighting(combat, tokenId) {
+  const scene = combat?.scene, tok = scene?.tokens.get(tokenId), key = tok ? bandKeyOf(scene, tok) : ""; if (!key) return 0;
+  return membersOf(scene, key).filter(t => t.id !== tok.id && combat.combatants.some(c => c.tokenId === t.id && !c.defeated) && !isDeadNow(t.actor)).length;
+}
+/** Let the whole band go (R3-13): this one leaves now, and every other member of its band leaves without stopping when it reaches the map's edge.
+    Nothing makes them run: each still flees by its own mind. Bringing one of them back takes the leave away again. */
+export async function letBandGo(combat, requestId) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  const r = request(combat, requestId); if (r?.state !== "fled") throw new Error("That monster isn't at the map's edge.");
+  const tok = combat.scene?.tokens.get(r.tokenId), key = tok ? bandKeyOf(combat.scene, tok) : ""; if (!key) throw new Error("It isn't in a band.");
+  await saveTurns(combat, { [`bandGo.${key}`]: { at: Date.now(), round: combat.round } });
+  return letGo(combat, requestId, { withBand: true });
+}
+async function leaveWithBand(combat, requestId, tok) {
+  const key = bandKeyOf(combat.scene, tok); if (!key || !turns(combat).bandGo?.[key] || !game.user.isGM) return;
+  if (request(combat, requestId)?.state === "fled") await letGo(combat, requestId, { withBand: true });
 }
 /** Extend map (Rhea, 2026-11-08): the GM's press asks the runner, which grows the map and then asks the thinker again from a fresh packet; the monster keeps its turn. */
 export async function extendMap(combat, requestId, side) {
@@ -2229,6 +2259,7 @@ async function afterExtend(combat, requestId, side, tok, { shifted = shiftFor(si
   const scene = combat.scene, g = scene.grid.size, dx = Math.round((shifted?.[0] ?? 0) / g), dy = Math.round((shifted?.[1] ?? 0) / g), change = { [`requests.${requestId}.extended`]: side, [`requests.${requestId}.extending`]: null };
   if (dx || dy) for (const [who, mem] of Object.entries(turns(combat).memory ?? {})) for (const [id, m] of Object.entries(mem ?? {})) if (Array.isArray(m?.square)) change[`memory.${who}.${id}.square`] = [m.square[0] + dx, m.square[1] + dy];
   await saveTurns(combat, change);
+  await shiftBandSpots(scene, dx, dy).catch(e => console.error(`${ID} | rally spots`, e));   /* a band's rally spot is a square too */
   if ((tok.movementHistory?.length ?? 0) > history && tok.clearMovementHistory) await tok.clearMovementHistory();
   const r = request(combat, requestId);
   await replan(combat, { ...r, id: requestId }, r.pos ?? r.steps.length, [{ who: "me", what: "extended", side }], tok, { counted: false });
@@ -2247,6 +2278,8 @@ export async function bringBack(combat, tokenId) {
   const [c] = await combat.createEmbeddedDocuments("Combatant", [{ tokenId: tok.id, actorId: tok.actorId, sceneId: combat.scene.id }]);
   if (c) await combat.rollInitiative([c.id], { skipDialog: true });   /* PF2e's roll dialog would wait for ever on a page nobody watches (seen live 2026-11-08) */
   const rec = escapeRecord(combat, tok.id); if (rec) await saveTurns(combat, { [`escaped.${rec[0]}.returned`]: { round: combat.round, at: Date.now() } });
+  /* one of a band that was let go as a whole is back: the others stop at the edge and ask again */
+  const band = bandKeyOf(combat.scene, tok); if (band && turns(combat).bandGo?.[band]) await saveTurns(combat, { [`bandGo.${band}`]: null });
   return { name: tok.name, initiative: c?.initiative ?? null };
 }
 /** Is this page working on a turn, or about to? For tools that share the runner's page. The in-memory sets cover the start of a turn, before any request
@@ -2887,8 +2920,10 @@ function noteDeed(combat, tok, step, rec = {}, r = null) {
 /** The fold-out's content for one creature, on any GM's page: what is sent to the thinker, what it perceived and makes nothing of, what was crossed out. */
 export function notebookOf(combat, tokenId) {
   const tok = combat?.scene?.tokens.get(tokenId); if (!tok?.actor || !keepsBook(tok)) return null;
-  const rung = rungOf(mindOf(combat.scene, tok, combat).mind?.pick?.mind), r = render(books(combat)[tokenId], { rung, since: deedsSince(combat, tokenId) });
-  return { ...r, rung, mind: RUNGS[rung], side: rung > 0 ? sideWords(sideOf(combat, tok)) : null };
+  const minded = mindOf(combat.scene, tok, combat), rung = rungOf(minded.mind?.pick?.mind), r = render(books(combat)[tokenId], { rung, since: deedsSince(combat, tokenId) });
+  /* a creature with no Discipline is sent nothing of its allies or its side (0.26.0): the fold-out shows what is sent */
+  const shares = onParty(tok.actor) || (minded.assembled.lines.discipline?.pick ?? "loose") !== "none";
+  return { ...r, allies: shares ? r.allies : [], rung, mind: RUNGS[rung], side: rung > 0 && shares ? sideWords(sideOf(combat, tok)) : null };
 }
 /** Who a GM's notebook line can name: as for a note to Angel (`notePeople`), with a label for every creature this monster has perceived at some
     point in the fight (its last-seen memory, kept for every monster) or knows as an ally (review 5: gated once, at save). */

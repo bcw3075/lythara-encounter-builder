@@ -141,11 +141,13 @@ export function sideWords({ started = 0, standing = 0, down = 0, fled = 0 } = {}
   return `Its side, counting itself: ${started} at the start, ${standing} standing${down ? `, ${down} down` : ""}${fled ? `, ${fled} fled` : ""}.`;
 }
 
-/** The packet's `notebook` (schema 3): only what its Mind may use; blank parts left out; null when there is nothing. */
-export function forPacket(book, { rung = 3, since = 0, side = null } = {}) {
+/** The packet's `notebook` (schema 3, kept in 4): only what its Mind may use; blank parts left out; null when there is nothing. */
+export function forPacket(book, { rung = 3, since = 0, side = null, shares = true } = {}) {
   if (rung <= 0) return null;   /* mindless: nothing; it goes on as its mind says */
-  const r = render(book, { rung, since }), tally = side ? sideWords(side) : null;
-  const out = { ...(r.remembers.length ? { remembers: r.remembers.map(x => x.sure ? x.text : `${x.text} (unsure)`) } : {}), ...(r.allies.length ? { alliesDid: r.allies.map(x => x.text) } : {}), ...(tally ? { side: tally } : {}) };
+  /* shares: false for a creature with no Discipline (0.26.0, Rhea's R3-1): it keeps what happened to itself, and is told nothing of what the
+     others did or how its side stands */
+  const r = render(book, { rung, since }), tally = side && shares ? sideWords(side) : null;
+  const out = { ...(r.remembers.length ? { remembers: r.remembers.map(x => x.sure ? x.text : `${x.text} (unsure)`) } : {}), ...(shares && r.allies.length ? { alliesDid: r.allies.map(x => x.text) } : {}), ...(tally ? { side: tally } : {}) };
   return Object.keys(out).length ? out : null;
 }
 

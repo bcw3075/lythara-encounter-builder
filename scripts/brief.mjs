@@ -1,6 +1,7 @@
 /* The brief: everything a build needs that the module can't work out itself. The module can't read the campaign notes and
    invents no creatures or story, so a chat or the GM writes this. Pure: no Foundry globals. */
 import { MIND_SCHEMA, rowLines, rowOwn } from "./minds.mjs";
+import { briefBands } from "./bands.mjs";
 export const MOODS = ["ambush", "lair", "patrol", "chase", "standoff"];
 export const ROLES = ["ambusher", "brute", "ranged", "caster", "guard", "beast"];
 export const STATES = ["alert", "hidden", "asleep"];
@@ -20,9 +21,12 @@ export function cleanBrief(b = {}) {
     anchor: text(c.anchor, 40), run: c.run !== false, opus: !!c.opus,
     /* monster minds (0.24.0): this encounter's profile lines for the row's kind, and whole profiles for single monsters of it by their number in the
        row. A row's old `tactics` text becomes the kind's notes (profiles replace the Tactics page: Rhea, 2026-11-10), so `tactics` is read, never kept.
-       `band` and `leader` are stored from now on so the group releases rewrite nothing (design review 5); nothing acts on them yet. */
-    mind: rowLines(c), own: rowOwn(c, whole(c.count, 1, 30, 1)), band: text(c.band, 40), leader: !!c.leader
+       `band` is the key of the band the row's monsters belong to (0.26.0): the bands themselves, with who leads each, are in `bands` below. */
+    mind: rowLines(c), own: rowOwn(c, whole(c.count, 1, 30, 1)), band: text(c.band, 60)
   })).filter(c => c.uuid || c.name);
+  /* bands (0.26.0, monster minds 3a): each band's nature, leader and plan; rows are made to agree with them. A row handed in without a uuid or a name
+     was dropped above, so the old `leader` mark is read from the rows that stayed. */
+  const kept = (Array.isArray(b.creatures) ? b.creatures : []).filter(c => text(c.uuid, 200) || text(c.name, 120)), bands = briefBands(b.bands, kept, creatures);
   const coins = c => ({ gp: whole(c?.gp, 0, 1e7, 0), sp: whole(c?.sp, 0, 1e7, 0), cp: whole(c?.cp, 0, 1e7, 0) });
   const treasure = (Array.isArray(b.treasure) ? b.treasure : []).map(t => ({ uuid: text(t.uuid, 200), name: text(t.name, 120), qty: whole(t.qty, 1, 999, 1), coins: t.coins ? coins(t.coins) : null, on: text(t.on, 40) || "carried" })).filter(t => t.uuid || t.name || t.coins);
   const notes = (Array.isArray(b.notes) ? b.notes : []).map(n => ({ title: text(n.title, 120) || "Note", text: text(n.text), at: square(n.at), anchor: text(n.anchor, 40), player: !!n.player })).filter(n => n.at || n.anchor);
@@ -31,7 +35,7 @@ export function cleanBrief(b = {}) {
     minds: MIND_SCHEMA, name: text(b.name, 120), beat: text(b.beat, 500), why: text(b.why), want: text(b.want), doing: text(b.doing), retreat: text(b.retreat),
     mood: pick(b.mood, MOODS, "ambush"), partyLevel: b.partyLevel === undefined || b.partyLevel === null || b.partyLevel === "" ? null : whole(b.partyLevel, -1, 25, null),
     claimedXP: Number.isFinite(claimed) && b.claimedXP !== null && b.claimedXP !== "" ? claimed : null,
-    creatures, treasure, treasureMode: pick(b.treasureMode, ["list", "table", "none"], treasure.length ? "list" : "table"), notes,
+    creatures, bands, treasure, treasureMode: pick(b.treasureMode, ["list", "table", "none"], treasure.length ? "list" : "table"), notes,
     journal: { truth: text(b.journal?.truth), locals: text(b.journal?.locals), learn: text(b.journal?.learn) }
   };
 }

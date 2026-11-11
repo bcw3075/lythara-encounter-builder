@@ -6,6 +6,7 @@ import { HistoryApp, onPreDeleteCombat, saveHistory } from "./ui/history.mjs";
 import { onReactionPrompt } from "./ui/react.mjs";
 import { MindsApp, openLibrary, redrawLibrary } from "./ui/minds.mjs";
 import { LINES, MIND_SCHEMA } from "./minds.mjs";
+import { bandOf, bandViews, joinBand, removeBand, setBand } from "./bandlib.mjs";
 import { dropLibraryCache, dropOwn, giveOwn, kindFacts, libraryEntries, libraryExport, libraryGet, libraryImport, libraryPut, libraryRemove, mindLayers, mindOf, mindRows, rowProfile, setLines } from "./library.mjs";
 import { doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCombatGone, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, onMemoryCard, onMemoryUpdate, onMemoryHp, notebookOf, previewRemember, rememberAdd, rememberCross, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
 
@@ -112,5 +113,9 @@ Hooks.once("ready", () => {
        `giveOwn`, `dropOwn`, `library.remove` and `library.import` only when she asked for them. */
     minds: { schema: MIND_SCHEMA, lines: LINES, rows: mindRows, profile: rowProfile, layers: mindLayers, of: mindOf, kindOf: kindFacts, giveOwn, dropOwn, open: openMinds, openLibrary,
       set: (scene, ref, lines, { by = "angel", force = false } = {}) => setLines(scene, ref, lines, { by, force }),
+      /* bands (0.26.0): `bands.list(scene)` reads every band with its members, leader, nature and plan; `bands.set(scene, key, change)` changes or
+         makes one (as Angel unless `by: "gm"`; never over her words or choices without `force`); `bands.join(scene, ref, key)` puts a row, a kind or
+         a token into a band; `bands.remove` only when she asked. */
+      bands: { list: bandViews, of: bandOf, join: joinBand, remove: removeBand, set: (scene, key, change, { by = "angel", force = false } = {}) => setBand(scene, key, change, { by, force }) },
       library: { list: libraryEntries, get: libraryGet, remove: libraryRemove, export: libraryExport, import: libraryImport, put: (entry, { by = "angel", force = false } = {}) => libraryPut(entry, { by, force }) } } };
 });

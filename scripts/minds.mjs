@@ -2,11 +2,13 @@
    store only what they change, put together fresh for every packet. Pure: no Foundry globals, so the unit tests run it in Node.
    Rhea's decisions (2026-11-10) and the design review's findings are in docs/features/minds.md. */
 import { noteForThinker } from "./turn.mjs";
+import { cleanNature } from "./bands.mjs";
 
-export const MIND_SCHEMA = 1;
+/* 2 since 0.26.0: "Works with others" became "Discipline" (five steps), and a library entry for a kind of group holds a band's nature. Older data is read as it was. */
+export const MIND_SCHEMA = 2;
 /** The profile's lines, in the order they are shown and sent. */
-export const LINES = ["mind", "goesFor", "fightsBy", "givesUp", "worksWith", "knows", "notes"];
-export const LINE_LABEL = { mind: "Mind", goesFor: "Goes for", fightsBy: "Fights by", givesUp: "Gives up", worksWith: "Works with others", knows: "Knows about its enemies", notes: "Notes" };
+export const LINES = ["mind", "goesFor", "fightsBy", "givesUp", "discipline", "knows", "notes"];
+export const LINE_LABEL = { mind: "Mind", goesFor: "Goes for", fightsBy: "Fights by", givesUp: "Gives up", discipline: "Discipline", knows: "Knows about its enemies", notes: "Notes" };
 /** Only these two keep a fixed pick underneath, because the module acts on them (Rhea's decision 2): how clever a plan may be, and who shares a group plan.
     The words are the prompt's (one place: prompt.mjs prints them), never repeated in a packet. */
 export const MINDS = {
@@ -16,13 +18,21 @@ export const MINDS = {
   cunning: { label: "Cunning", words: "quick and practical: it uses the ground, cover, numbers and dirty tricks, picks its targets and knows when a fight is lost" },
   tactician: { label: "Trained tactician", words: "drilled or brilliant: it plans the whole turn, sets up its allies, denies the enemy their best moves and keeps to a plan under pressure" }
 };
-export const WORKS = {
-  alone: { label: "On its own", words: "it doesn't coordinate with anyone: what its allies do is only part of the scenery" },
-  pack: { label: "With its pack", words: "by instinct it fights beside its own: it joins an ally on a target and helps surround, with no plan behind it" },
-  follows: { label: "Follows a leader's plan", words: "it does its part in its group's plan and listens to its leader; told nothing, it fights sensibly beside its allies" },
-  leads: { label: "Is the leader", words: "the others look to it: it fights where it can see the whole fight and thinks of the group before itself" }
+/** Discipline (Rhea, 2026-11-11, R3-1 and R3-11): how a creature of this kind works with others, a five-step ladder set per kind of creature. It
+    took the place of "Works with others" in 0.26.0 so that one thing has one home (design review 17): who leads is a mark on the band, not a pick. */
+export const DISCIPLINES = {
+  none: { label: "None", words: "it works with nobody: no plan reaches it and what its allies do is only part of the scenery (mindless things, loners)" },
+  pack: { label: "Pack", words: "no orders and no plan, but by instinct it fights beside its own: it joins an ally on a target and helps surround, working off what it sees the others do" },
+  loose: { label: "Loose", words: "it follows its band's plan while that suits it; when the plan and its own mind pull apart, its own mind wins" },
+  trained: { label: "Trained", words: "its band's plan wins over its own leanings until its own \"givesUp\" line is reached" },
+  drilled: { label: "Drilled", words: "its band's plan wins even at its own cost: only the plan's own fall-back or its leader falling releases it" }
 };
-export const PICKS = { mind: MINDS, worksWith: WORKS };
+/** "Works with others" picks from before 0.26.0, read as the Discipline nearest to them ("Is the leader" is now the leader mark on a band). */
+const OLD_WORKS = { alone: "none", pack: "pack", follows: "loose", leads: "loose" };
+const fromOld = v => v && typeof v === "object" ? (v.blank === true ? v : { ...v, pick: OLD_WORKS[v.pick] ?? undefined }) : typeof v === "string" ? v : null;
+/** A layer's lines with an old "worksWith" read as "discipline" when there is no discipline line. */
+const modern = lines => lines && typeof lines === "object" && "worksWith" in lines && !("discipline" in lines) ? { ...lines, discipline: lines.worksWith === null ? null : fromOld(lines.worksWith) } : lines;
+export const PICKS = { mind: MINDS, discipline: DISCIPLINES };
 /** Suggestions only (Rhea: "I hope those were just examples"): every free line takes her own words. */
 export const SUGGEST = {
   goesFor: ["the nearest", "the wounded", "whoever hurt it last", "casters and healers", "the biggest threat", "its goal"],
@@ -55,7 +65,7 @@ export function cleanLine(key, v, by = null) {
 }
 /** A layer's lines: known keys only, each cleaned. library: true drops "knows". */
 export function cleanLines(lines, { by = null, library = false } = {}) {
-  const out = {}; if (!lines || typeof lines !== "object") return out;
+  const out = {}; if (!lines || typeof lines !== "object") return out; lines = modern(lines);
   for (const k of library ? LIBRARY_LINES : LINES) { const l = cleanLine(k, lines[k], by); if (l) out[k] = l; }
   return out;
 }
@@ -79,16 +89,19 @@ export function cleanEntry(e = {}) {
   const type = ENTRY_TYPES.includes(e.type) ? e.type : "kind", name = str(e.name, CAPS.name);
   const key = str(e.key, 200) || (type === "people" ? peopleKey(name) : type === "band" ? bandKey(name) : "");
   if (!key || !name || /^(people|band):$/.test(key)) return null;   /* a name of punctuation alone makes no key */
+  /* a kind of group holds a band's nature and no profile lines (design review 5: the six lines were cleaned into it and the group's own dropped) */
+  if (type === "band") return { schema: MIND_SCHEMA, type, key, name, people: null, lines: {}, nature: cleanNature(e.nature) };
   return { schema: MIND_SCHEMA, type, key, name, people: type === "kind" && typeof e.people === "string" && e.people.startsWith("people:") ? e.people : null, lines: cleanLines(e.lines, { library: true }) };
 }
-/** The Mind and Works with others a stat block alone suggests, so that nothing plays blank. A guess, and marked as the module's: the Mindless trait;
-    otherwise Intelligence (-4 or less animal, -3 or -2 simple, -1 to +2 cunning, +3 or more a trained tactician); a mindless creature works alone, an
-    animal with Pack Attack with its pack and alone without it, anything that thinks follows a leader's plan. facts: { traits, int, abilities } */
-export function fromStatBlock({ traits = [], int = null, abilities = [] } = {}) {
+/** The Mind and Discipline a stat block alone suggests, so that nothing plays blank. A guess, and marked as the module's: the Mindless trait;
+    otherwise Intelligence (-4 or less animal, -3 or -2 simple, -1 to +2 cunning, +3 or more a trained tactician); a mindless creature has no
+    discipline, an animal is Pack (Rhea, R3-11), a trained tactician is Trained and anything else that thinks is Loose. Drilled is never guessed.
+    facts: { traits, int } */
+export function fromStatBlock({ traits = [], int = null } = {}) {
   const t = (traits ?? []).map(x => String(x).toLowerCase()), n = Number(int);
   const mind = t.includes("mindless") ? "mindless" : !Number.isFinite(n) || int === null ? "simple" : n <= -4 ? "animal" : n <= -2 ? "simple" : n <= 2 ? "cunning" : "tactician";
-  const works = mind === "mindless" ? "alone" : mind === "animal" ? ((abilities ?? []).some(a => /pack attack/i.test(String(a))) ? "pack" : "alone") : "follows";
-  return { mind: { pick: mind, text: "", by: "module" }, worksWith: { pick: works, text: "", by: "module" } };
+  const discipline = mind === "mindless" ? "none" : mind === "animal" ? "pack" : mind === "tactician" ? "trained" : "loose";
+  return { mind: { pick: mind, text: "", by: "module" }, discipline: { pick: discipline, text: "", by: "module" } };
 }
 /** The layers a profile is read from, most specific first (Rhea's decisions 6 and 8, design review 7): what was agreed in this fight; the monster's
     own; this encounter's for its kind; its kind in the library; its people in the library; the stat block. */
@@ -128,7 +141,7 @@ export function namesFor(name, min = 3) {
     same gate as the GM's note to Angel: a name of someone on the party's side becomes that creature's label when this monster perceives it, and a
     line naming anyone it doesn't perceive (or a name that fits several it does) is held back whole, since even "someone" would tell it they exist.
     people: [{ names, label }] as for `noteForThinker`, label null for a creature it doesn't perceive. Out: { mind, held: [{ key, unknown, ambiguous }] };
-    `mind` is null when nothing is left to send. The picks' ids ride along ("pick": { mind, worksWith }) so the prompt's meaning for them is found. */
+    `mind` is null when nothing is left to send. The picks' ids ride along ("pick": { mind, discipline }) so the prompt's meaning for them is found. */
 export function forPacket(assembled, people = []) {
   const out = {}, pick = {}, held = [];
   for (const k of LINES) { const l = assembled?.lines?.[k]; if (!l) continue;
@@ -152,7 +165,7 @@ export function lineWarnings(text, people = []) {
     (she asked) or the writer is the GM. `null` for a key removes that line (back to inherit); the same rule protects hers. `now` stamps each line
     written with when. A line is written whole: a pick alone replaces the pick and its words. Out: { lines, skipped }. */
 export function applyLines(current = {}, incoming = {}, { by = "gm", force = false, library = false, now = null, keepBy = false } = {}) {
-  const lines = { ...cleanLines(current, { library }) }, skipped = [];
+  const lines = { ...cleanLines(current, { library }) }, skipped = []; incoming = modern(incoming);
   for (const k of library ? LIBRARY_LINES : LINES) { if (!(k in (incoming ?? {}))) continue;
     if (by !== "gm" && !force && lines[k]?.by === "gm") { skipped.push(k); continue; }
     /* the writer is who the call says, never who the line says (0.24.0 review 3), unless the caller is moving existing lines between layers (keepBy) */
@@ -176,7 +189,7 @@ export function importPlan(existing = [], data = null) {
   if (!data || data.what !== "minds-library" || !Array.isArray(data.entries)) return { ok: false, reason: "That file isn't a Minds Library export.", rows: [] };
   if (!Number.isFinite(data.schema) || data.schema > MIND_SCHEMA) return { ok: false, reason: `That file is from a newer version of the module (schema ${data.schema}; this one reads ${MIND_SCHEMA}).`, rows: [] };
   const mine = new Map((existing ?? []).map(cleanEntry).filter(Boolean).map(e => [e.key, e])), rows = [], seen = new Set();
-  const core = e => ({ type: e.type, name: e.name, people: e.people, lines: Object.fromEntries(Object.entries(e.lines).map(([k, l]) => [k, { pick: l.pick ?? null, text: l.text ?? "", blank: !!l.blank }])) });
+  const core = e => ({ type: e.type, name: e.name, people: e.people, lines: Object.fromEntries(Object.entries(e.lines).map(([k, l]) => [k, { pick: l.pick ?? null, text: l.text ?? "", blank: !!l.blank }])), nature: Object.fromEntries(Object.entries(e.nature ?? {}).map(([k, l]) => [k, { pick: l.pick ?? null, text: l.text ?? "" }])) });
   for (const raw of data.entries) { const e = cleanEntry(raw); if (!e || seen.has(e.key)) continue; seen.add(e.key);
     const m = mine.get(e.key); rows.push({ status: !m ? "new" : same(core(m), core(e)) ? "match" : "collision", entry: e, mine: m ?? null }); }
   return { ok: true, reason: null, rows };
@@ -185,7 +198,10 @@ export function importPlan(existing = [], data = null) {
     a row's `tactics` text too. The Build window's lines are the GM's and don't come through here. */
 export function stampBrief(brief, by = "angel") {
   const lines = v => v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, l]) => [k, typeof l === "string" ? { text: l, by } : l && typeof l === "object" && !BY.includes(l.by) ? { ...l, by } : l])) : {};
-  return { ...(brief ?? {}), creatures: (Array.isArray(brief?.creatures) ? brief.creatures : []).map(c => { const mind = lines(c?.mind); if (String(c?.tactics ?? "").trim() && !mind.notes) mind.notes = { text: c.tactics, by };
+  const part = v => typeof v === "string" ? { text: v, by } : v && typeof v === "object" && !BY.includes(v.by) ? { ...v, by } : v;
+  const bands = (Array.isArray(brief?.bands) ? brief.bands : []).map(b => b && typeof b === "object" ? { ...b, ...(b.leader && typeof b.leader === "object" ? { leader: part(b.leader) } : {}), nature: lines(b.nature),
+    plan: { ...(b.plan ?? {}), ...(b.plan?.objective != null ? { objective: part(b.plan.objective) } : {}), jobs: (Array.isArray(b.plan?.jobs) ? b.plan.jobs : []).map(part), ...(b.plan?.fallBack && typeof b.plan.fallBack === "object" ? { fallBack: { ...part(b.plan.fallBack), ...(b.plan.fallBack.when != null ? { when: part(b.plan.fallBack.when) } : {}) } } : {}) } } : b);
+  return { ...(brief ?? {}), ...(bands.length ? { bands } : {}), creatures: (Array.isArray(brief?.creatures) ? brief.creatures : []).map(c => { const mind = lines(c?.mind); if (String(c?.tactics ?? "").trim() && !mind.notes) mind.notes = { text: c.tactics, by };
     const { tactics, ...rest } = c ?? {}; return { ...rest, mind, own: c?.own && typeof c.own === "object" ? Object.fromEntries(Object.entries(c.own).map(([n, v]) => [n, lines(v)])) : {} }; }) };
 }
 /** A brief row's encounter mind (decision 11: profiles replace the Tactics page). A row's old `tactics` text is that kind's notes for the encounter

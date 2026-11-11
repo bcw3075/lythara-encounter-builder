@@ -4,6 +4,7 @@
    The rules themselves are pure, in minds.mjs. Everything here writes as a GM only. */
 import { ID } from "./builder.mjs";
 import { cleanBrief } from "./brief.mjs";
+import { applyNature } from "./bands.mjs";
 import { MIND_SCHEMA, LINES, applyLines, assemble, baseName, baseLevel, cleanEntry, cleanLines, exportData, forPacket, fromStatBlock, importPlan, kindKey, namesFor, rowLines } from "./minds.mjs";
 
 const LIBRARY_NAME = "Minds Library (Encounter Builder)";
@@ -38,8 +39,10 @@ export async function libraryPut(raw, { by = "gm", force = false, keepBy = false
   gmOnly(); const known = raw?.key ? libraryIndex().get(String(raw.key)) : null;
   /* an entry already here keeps its type and, unless a new one is given, its name: a write that names neither can't turn a people into a kind */
   const want = cleanEntry({ ...raw, type: known ? known.entry.type : raw?.type, name: raw?.name ?? known?.entry.name, lines: {} }); if (!want) throw new Error("A library entry needs a name.");
-  const have = libraryIndex().get(want.key), { lines, skipped } = applyLines(have?.entry.lines ?? {}, raw.lines ?? {}, { by, force, keepBy, library: true, now: Date.now() });
-  const entry = { ...want, people: raw.people === undefined && have ? have.entry.people : want.people, lines };
+  /* a kind of group (0.26.0) holds a band's nature in place of profile lines */
+  const have = libraryIndex().get(want.key), group = want.type === "band";
+  const { lines, skipped } = group ? applyNature(have?.entry.nature ?? {}, raw.nature ?? {}, { by, force, keepBy, now: Date.now() }) : applyLines(have?.entry.lines ?? {}, raw.lines ?? {}, { by, force, keepBy, library: true, now: Date.now() });
+  const entry = group ? { ...want, nature: lines } : { ...want, people: raw.people === undefined && have ? have.entry.people : want.people, lines };
   if (entry.type === "kind" && entry.people && !libraryGet(entry.people)) { if (raw.people !== undefined) throw new Error("That people isn't in the library."); entry.people = null; }   /* its people was removed: it stands on its own */
   const j = await ensureLibrary();
   if (have) await have.page.update({ name: entry.name, [`flags.${ID}.==mind`]: entry });
@@ -91,10 +94,10 @@ export function kindFacts(actor) {
   const facts = { source: typeof source === "string" && source.startsWith("Compendium.") ? source : null, name, level, adjustment };
   return { ...facts, key: kindKey(facts), kindName: baseName(facts.name, facts.adjustment), baseLevel: baseLevel(facts.level, facts.adjustment) };
 }
-const statFacts = actor => ({ traits: actor?.system?.traits?.value ?? [], int: actor?.system?.abilities?.int?.mod ?? null, abilities: (actor?.items ?? []).filter(i => i.type === "action").map(i => i.name) });
+const statFacts = actor => ({ traits: actor?.system?.traits?.value ?? [], int: actor?.system?.abilities?.int?.mod ?? null });
 
 /* ---------- this encounter ---------- */
-const briefOf = scene => { const b = scene?.getFlag(ID, "brief"); return b ? cleanBrief(b) : null; };
+export const briefOf = scene => { const b = scene?.getFlag(ID, "brief"); return b ? cleanBrief(b) : null; };
 /** Where a token stands in the build on its scene: { row, n } (its brief row and its number in the row), or null for a creature the build didn't place. */
 export function builtRef(scene, tok) {
   const b = scene?.getFlag(ID, "build"); if (!b || tok?.getFlag(ID, "built") !== b.id) return null;
@@ -141,7 +144,7 @@ export function mindOf(scene, tok, combat = null, labelOf = () => null) {
 }
 
 /* ---------- writing this encounter's lines ---------- */
-const writeBrief = (scene, brief) => scene.update({ [`flags.${ID}.==brief`]: cleanBrief(brief) });
+export const writeBrief = (scene, brief) => scene.update({ [`flags.${ID}.==brief`]: cleanBrief(brief) });
 /** Change lines of a profile on a scene. ref says whose: { row } a build row's kind for this encounter; { row, n } one built monster's own;
     { kind } a kind the build didn't place, for this scene; { token } one such monster's own. lines: key → words, { pick, text }, or null to take the
     line away. Angel never replaces the GM's words unless `force`. Out: { lines, skipped }. */
