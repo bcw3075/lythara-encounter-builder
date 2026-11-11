@@ -63,6 +63,7 @@ Build choices (Angel, 2026-11-08, within the design; Rhea can change them):
 - **A timeout on another module's job doesn't stop the job:** offering Extend again after a Survey Sheet timeout would have grown the map twice.
 
 ## Open items
+- After a reload that didn't grow the map and a second Extend that did, the first note ("...the map didn't grow...") stays on the finished request and can still be read in the history (seen live on 0.25.0).
 - A Fleeing monster with no reachable edge: the prompt tells the thinker to Stride away from the source; the checker doesn't enforce "away from the source".
 - The thinker gets no hint that the edge is in reach beyond the map's size and its square; it works it out.
 - Extend's effect on other hidden tokens: the Survey Sheet shifts every token, hidden ones too; not yet watched live.

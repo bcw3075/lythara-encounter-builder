@@ -164,3 +164,4 @@ flags.pf2e-toolbelt.targetHelper.saveVariants.null.saves
 appliedDamage.isHealing
 appliedDamage.persistent
 appliedDamage.shield
+appliedDamage.updates
