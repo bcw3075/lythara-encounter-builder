@@ -78,7 +78,10 @@ export function kindFacts(actor) {
   const flagged = actor.getFlag?.(ID, "source") ?? null, from = flagged && !flagged.startsWith("Compendium.") ? fromUuidSync(flagged) : null, base = from ?? actor;
   /* how it was adjusted: a copy of a world actor carries that actor's own Elite or Weak; anything else the builder's flag or PF2e's own mark */
   const adjustment = (from ? from.system?.attributes?.adjustment : actor.getFlag?.(ID, "adjust") || actor.system?.attributes?.adjustment) || null;
-  const name = from ? from.name : actor.name, level = from ? from.level : actor.level;
+  /* an unlinked token's own actor carries the token's name ("Wolf 2"): the kind is named after the world actor behind it, and a compendium
+     creature after its pack entry (seen live 2026-11-11: Save to library offered "Wolf 1") */
+  const world = actor.isToken ? actor.token?.baseActor ?? game.actors.get(actor.id) ?? actor : actor, pack = flagged?.startsWith("Compendium.") ? fromUuidSync(flagged) : null;
+  const name = from ? from.name : pack?.name ?? world.name, level = from ? from.level : actor.level;
   /* its compendium source: the builder's flag; a compendium creature read straight from its pack is its own source (it carries no flag); a world
      actor's import record counts only while it still has the pack creature's name, so a named boss made from a stock creature is its own kind
      (0.24.0 review 6) */

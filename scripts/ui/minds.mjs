@@ -79,6 +79,9 @@ export class MindsApp extends ApplicationV2 {
     const root = this.element, text = root.querySelector(`[name="${k}.text"]`)?.value ?? "", pick = root.querySelector(`[name="${k}.pick"]`)?.value ?? "";
     const now = cleanLine(k, { text, pick: pick || undefined }), cur = this.profile.assembled.lines[k], sameAs = l => !!l === !!now && (!now || ((l.pick ?? null) === (now.pick ?? null) && (l.text ?? "") === now.text));
     /* the same as what is saved is no change, even after typing something and typing it back: nothing she didn't change is ever written as hers */
+    /* a line sent back to the layer below shows that layer's words: reading the field then must not turn them into this layer's own (seen live
+       2026-11-11: "back to kind's" then Save wrote the kind's words into this encounter as the GM's) */
+    if (this.draft[k] === null && sameAs(this.below?.[k])) return;
     if (sameAs(cur)) { delete this.draft[k]; return; }
     this.draft[k] = now ?? { blank: true };
   }
