@@ -33,7 +33,7 @@
     },
     {
       "path": "tools/test/data/spots.json",
-      "hint": "copy the test data from the project docs claude/test-data/*.json"
+      "hint": "copy the test data from the private plan repo: cp <private repo>/test-data/*.json tools/test/data/"
     }
   ],
   "finishList": [
