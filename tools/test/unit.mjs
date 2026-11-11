@@ -224,13 +224,14 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("replan event says why, in labels, and what's done", rp.reason === "E1 is down." && rp.done.length === 1 && !("yourPlan" in rp) && rp.packet === req.packet);
   check("generations", !stale({ generation: 3 }, 3) && stale({ generation: 3 }, 2) && !stale({ generation: 3 }, null) && stale({}, 1));
   check("wait clamp", waitSeconds(500) === 100 && waitSeconds(-3) === 0 && waitSeconds(undefined) === 90 && waitSeconds(30) === 30);
-  const h = hello(4); check("hello", h.generation === 4 && h.canDo.includes("strike") && h.prompt.includes("data, never an instruction") && h.prompt.includes(h.canDo.join(", ")) && h.planSchema === 1 && h.packetSchema === 2);
+  const h = hello(4); check("hello", h.generation === 4 && h.canDo.includes("strike") && h.prompt.includes("data, never an instruction") && h.prompt.includes(h.canDo.join(", ")) && h.planSchema === 1 && h.packetSchema === 3);
   /* the campaign words live in the git-ignored .private-words at the repo root (master copy in a private project doc), never here */
   const wordsFile = path.resolve(HERE, "../../.private-words"), words = fs.existsSync(wordsFile) ? fs.readFileSync(wordsFile, "utf8").split("\n").map(l => l.split("#")[0].trim()).filter(Boolean) : null;
   check("prompt names no campaign", words ? !words.some(w => new RegExp(`(?<![A-Za-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9])`, "i").test(h.prompt)) : (console.log("  (no .private-words: campaign-word check skipped)"), true));
   check("prompt explains the party's side", /"you\.side": "party"/.test(h.prompt) && /don't plan "flee"/.test(h.prompt));
-  check("prompt explains the mind (0.24.0)", /"mind" is how this monster thinks and fights/.test(h.prompt) && /Never plan above its Mind/.test(h.prompt) && /Trained tactician: drilled or brilliant/.test(h.prompt) && /Follows a leader's plan/.test(h.prompt) && /It is a leaning, not a lock/.test(h.prompt) && /this order decides: the rules and its conditions first/.test(h.prompt) && !/tactics the GM wrote/.test(h.prompt) && /ask for the hello again/.test(h.prompt) && /packet \(schema 2\)/.test(h.prompt));
-  check("prompt explains asking again", h.promptVersion === 24 && /Release doesn't count/.test(h.prompt) && /Players are asked for their reactions/.test(h.prompt) && !/doesn't ask players for reactions yet/.test(h.prompt) && /The GM asks for the rest of this turn/.test(h.prompt) && !/someone it doesn't perceive/.test(h.prompt) && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains the mind (0.24.0)", /"mind" is how this monster thinks and fights/.test(h.prompt) && /Never plan above its Mind/.test(h.prompt) && /Trained tactician: drilled or brilliant/.test(h.prompt) && /Follows a leader's plan/.test(h.prompt) && /It is a leaning, not a lock/.test(h.prompt) && /this order decides: the rules and its conditions first/.test(h.prompt) && !/tactics the GM wrote/.test(h.prompt) && /ask for the hello again/.test(h.prompt) && /packet \(schema 3\)/.test(h.prompt));
+  check("prompt explains the notebook (0.25.0)", /Its notebook \("notebook"/.test(h.prompt) && /"remembers"/.test(h.prompt) && /"alliesDid"/.test(h.prompt) && /\(unsure\)/.test(h.prompt) && /a Mindless creature has no notebook/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 25 && /Release doesn't count/.test(h.prompt) && /Players are asked for their reactions/.test(h.prompt) && !/doesn't ask players for reactions yet/.test(h.prompt) && /The GM asks for the rest of this turn/.test(h.prompt) && !/someone it doesn't perceive/.test(h.prompt) && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -1466,5 +1467,80 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
   check("review 3: a chat's brief is Angel's unless it says it is hers", sb2.creatures[0].mind.goesFor.by === "angel" && sb2.creatures[0].mind.notes.by === "angel" && sb2.creatures[0].mind.fightsBy.by === "gm" && sb2.creatures[0].own[0].givesUp.by === "angel");
   check("review 8: what is stored is what is sent", M.CAPS.store === M.CAPS.send && M.CAPS.storeNotes === M.CAPS.sendNotes);
   check("review 11: a name of punctuation alone is no entry; a pick alone replaces the whole line", M.cleanEntry({ type: "people", name: "!!!" }) === null && M.applyLines({ mind: { pick: "cunning", text: "patient", by: "gm" } }, { mind: { pick: "simple" } }, { by: "gm" }).lines.mind.text === "");
+}
+/* ---------- fight memory (0.25.0): the notebook's rules ---------- */
+{
+  const Mem = await import("../../scripts/memory.mjs");
+  const W = (id, o = {}) => ({ id, isActor: false, isTarget: false, actorIs: "enemy", targetIs: "self", actor: { state: "observed", label: "E1" }, target: { state: "self", label: "M1" }, knows: [], ...o });
+  const stamp = { round: 2, at: 1000 };
+  let out = Mem.witnessLines({ kind: "damage", amount: 12, max: 30, actor: true, iwr: [], types: [] }, [W("m1", { isTarget: true })], stamp);
+  check("memory: a hit names who it saw and how bad against its own HP", out.length === 1 && out[0].id === "m1" && out[0].line.k === "hurt" && out[0].line.a === "E1" && out[0].line.s === 3 && out[0].line.r === 2 && out[0].line.at === 1000);
+  check("memory: severity is against its own hit points", Mem.severity(2, 30) === 1 && Mem.severity(3, 30) === 2 && Mem.severity(9, 30) === 3 && Mem.severity(5, 0) === 3);
+  out = Mem.witnessLines({ kind: "damage", amount: 5, max: 30, actor: true }, [W("m1", { isTarget: true, actor: { state: "hidden", label: null } }), W("m2", { isTarget: true, actor: { state: "undetected", label: null } })], stamp);
+  check("memory: one it only heard is someone it couldn't see; one it didn't detect is something unseen", out[0].line.a === Mem.UNSEEN && out[1].line.a === Mem.UNKNOWN);
+  out = Mem.witnessLines({ kind: "damage", amount: 5, max: 30, actor: false }, [W("m1", { isTarget: true })], stamp);
+  check("memory: damage with no source is unsure and names nobody", out[0].line.sure === 0 && !("a" in out[0].line) || out[0].line.a == null);
+  out = Mem.witnessLines({ kind: "damage", amount: 2, max: 30, actor: false, persistent: "acid" }, [W("m1", { isTarget: true })], stamp);
+  check("memory: persistent damage says its kind, not who", out[0].line.p === "acid" && out[0].line.a == null && out[0].line.sure !== 0);
+  /* weakness and resistance: only of an enemy it saw, from the outcome */
+  const iwr = [{ category: "resistance", type: "fire", adjustment: -5 }, { category: "weakness", type: "slashing", adjustment: 5 }, { category: "immunity", type: "mental" }];
+  out = Mem.witnessLines({ kind: "damage", amount: 3, max: 50, actor: true, iwr, types: ["fire"] }, [W("att", { isActor: true, actorIs: "self", targetIs: "enemy", actor: { state: "self", label: "M1" }, target: { state: "observed", label: "E2" } }), W("by", { actorIs: "ally", targetIs: "enemy", actor: { state: "observed", label: "M1" }, target: { state: "observed", label: "E2" } }), W("blind", { actorIs: "ally", targetIs: "enemy", actor: { state: "observed", label: "M1" }, target: { state: "hidden", label: null } }), W("pcside", { actorIs: "enemy", targetIs: "ally", actor: { state: "observed", label: "E9" }, target: { state: "observed", label: "M7" } })], stamp);
+  check("memory: what was applied to an enemy it saw, in words", out.filter(x => x.id === "att").map(x => `${x.line.k}:${x.line.t}:${x.line.d}`).join() === "resist:E2:fire,weak:E2:slashing,immune:E2:mental" && out.filter(x => x.id === "by").length === 3);
+  check("memory: nothing about a creature it couldn't see, nothing about its own side's weaknesses", !out.some(x => x.id === "blind") && !out.some(x => x.id === "pcside"));
+  check("memory: no number from the card is kept", !/5|adjust/.test(JSON.stringify(out.map(x => ({ ...x.line, at: 0, r: 0 })))));
+  out = Mem.witnessLines({ kind: "damage", amount: 0, max: 50, actor: true, iwr: [iwr[2]], types: ["mental"] }, [W("att", { isActor: true, actorIs: "self", targetIs: "enemy", actor: { state: "self", label: "M1" }, target: { state: "observed", label: "E2" } }), W("tgt", { isTarget: true })], stamp);
+  check("memory: an attack that came to nothing is a thing it tried that failed; the target isn't hurt", out.some(x => x.id === "att" && x.line.k === "nothing" && x.line.t === "E2" && x.line.d === "mental") && !out.some(x => x.id === "tgt"));
+  /* attacks: its own miss, an ally's deed */
+  const att = W("a", { isActor: true, actorIs: "self", targetIs: "enemy", actor: { state: "self", label: "M1" }, target: { state: "observed", label: "E1" } }), ally = W("b", { actorIs: "ally", targetIs: "enemy", actor: { state: "observed", label: "M1" }, target: { state: "observed", label: "E1" } }), farAlly = W("c", { actorIs: "ally", targetIs: "enemy", actor: { state: "hidden", label: null }, target: { state: "observed", label: "E1" } }), foe = W("d", { isTarget: true, actorIs: "enemy", targetIs: "self", actor: { state: "observed", label: "E5" } });
+  out = Mem.witnessLines({ kind: "attack", degree: 1 }, [att, ally, farAlly, foe], stamp);
+  check("memory: its own miss; an ally that saw it gets a deed; one that didn't, nothing; the target, nothing", out.find(x => x.id === "a").line.k === "miss" && out.find(x => x.id === "b").line.w === "missed E1" && !out.some(x => x.id === "c" || x.id === "d"));
+  out = Mem.witnessLines({ kind: "attack", degree: 3 }, [att, { ...ally, target: { state: "undetected", label: null } }], stamp);
+  check("memory: a hit is no failure; a deed never names a creature the witness doesn't see", !out.some(x => x.id === "a") && out[0].line.w === `critically hit ${Mem.UNSEEN}`);
+  out = Mem.witnessLines({ kind: "deed", pre: "used knockdown on", post: " (success)", hasTarget: true }, [att, ally], stamp);
+  check("memory: a step's deed, for allies only", out.length === 1 && out[0].id === "b" && out[0].line.w === "used knockdown on E1 (success)");
+  /* heal, cast, saved, reactions */
+  const sawHeal = W("h", { actorIs: "enemy", targetIs: "enemy", actor: { state: "observed", label: "E3" }, target: { state: "observed", label: "E1" } });
+  out = Mem.witnessLines({ kind: "heal" }, [sawHeal, { ...sawHeal, id: "h2", target: { state: "hidden", label: null } }, { ...sawHeal, id: "h3", actorIs: "ally" }], stamp);
+  check("memory: a heal it saw land, by an enemy", out.length === 1 && out[0].line.k === "heal" && out[0].line.a === "E3" && out[0].line.t === "E1");
+  out = Mem.witnessLines({ kind: "cast", slug: "breathe-fire", words: "fire, in a 15-foot cone" }, [W("c1", { actorIs: "enemy", actor: { state: "hidden", label: null }, target: {} }), W("c2", { actorIs: "enemy", actor: { state: "observed", label: "E3" }, knows: ["breathe-fire"], target: {} }), W("c3", { actorIs: "enemy", actor: { state: "undetected", label: null }, target: {} })], stamp);
+  check("memory: a casting is what it visibly did; heard is someone unseen; its name only for one that has the spell", out.length === 2 && out[0].line.a === Mem.UNSEEN && !out[0].line.n && out[0].line.w === "fire, in a 15-foot cone" && out[1].line.n === "breathe-fire");
+  check("memory: spell words never use the name", Mem.spellWords({ traits: ["fire", "concentrate", "manipulate"], area: { type: "cone", value: 15 } }) === "fire, in a 15-foot cone" && Mem.spellWords({ traits: ["mental"], save: "will" }) === "mental, that one creature had to resist" && /couldn't tell/.test(Mem.spellWords({ traits: ["concentrate"] })));
+  out = Mem.witnessLines({ kind: "saved", item: "Breathe Fire" }, [att, ally], stamp);
+  check("memory: a save against its own magic, for the caster only", out.length === 1 && out[0].line.k === "saved" && out[0].line.t === "E1" && out[0].line.i === "Breathe Fire");
+  out = Mem.witnessLines({ kind: "reactive" }, [W("r1", { actorIs: "enemy", actor: { state: "observed", label: "E1" } }), W("r2", { actorIs: "enemy", actor: { state: "hidden", label: null } })], stamp);
+  check("memory: who strikes at a move, for those that saw", out.length === 1 && out[0].line.k === "reactive" && out[0].line.a === "E1");
+  check("memory: a gap line for everyone", Mem.witnessLines({ kind: "gap" }, [{ id: "x" }, { id: "y" }], stamp).map(x => x.line.k).join() === "gap,gap");
+  /* the ladder and the words */
+  const L = (k, o = {}, at = 0) => ({ k, r: 1, at, ...o });
+  const book = { a01: L("hurt", { a: "E1", s: 1 }), a02: L("hurt", { a: "E1", s: 3 }), a03: L("hurt", { a: "E2", s: 2 }), a04: L("miss", { t: "E2" }), a05: L("miss", { t: "E2" }), a06: L("heal", { a: "E3", t: "E1" }), a07: L("cast", { a: "E3", w: "fire, in a 15-foot cone" }),
+    a08: L("resist", { t: "E2", d: "fire" }), a09: L("weak", { t: "E1", d: "slashing" }), a10: L("reactive", { a: "E1" }), a11: L("block", { a: "E2" }), a12: L("hurt", { s: 2, sure: 0 }), a13: L("gm", { by: "gm", text: "E3 is the one giving orders" }), a14: L("deed", { a: "M2", w: "hit E1" }, 50), a15: L("deed", { a: "M2", w: "missed E1" }, 150), a16: L("deed", { a: "M3", w: "took cover" }, 200), a17: L("saved", { t: "E1", i: "Fear" }), a18: L("gap", { r: 3 }) };
+  const kindsAt = rung => Mem.render(book, { rung }).remembers.map(x => x.kind).filter((k, i, a) => a.indexOf(k) === i).join();
+  check("memory: Mindless nothing", Mem.forPacket(book, { rung: 0 }) === null && kindsAt(0) === "");
+  check("memory: Animal knows who hurt it; Simple also what failed", kindsAt(1) === "gm,hurt,gap" && kindsAt(2) === "gm,hurt,miss,saved,gap");
+  check("memory: Cunning also healers and casters; a tactician the finer things", kindsAt(3) === "gm,hurt,miss,saved,heal,cast,gap" && Mem.render(book, { rung: 4 }).unused.length <= 3 && ["reactive", "block", "weak", "resist"].every(k => Mem.render(book, { rung: 4 }).remembers.concat(Mem.render(book, { rung: 4 }).unused).some(x => x.kind === k)));
+  check("memory: what it makes nothing of is kept apart, for the fold-out", Mem.render(book, { rung: 1 }).unused.map(x => x.kind).includes("heal") && !Mem.render(book, { rung: 1 }).remembers.some(x => x.kind === "heal"));
+  const r3 = Mem.render(book, { rung: 3, since: 100 }), texts = r3.remembers.map(x => x.text);
+  check("memory: tallies, not a log", texts.includes("E1 hurt it twice, badly once.") && texts.includes("E2 hurt it and was the last to hurt it.") && texts.includes("It keeps missing E2.") && texts.includes("E3 healed E1.") && texts.includes("E1 shrugged off its Fear.") && texts.includes("Something (unsure what) hurt it.") && texts.includes("It missed part of round 3."));
+  check("memory: her line first, in her words", r3.remembers[0].text === "E3 is the one giving orders" && r3.remembers[0].by === "gm");
+  check("memory: allies' deeds only since its last turn, one line an ally", r3.allies.map(x => x.text).join("|") === "M2: missed E1.|M3: took cover.");
+  check("memory: miss tallies never count (no AC given away)", !/\d/.test(texts.find(t => /missing/.test(t)).replace(/[EM]\d+/g, "")));
+  const pk = Mem.forPacket(book, { rung: 3, since: 100, side: { started: 4, standing: 2, down: 1, fled: 1 } });
+  check("memory: the packet's notebook: unsure marked, side in words, blank parts left out", pk.remembers.includes("Something (unsure what) hurt it. (unsure)") && pk.side === "Its side, counting itself: 4 at the start, 2 standing, 1 down, 1 fled." && pk.alliesDid.length === 2 && Mem.forPacket({}, { rung: 3 }) === null && !("alliesDid" in Mem.forPacket({ a: L("hurt", { a: "E1", s: 1 }) }, { rung: 3 })));
+  check("memory: alone and unhurt, no tally", Mem.sideWords({ started: 1, standing: 1 }) === null);
+  check("memory: the notebook's share of a packet stays small", JSON.stringify(Mem.forPacket(Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`k${String(i).padStart(2, "0")}`, L(["hurt", "miss", "cast", "heal", "weak"][i % 5], { a: `E${i % 7}`, t: `E${i % 6}`, s: 2, d: "fire", w: "fire, in a 30-foot cone and more words here" }, i)])), { rung: 4, side: { started: 6, standing: 4, down: 2 } })).length < 1000);
+  /* crossing out, eviction, rethinking */
+  const crossed = Mem.render({ ...book, a13: { ...book.a13, x: true }, a04: { ...book.a04, x: true } }, { rung: 3 });
+  check("memory: a crossed-out line isn't sent and is shown crossed", !crossed.remembers.some(x => x.kind === "gm") && crossed.remembers.some(x => x.text === "It missed E2.") && crossed.crossed.length === 2 && crossed.crossed.some(x => x.text === "E3 is the one giving orders" && x.by === "gm"));
+  const big = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`k${String(i).padStart(2, "0")}`, i === 0 ? L("gm", { by: "gm", text: "hers" }) : i === 1 ? L("deed", { a: "M2", w: "old" }, 1) : i === 2 ? L("hurt", { s: 1, sure: 0 }) : i === 3 ? L("hurt", { a: "E1", s: 1 }) : L("hurt", { a: "E1", s: 3 }, 500)]));
+  check("memory: over the cap, old deeds go first, then unsure, then scratches; hers never", Mem.evict(big, 9, 100).join() === "k01,k02,k03" && Mem.evict(big, 12).length === 0 && !Mem.evict(big, 1).includes("k00"));
+  check("memory: a heal or a casting by others after the plan was asked for makes it think again; its own miss never", Mem.rethinkFor({ a: L("heal", { a: "E3" }, 500), b: L("miss", { t: "E1" }, 600), c: L("cast", { a: "E3", w: "x" }, 50), d: L("cast", { a: "E2", w: "y", x: true }, 700) }, { rung: 3, after: 100 }).map(x => `${x.who}:${x.what}`).join() === "E3:sawHeal" && Mem.rethinkFor({ a: L("heal", { a: "E3" }, 500) }, { rung: 2, after: 100 }).length === 0);
+  check("memory: keys sort by time", [Mem.lineKey(2000, 0, "zz"), Mem.lineKey(1000, 5, "aa"), Mem.lineKey(1000, 0, "zz")].sort().join() === [Mem.lineKey(1000, 0, "zz"), Mem.lineKey(1000, 5, "aa"), Mem.lineKey(2000, 0, "zz")].join() && !/[.\-=]/.test(Mem.lineKey(Date.now(), 3, "Ab1")));
+  check("memory: a GM's line is cut to its cap and marked hers", Mem.gmLine("  E2   is  the leader ".repeat(20)).text.length <= Mem.GM_LINE_MAX && Mem.gmLine("x").by === "gm" && Mem.gmLine("x").k === "gm");
+  check("memory: the saved-or-not signature follows adds and cross-outs", Mem.bookPrint({ t: { a: L("hurt") } }) !== Mem.bookPrint({ t: { a: L("hurt"), b: L("miss") } }) && Mem.bookPrint({ t: { a: L("hurt") } }) !== Mem.bookPrint({ t: { a: { ...L("hurt"), x: true } } }));
+  check("memory: rungs", Mem.rungOf("mindless") === 0 && Mem.rungOf("tactician") === 4 && Mem.rungOf(undefined) === 3 && Mem.canUse("gm", 1) && !Mem.canUse("gm", 0) && !Mem.canUse("weak", 3));
+  /* the packet and the change words */
+  const pkt = packetOf({ you: { label: "M1" }, mind: { mind: "Cunning" }, notebook: { remembers: ["E1 hurt it."] } });
+  check("memory: the packet is schema 3 with the notebook right after the mind", pkt.schema === 3 && Object.keys(pkt).slice(0, 4).join() === "schema,mind,notebook,you" && !("notebook" in packetOf({ you: {}, mind: null })));
+  check("memory: the words for thinking again", /read its notebook afresh/.test(describeChange({ who: "gm", what: "notebook" })) && describeChange({ who: "E3", what: "sawHeal" }) === "E3 healed one of its own side: its notebook has it." && /^Someone it couldn't see cast a spell/.test(describeChange({ who: Mem.UNSEEN, what: "sawCast" })));
 }
 console.log(`${good} passed, ${bad} failed`); process.exit(bad ? 1 : 0);

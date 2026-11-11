@@ -7,7 +7,7 @@ import { onReactionPrompt } from "./ui/react.mjs";
 import { MindsApp, openLibrary, redrawLibrary } from "./ui/minds.mjs";
 import { LINES, MIND_SCHEMA } from "./minds.mjs";
 import { dropLibraryCache, dropOwn, giveOwn, kindFacts, libraryEntries, libraryExport, libraryGet, libraryImport, libraryPut, libraryRemove, mindLayers, mindOf, mindRows, rowProfile, setLines } from "./library.mjs";
-import { doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCombatGone, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
+import { doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCombatGone, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, onMemoryCard, onMemoryUpdate, onMemoryHp, notebookOf, previewRemember, rememberAdd, rememberCross, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
 
 const CONTROL = "encounters", apps = new Map(), mindsApps = new Map(); let turnsApp = null, historyApp = null, historyTimer = null;
 /* the history window fills in live; many flag writes come in a burst during a turn, so one redraw per quarter second */
@@ -73,15 +73,15 @@ Hooks.on("activateNote", note => {
 });
 /* the fight */
 Hooks.on("preCreateChatMessage", message => { onPreCreateMessage(message); });
-Hooks.on("createChatMessage", message => { onCreateMessage(message); noteReactionRoll(message); onActionCard(message).catch(e => console.warn(`${ID} | reactions`, e)); });
+Hooks.on("createChatMessage", message => { onCreateMessage(message); noteReactionRoll(message); onActionCard(message).catch(e => console.warn(`${ID} | reactions`, e)); try { onMemoryCard(message); } catch (e) { console.warn(`${ID} | notebook`, e); } });
 /* monsters reacting on players' turns (0.21.0): the runner watches moves, cards, items changing hands and Prone coming off. Block bodies: no handler returns anything. */
 Hooks.on("moveToken", (doc, movement) => { onTokenMoved(doc, movement); });
 Hooks.on("updateItem", (item, change) => { onItemHands(item, change); noteChange(item); });
 Hooks.on("deleteItem", item => { onConditionGone(item); noteChange(item); });
 /* the start of a turn settles (0.23.0): the runner notes every change to a creature in a fight, and reads a monster only once they have stopped */
 Hooks.on("createItem", item => { noteChange(item); });
-Hooks.on("updateActor", actor => { noteChange(actor); });
-Hooks.on("updateChatMessage", (message, change) => { onMessageUpdate(message, change); });
+Hooks.on("updateActor", (actor, change, options) => { noteChange(actor); try { onMemoryHp(actor, change, options); } catch (e) { console.warn(`${ID} | notebook`, e); } });
+Hooks.on("updateChatMessage", (message, change) => { onMessageUpdate(message, change); try { onMemoryUpdate(message, change); } catch (e) { console.warn(`${ID} | notebook`, e); } });
 Hooks.on("preUpdateCombatant", (combatant, change, options) => { keepTurn(combatant, change, options); });
 Hooks.on("updateCombatant", (combatant, change, options, userId) => { saveTurn(combatant, options, userId); noteChange(combatant); });
 Hooks.on("renderChatMessageHTML", (message, html) => { onRenderMessage(message, html); });
@@ -106,7 +106,7 @@ Hooks.once("ready", () => {
   onRunnerReady().catch(e => console.error(`${ID} | runner`, e));
   watchStalls();
   game.socket.on(`module.${ID}`, (data, senderId) => { onSocket(data, senderId); });
-  game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty, fight: { current: currentRequest, busy, reactions: openReactions, doReaction, skipReaction, perceived, submitPlan, doIt, hold, playMyself, askAngel, changePlan, rollFor, waitForEvent, checkPlan: checkOnly, reportFailure, state: fightState, saveHistory, openHistory },
+  game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty, fight: { current: currentRequest, busy, reactions: openReactions, doReaction, skipReaction, perceived, submitPlan, doIt, hold, playMyself, askAngel, changePlan, rollFor, waitForEvent, checkPlan: checkOnly, reportFailure, state: fightState, saveHistory, openHistory, memory: { of: notebookOf, preview: previewRemember, add: rememberAdd, cross: rememberCross } },
     /* monster minds (0.24.0), `api.minds`: how a chat reads and writes profiles (api.minds.set, api.minds.open, api.minds.library.put and the rest). `by: "angel"` never replaces a line whose words are the GM's unless `force`.
        This is the chat's door, so a write with no `by` is Angel's (the windows say "gm" themselves): only `by: "gm"` for words she dictated, and
        `giveOwn`, `dropOwn`, `library.remove` and `library.import` only when she asked for them. */

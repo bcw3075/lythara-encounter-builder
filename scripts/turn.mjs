@@ -665,6 +665,8 @@ export function changesSince(was, now) {
 /** A change in plain words. Labels stay labels unless nameOf says otherwise, so the same words can go to the thinker; `self` is how the monster is named. */
 export function describeChange(c, nameOf = l => l, self = "It") {
   if (c.who === "plan") return String(c.reason ?? "").replace(/^Step \d+: /, "");
+  if (c.who === "gm" && c.what === "notebook") return "The GM changed what it remembers: read its notebook afresh.";   /* her notebook edit (0.25.0) */
+  if (c.what === "sawHeal" || c.what === "sawCast") { const w = String(nameOf(c.who) ?? c.who ?? "Someone"); return `${w[0].toUpperCase()}${w.slice(1)} ${c.what === "sawHeal" ? "healed one of its own side" : "cast a spell"}: its notebook has it.`; }   /* fight memory (0.25.0) */
   if (c.who === "gm") return `The GM asks for the rest of this turn: "${c.text ?? ""}"`;   /* the Change button's note (0.19.0), already in labels */
   const who = c.who === "me" ? self : nameOf(c.who) ?? c.who, its = c.who === "me" ? (self === "It" ? "Its" : `${self}'s`) : `${who}'s`;
   switch (c.what) {
