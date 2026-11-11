@@ -56,7 +56,12 @@
     }
   ],
   "handoff": {
-    "load": "Load foundry-module-dev, foundry-test-process, foundry-vtt-operator, foundry-bridge and lythara-encounter-builder; clone bcw3075/foundry-mod-tools and this repo side by side; pull the plan doc into /home/claude/scratch for --plan.",
+    "load": "Load foundry-module-dev and lythara-encounter-builder; attach and clone, one at a time, this repo, bcw3075/foundry-mod-tools and the private plan repo (push access) and lythara-survey-sheet (read) into /home/claude/<repo>; the plan is in the private repo's plan/ folder (pass it as --plan).",
+    "loadByPhase": {
+      "design": "Load only lythara-encounter-builder; read the plan and the design doc. No Foundry skills, no `guide start`.",
+      "build": "Load foundry-module-dev and lythara-encounter-builder; `guide start`. Load foundry-vtt-operator, foundry-bridge and foundry-test-process when the chat first touches the live server (the test build), not before.",
+      "live": "Load foundry-module-dev, foundry-vtt-operator, foundry-bridge, foundry-test-process and lythara-encounter-builder."
+    },
     "where": [
       "claude/docs-index.md (where each fact lives)",
       "claude/lythara-encounter-builder.md (history)",
