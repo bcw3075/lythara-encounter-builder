@@ -1152,7 +1152,7 @@ async function runStride(combat, id, i, step, tok) {
   const gates = (() => { try { return moveGates(combat, tok, step, route); } catch (e) { console.error(`${ID} | reactions`, e); return []; } })(), wasProne = !!tok.actor?.hasCondition?.("prone");
   /* it can't go on after a reaction if it went down, can't move, or was knocked prone (a Crawl is prone all along: review finding 1) */
   const stopped = () => downNow(tok) || !!cantMove(tok.actor) || (!wasProne && !!tok.actor?.hasCondition?.("prone"));
-  if (gates.skipped?.length) await noteSkipped(combat, id, gates.skipped);
+  if (gates.skipped?.length && !Object.keys(request(combat, id)?.gates?.[i] ?? {}).length) await noteSkipped(combat, id, gates.skipped);
   if (gates[0]?.k === 0) { const g = await askReactions(combat, id, i, "move:0", "move", tok, gates[0].list); if (g === "manual") return "next"; if (g === "gone") return "gone";
     if (stopped()) { await finish({ started: true, moved: { to: squareOf(tok, scene), cost: 0 } }); return "next"; } }
   await record({ started: true, ...swum });
@@ -2551,6 +2551,8 @@ function inAura(holder, slug, others) {
     if (typeof aura?.containsToken === "function" && holder.object && x.object) { try { return !!aura.containsToken(x); } catch (e) { console.warn(`${ID} | aura`, e); } }
     const q = placeOf(x, scene); return distanceBetween({ x: p.pos[0], y: p.pos[1], size: p.span, elev: heightUp(holder) }, { x: q.pos[0], y: q.pos[1], size: q.span, elev: heightUp(x) }, { reach: radius }) <= radius; });
 }
+/** Was this gate of this step asked already (before a reload, a hold or a stop)? Then its stored answers stand and nobody is listed as "not asked". */
+const askedBefore = (combat, id, i, key) => !!request(combat, id)?.gates?.[i]?.[key];
 /** The note for reactions that fit but weren't asked ("Shield Block not asked (reaction already used)"), once each. */
 async function noteSkipped(combat, id, skipped = []) {
   const seen = new Set(), list = skipped.filter(x => { const k = `${x.name}.${x.reaction}`; if (seen.has(k)) return false; seen.add(k); return true; });
@@ -2607,9 +2609,11 @@ const strip = ({ users, words, gmWords, pos, span, elev, reach, ...x }) => x;
     turn moved on. Each gate is asked once: a reload while asking keeps what was answered and skips the rest, with a note (review finding 2). The
     question (`react`) is cleared on every way out (review finding 3). */
 async function askReactions(combat, id, i, key, gate, tok, list, kind = "") {
-  if (!list.length) return { done: true, list: [], rolls: [] };
+  /* what was asked once is never worked out again (0.27.0, seen live: after a reload the champion who had reacted had her box ticked, so her row was
+     gone from a fresh list, and her answer with it): the stored question wins over whatever `list` holds now */
   const had = request(combat, id).gates?.[i]?.[key];
   if (had?.done) return had;
+  if (!had && !list.length) return { done: true, list: [], rolls: [] };
   if (had) {
     const rx = request(combat, id).react, ans = rx?.key === key ? rx.answers ?? {} : {}, final = (rx?.key === key ? rx.list : []).map(x => ({ ...strip(x), answer: ans[x.id] ?? "continue" }));
     await save(combat, id, { react: null, gates: { [i]: { [key]: whole({ done: true, list: final, reloaded: true }) } }, note: joinNote(combat, id, `The page reloaded while ${tok.name}'s ${gate === "hit" ? "hit" : "action"} waited for reactions: what was answered stands and the rest were skipped. Check the chat for a reaction already rolled.`) });
@@ -2683,7 +2687,7 @@ async function beforeAction(combat, id, i, step, tok, target) {
   /* a damaging area with a Reflex save (0.27.0): each creature it will catch that can answer it (Interposing Earth), before the spell is cast */
   if (w.area) { const scene = combat.scene; let ids = []; try { ids = coverage(scene, tok, step.area.aim, { square: squareOf(tok, scene), size: sizeOf(tok), elev: Number(tok.elevation) || 0 }).ids; } catch (e) { console.warn(`${ID} | area reactions`, e); }
     for (const t of ids) { const caught = scene.tokens.get(t); if (caught && !caught.hidden) add(reactorsFor(combat, tok, "area", { target: caught, kind: step.itemName, skipped })); } }
-  await noteSkipped(combat, id, skipped);
+  if (!askedBefore(combat, id, i, "before")) await noteSkipped(combat, id, skipped);
   const res = await askReactions(combat, id, i, "before", w.manipulate ? "manipulate" : w.ranged ? "ranged" : w.attack ? "attack" : "area", tok, list, w.kind);
   if (typeof res === "string") return res;
   /* Interposing Earth against an area: standard cover on the Reflex save, as PF2e's own Effect: Cover, taken off when the step ends */
@@ -2729,7 +2733,7 @@ async function dropEarthCover(combat) {
 }
 /** At the end of a move action that leaves no square (Stand, Drop Prone, a Climb), measured from where it was (a Climb can take it out of reach). */
 async function stayGate(combat, id, i, step, tok, from) {
-  const skipped = [], list = reactorsFor(combat, tok, "stay", { ...(from ?? {}), skipped }); await noteSkipped(combat, id, skipped);
+  const skipped = [], list = reactorsFor(combat, tok, "stay", { ...(from ?? {}), skipped }); if (!askedBefore(combat, id, i, "stay")) await noteSkipped(combat, id, skipped);
   return askReactions(combat, id, i, "stay", "stay", tok, list, step.do === "stand" ? "stands up" : step.do === "drop-prone" ? "drops prone" : "climbs");
 }
 /** The answers of a socket message: from the player (only for a reactor that player owns) or a GM's page; the runner writes them on the request. */
@@ -2790,7 +2794,7 @@ const damageTypesOf = strike => { const it = strike?.item; return [...Object.val
     attack's own DC plus what the shield adds over the circumstance bonus the target had (review finding 5). */
 async function hitGate(combat, id, i, step, tok, target, what, get) {
   const rec = get(); if (rec.reacted || !target?.actor) return null;
-  const skipped = [], list = reactorsFor(combat, tok, "hit", { target, melee: !!what.melee, damageTypes: what.damageTypes ?? [], skipped }); await noteSkipped(combat, id, skipped); if (!list.length) return null;
+  const skipped = [], list = reactorsFor(combat, tok, "hit", { target, melee: !!what.melee, damageTypes: what.damageTypes ?? [], skipped }), again = askedBefore(combat, id, i, "hit"); if (!again) await noteSkipped(combat, id, skipped); if (!list.length && !again) return null;
   const res = await askReactions(combat, id, i, "hit", "hit", tok, list, what.kind ?? ""); if (typeof res === "string") return res;
   const used = slug => res.list.some(x => x.answer === "done" && x.slug === slug), change = { reacted: true };
   let degree = rec.attack.degree;
@@ -2828,9 +2832,9 @@ async function harmGate(combat, id, i, tok, hits) {
   const skipped = [], list = [];
   for (const h of open) for (const x of reactorsFor(combat, tok, "harm", { target: h.target, skipped }))
     list.push({ ...x, id: `${x.id}:${h.target.id}`, ally: h.target.id, kind: `${h.target.name} (${h.hit} damage)`, group: x.id, label: h.target.name });
-  await noteSkipped(combat, id, skipped);
+  const again = askedBefore(combat, id, i, "harm"); if (!again) await noteSkipped(combat, id, skipped);
   const change = Object.fromEntries(open.map(h => [h.target.id, { asked: true }]));
-  if (list.length) {
+  if (list.length || again) {
     const res = await askReactions(combat, id, i, "harm", "harm", tok, list); if (typeof res === "string") return res;
     for (const used of res.list.filter(x => x.answer === "done" && x.slug === "glimpse-of-redemption")) {
       const ally = combat.scene.tokens.get(used.ally); if (!ally) continue;
