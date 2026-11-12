@@ -3435,7 +3435,7 @@ async function runPending(combat) {
       const lead = combat.scene.tokens.get(p.from); if (!lead) { await refuse("its leader is gone"); continue; }
       if (p.round !== combat.round) { await refuse("the round moved on before it was given"); continue; }
       if (!await ensureScene(combat)) { await refuse(cantOpen()); continue; }
-      await booked(async () => {   /* labels are given out one writer at a time (as for the notebooks) */
+      await booked(async () => { try {   /* labels are given out one writer at a time (as for the notebooks); the queue swallows an error, so it is caught here and told to the box */
         await packetsDone();
         const { labels, fresh } = labelsFor(combat, lead), target = p.targetId ? combat.scene.tokens.get(p.targetId) : null;
         if (p.targetId && !target) return refuse("that creature is gone");
@@ -3447,7 +3447,7 @@ async function runPending(combat) {
         await saveTurns(combat, { ...out.change, [`orders.pending.${key}`]: gone(), [`orders.refused.${key}`]: null });
         const msg = await orderChat(combat, lead, out.entry).catch(e => { console.warn(`${ID} | order chat`, e); return null; });
         if (msg) await saveTurns(combat, { [`orders.log.${out.key}.msg`]: msg });
-      });
+      } catch (e) { console.error(`${ID} | order`, e); await refuse(`something went wrong (${e.message})`).catch(() => {}); } });
     } catch (e) { console.error(`${ID} | order`, e); await saveTurns(combat, { [`orders.pending.${key}`]: gone(), [`orders.refused.${key}`]: whole({ why: e.message, at: Date.now() }) }).catch(() => {}); }
     finally { pendingNow.delete(lock); }
   }

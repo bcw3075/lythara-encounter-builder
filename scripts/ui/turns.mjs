@@ -150,7 +150,7 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     const labels = c.getFlag(ID, "turns")?.labels ?? {}, nameOf = l => { const a = Object.entries(labels).find(([, v]) => v === l); return a ? c.scene.tokens.get(a[0])?.name ?? null : null; }, named = t => String(t ?? "").replace(/\b[EM]\d{1,3}\b/g, l => nameOf(l) ?? l);
     const head = `<p><b>Give orders</b> <span class="leb-mine">${esc(cur.name)} leads ${esc(p.band)} · one a round · speaking costs no action</span></p>`;
     if (p.last) return `<div class="leb-card leb-ob">${head}<p><b>Order given in round ${p.last.r}:</b> ${esc(named(p.last.words))}. <span class="leb-mine">The next one can go out in round ${p.last.r + 1}.</span></p></div>`;
-    if (p.pending) return `<div class="leb-card leb-ob">${head}<p class="leb-mine">Giving the order…</p></div>`;
+    if (p.pending) return `<div class="leb-card leb-ob">${head}<p class="leb-mine">Giving the order…</p>${runnerProblem() ? `<p class="leb-warn">${esc(runnerProblem())}</p>` : ""}</div>`;
     const refused = p.refused ? `<p class="leb-warn">The order wasn't given: ${esc(named(p.refused))}</p>` : "";
     if (!p.can.ok) return `<div class="leb-card leb-ob">${head}<p class="leb-mine">It can't give an order now: ${esc(p.can.why)}.</p>${refused}</div>`;
     const btn = k => `<button type="button" data-ord="${k}" class="${d.mode === k ? "leb-sel" : ""}">${QUICK[k]}</button>`;
