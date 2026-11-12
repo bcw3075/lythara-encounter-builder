@@ -8,7 +8,7 @@ import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntrie
 import { mindOf } from "./library.mjs";
 import { PLANNED, bandKeyOf, bandOf, bandPacket, bandsOf, disciplineOf, fightBand, jobGroups, langsOf, leaderOf, membersOf, natureLayers, planOf, secondOf, shiftBandSpots } from "./bandlib.mjs";
 import { natureOf } from "./bands.mjs";
-import { HOLDS, NEVER_GIVES_UP, applyHeard, canOrder, cleanOrder, fallBackWords, fallOutcome, hearing, labelsIn, lastHurtBy, logWords, orderLanguage, orderWords, ordersForPacket, roundLine } from "./orders.mjs";
+import { HOLDS, NEVER_GIVES_UP, applyHeard, canOrder, cleanOrder, fallBackWords, fallOutcome, fromPending, hearing, labelsIn, lastHurtBy, logWords, orderLanguage, orderWords, ordersForPacket, roundLine, toPending } from "./orders.mjs";
 import { namer } from "./history.mjs";
 import { RUNGS, STORE_MAX, GM_LINE_MAX, evict, forPacket, gmLine, lineKey, render, rethinkFor, rungOf, severity, sideWords, spellWords, witnessLines } from "./memory.mjs";
 import { readMap, partySize, suggestedLevel } from "./builder.mjs";
@@ -2383,8 +2383,8 @@ export const playMyself = (combat, id) => save(combat, id, { state: "manual" });
 /** Who a GM's note can name, for noteForThinker: every token on the scene by its token and actor names (and, for a character, each long word of
     them: a first name or a surname alone), with its label when the monster perceives it or knows it as an ally and its own label for itself; every
     other character in the world and every user, with no label. Run on whichever GM page converts the note: the labels are on the Combat flag. */
-export function notePeople(combat, r) {
-  const labels = turns(combat).labels ?? {}, known = new Set([...Object.keys(r?.labels ?? {}), ...(r?.packet?.allies ?? []).map(a => a?.label)].filter(Boolean)), me = r?.packet?.you?.label ?? "it";
+export function notePeople(combat, r, labels = turns(combat).labels ?? {}) {   /* labels: the fight's own, or as they would stand (an order from the GM's box, 0.28.0 review 2) */
+  const known = new Set([...Object.keys(r?.labels ?? {}), ...(r?.packet?.allies ?? []).map(a => a?.label)].filter(Boolean)), me = r?.packet?.you?.label ?? "it";
   const namesOf = (...ns) => [...new Set(ns.flatMap(n => n ? [n] : []))], out = [], onScene = new Set();
   for (const t of combat.scene?.tokens.contents ?? []) { const a = t.actor, isChar = !!a?.isOfType?.("character");
     if (a) onScene.add(a.id);
@@ -3317,7 +3317,8 @@ function orderOut(combat, lead, order, { by = "angel" } = {}) {
   const key = lineKey(Date.now(), 0, foundry.utils.randomID(3)), standing = ordersOf(combat).heard ?? {};
   const entry = { k: "order", band: f.band.key, r: combat.round, at: Date.now(), by, from: lead.id, o, words, ...(say ? { say } : {}), ...(lang ? { lang } : {}), heard: heard.map(x => x.id), missed };
   const change = { [`orders.log.${key}`]: entry, [`orders.last.${f.band.key}`]: combat.round };
-  for (const h of heard) change[`orders.heard.${h.id}`] = whole(applyHeard(standing[h.id], o, combat.round));
+  /* the leader keeps its own order too (review 3): its later packets say what it last ordered, and it follows it itself */
+  for (const id of [lead.id, ...heard.map(x => x.id)]) change[`orders.heard.${id}`] = whole(applyHeard(standing[id], o, combat.round));
   return { ok: true, key, change, entry, heard, band: f.band };
 }
 /** The order's line in chat (R3-4, as far as tier 3b goes): one public line from the leader. Everyone's browser holds "Shouts something in
@@ -3332,9 +3333,9 @@ async function orderChat(combat, lead, entry) {
 }
 /** On a GM's page, an order's chat line shows what was said and ordered; players keep the line as it is stored. */
 export function onRenderOrder(message, html) {
-  const o = message.getFlag?.(ID, "order"); if (!o || !game.user.isGM) return;
+  const o = message.getFlag?.(ID, "order"); if (!o || !game.user.isGM || !message.author?.isGM) return;   /* only a GM's own message is an order's line (review 9) */
   const body = html.querySelector?.(".message-content"); if (!body) return;
-  body.innerHTML = `<p><strong>Order</strong> <span class="action-glyph">F</span> ${o.say ? `“${esc(o.say)}”` : esc(o.words ?? "")}</p><p style="font-size:var(--font-size-12);opacity:.75;border-top:1px solid #8884;margin-top:4px;padding-top:3px">${[o.lang ? `In ${esc(o.lang)}` : "", o.say ? esc(o.words ?? "") : "", `heard by ${o.heard} of its ${o.of}`].filter(Boolean).join(" · ")}</p>`;
+  body.innerHTML = `<p><strong>Order</strong> <span class="action-glyph">F</span> ${o.say ? `“${esc(o.say)}”` : esc(o.words ?? "")}</p><p style="font-size:var(--font-size-12);opacity:.75;border-top:1px solid #8884;margin-top:4px;padding-top:3px">${[o.lang ? `In ${esc(o.lang)}` : "", o.say ? esc(o.words ?? "") : "", `heard by ${Number(o.heard) || 0} of its ${Number(o.of) || 0}`].filter(Boolean).join(" · ")}</p>`;
 }
 /** The `order` step of a leader's plan: speech, so no roll and no card of PF2e's. One write gives the order to every hearer, logs it and marks
     the step, so a reload can't give it twice or leave it half given. */
@@ -3362,20 +3363,28 @@ function ordersBlock(combat, tok, { labels = {}, nameable = new Set(), memory = 
 }
 /** A band's leader has fallen: the module does what the band's pick says (R3-2; tier 3a only told the thinker). Runner only, at every turn change,
     once for each fall (`fell.was` on the Combat's `bands` flag). A leader the GM has hidden isn't reported fallen (bands, open items). */
+const settling = new Set();
 async function settleBands(combat) {
-  if (!isRunner() || !combat?.started || !combat.scene) return; const scene = combat.scene, change = {};
+  if (!isRunner() || !combat?.started || !combat.scene || settling.has(combat.id)) return; settling.add(combat.id);   /* two turn changes close together must not both act on one fall (review 8) */
+  try { await settleBandsNow(combat); } finally { settling.delete(combat.id); }
+}
+async function settleBandsNow(combat) {
+  const scene = combat.scene, change = {};
   for (const band of bandsOf(scene)) {
     const lead = leaderOf(scene, band, combat), state = lead.gone ? "gone" : lead.tok ? fallenWord(lead.tok) : null; if (!state) continue;
     if (lead.tok?.hidden && !lead.tok.getFlag(ID, "escaped")) continue;
-    const was = lead.tok?.id ?? "gone", now = fightBand(combat, band.key); if (now?.fell?.was === was) continue;
+    /* acted on already, unless the one who took over has since left the map: then the next in line is found again (review 13) */
+    const was = lead.tok?.id ?? "gone", now = fightBand(combat, band.key), heirGone = !!now?.leader?.token && !scene.tokens.get(now.leader.token); if (now?.fell?.was === was && !heirGone) continue;
     const members = membersOf(scene, band.key), pick = natureOf(natureLayers(scene, band, combat)).ifLeaderFalls?.pick ?? null;
     const out = fallOutcome({ pick, state, leaderId: lead.tok?.id ?? null, second: secondOf(scene, band)?.id ?? null, dropper: lead.tok ? lastHurtBy(books(combat)[lead.tok.id]) : null,
       members: members.map(t => ({ id: t.id, level: t.actor?.level ?? 0, speaks: langsOf(t.actor).length > 0, discipline: disciplineOf(scene, t, combat), standing: !fallenWord(t) && !(t.hidden && !t.getFlag(ID, "escaped") && !isBelow(t)) })) });
     const at = `flags.${ID}.bands.${band.key}`;
     change[`${at}.fell`] = whole({ was, state, round: combat.round, pick });
-    if (out.leader) change[`${at}.leader`] = whole({ token: out.leader });
+    if (out.leader) { change[`${at}.leader`] = whole({ token: out.leader }); change[`flags.${ID}.turns.orders.last.${band.key}`] = gone(); }   /* the new leader may give its own order on its turn, this round too (R3-2) */
+    else if (heirGone) change[`${at}.leader`] = gone();
     if (out.planGone) { change[`${at}.planGone`] = true; for (const t of members) if (ordersOf(combat).heard?.[t.id]) change[`flags.${ID}.turns.orders.heard.${t.id}`] = gone(); }   /* with the plan, the orders that changed it */
-    if (out.objective) change[`${at}.objective`] = out.objective;
+    /* the new objective takes the place of whatever the fallen leader last ordered the whole band to do (review 4): orders heard rank above the plan */
+    if (out.objective) { change[`${at}.objective`] = out.objective; for (const t of members) if (ordersOf(combat).heard?.[t.id]?.goal) change[`flags.${ID}.turns.orders.heard.${t.id}.goal`] = gone(); }
     for (const id of out.loosen) change[`flags.${ID}.minds.own.${id}.discipline`] = whole({ pick: "loose", text: "", by: "module" });
     for (const id of out.never) change[`flags.${ID}.minds.own.${id}.givesUp`] = whole({ text: NEVER_GIVES_UP, by: "module" });
     change[`flags.${ID}.turns.orders.log.${lineKey(Date.now(), Object.keys(change).length % 36, foundry.utils.randomID(3))}`] = { k: "fell", band: band.key, r: combat.round, at: Date.now(), was, state, pick, leader: out.leader, loosen: out.loosen, objective: out.objective, never: out.never };
@@ -3386,13 +3395,16 @@ async function settleBands(combat) {
     its notebook. */
 function orderGate(combat, tok, text, labels = labelsFor(combat, tok).labels) {
   const t = turns(combat), ids = [...Object.keys(t.memory?.[tok.id] ?? {}), ...knownAllies(combat.scene, tok).map(a => a.id)];
-  return noteForThinker(String(text ?? ""), notePeople(combat, { tokenId: tok.id, labels: Object.fromEntries(ids.filter(id => labels[id]).map(id => [labels[id], id])), packet: { you: { label: labels[tok.id] ?? "it" }, allies: [] } }), 120);
+  return noteForThinker(String(text ?? ""), notePeople(combat, { tokenId: tok.id, labels: Object.fromEntries(ids.filter(id => labels[id]).map(id => [labels[id], id])), packet: { you: { label: labels[tok.id] ?? "it" }, allies: [] } }, labels), 120);
 }
 /** The fight's labels as they would stand once every creature this leader has perceived has one: { labels, fresh }. Only the runner saves `fresh`
     (when the order is given); another GM's page uses them to show her words as they would be stored. */
 function labelsFor(combat, tok) {
   const labels = { ...(turns(combat).labels ?? {}) }, need = Object.keys(turns(combat).memory?.[tok.id] ?? {}).filter(id => !labels[id] && combat.scene.tokens.get(id));
-  const fresh = { ...assignLabels(labels, need, "E") }; return { labels: { ...labels, ...fresh }, fresh };
+  const fresh = { ...assignLabels(labels, need, "E") }; Object.assign(labels, fresh);
+  /* itself and its allies too (review 2: "protect the shaman" in a fight where no packet has given out labels yet) */
+  const own = { ...assignLabels(labels, [tok.id, ...knownAllies(combat.scene, tok).map(a => a.id)], "M") }; Object.assign(labels, own, fresh);
+  return { labels, fresh: { ...fresh, ...own } };
 }
 /** The Give orders box, on any GM's page (R3-5): whether this creature may give an order now, the kinds whose job it can change, the creatures it
     perceives this round (for "Everyone on that one"), who would hear it, and how her own words would be stored. Null for a creature that leads
@@ -3404,7 +3416,7 @@ export function orderPreview(combat, tokenId, order = null) {
   const lf = labelsFor(combat, tok), back = Object.fromEntries(Object.entries(lf.labels).map(([id, l]) => [l, combat.scene.tokens.get(id)?.name ?? l]));
   const g0 = order?.text ? orderGate(combat, tok, order.text, lf.labels) : null, gate = g0 ? { ...g0, shown: g0.text.replace(/\b[EM]\d{1,3}\b/g, l => back[l] ?? l) } : null, last = bandLog(combat).filter(e => e.k === "order" && e.band === f.band.key).at(-1) ?? null;
   return { can: ctx, band: f.band.name, jobs: ctx.jobs, targets, hearers: hearersOf(combat, tok, f), gate, refusal: gate ? noteRefusal(gate, tok.name) || null : null,
-    pending: !!o.pending?.[f.band.key], refused: o.refused?.[f.band.key]?.why ?? null, last: last?.r === combat.round ? last : null, square: squareOf(tok, combat.scene), langName };
+    pending: !!o.pending?.[f.band.key], refused: o.refused?.[f.band.key]?.round === combat.round ? o.refused[f.band.key].why ?? null : null, last: last?.r === combat.round ? last : null, square: squareOf(tok, combat.scene), langName };
 }
 /** The GM gives an order as the leader she plays (R3-5). It waits on the flag for the runner, which works out who hears it on the fight's own map,
     exactly as for an order from a plan. order: { part, targetId (a token), at ([x, y]), job (a kind's id), text (her own words for the objective
@@ -3413,10 +3425,11 @@ export async function giveOrder(combat, tokenId, order = {}) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
   const tok = combat?.scene?.tokens.get(tokenId), f = tok ? orderFacts(combat, tok) : null; if (!f?.leads) throw new Error(`${tok?.name ?? "That creature"} doesn't lead a band.`);
   const ctx = orderCtx(combat, tok); if (!ctx.ok) throw new Error(`${tok.name} can't give an order now: ${ctx.why}.`);
+  const away = runnerProblem(); if (away) throw new Error(away);   /* nobody to give it: say so now, as a Change does (review 5) */
   if (order.text) { const bad = noteRefusal(orderGate(combat, tok, order.text), tok.name); if (bad) throw new Error(bad); }
   const c = cleanOrder({ ...order, text: order.text ? "x" : "", target: order.targetId ? "E1" : null }, { gm: true }); if (!c.ok) throw new Error(c.reason.replace(/^an order/, "An order"));
   if (c.order.job && !ctx.jobs.some(j => j.id === c.order.job)) throw new Error("Its band has no such kind.");
-  await saveTurns(combat, { [`orders.pending.${f.band.key}`]: whole({ part: order.part, ...(order.targetId ? { targetId: order.targetId } : {}), ...(order.at ? { at: order.at } : {}), ...(order.job ? { job: order.job } : {}), ...(order.text ? { text: String(order.text) } : {}), ...(order.say ? { say: String(order.say) } : {}), from: tokenId, round: combat.round, at: Date.now() }), [`orders.refused.${f.band.key}`]: null });
+  await saveTurns(combat, { [`orders.pending.${f.band.key}`]: whole(toPending(order, { from: tokenId, round: combat.round, ts: Date.now() })), [`orders.refused.${f.band.key}`]: null });
 }
 /** Her call on who hears this round's order ("for what the module can't know"): v "yes" | "no", or null to leave it to the module again. */
 export async function setHearCall(combat, tokenId, v) {
@@ -3431,7 +3444,7 @@ async function runPending(combat) {
   for (const [key, p] of Object.entries(ordersOf(combat).pending ?? {})) {
     const lock = `${combat.id}.${key}`; if (!p || pendingNow.has(lock)) continue; pendingNow.add(lock);
     try {
-      const refuse = why => saveTurns(combat, { [`orders.pending.${key}`]: gone(), [`orders.refused.${key}`]: whole({ why, at: Date.now() }) });
+      const refuse = why => saveTurns(combat, { [`orders.pending.${key}`]: gone(), [`orders.refused.${key}`]: whole({ why, round: combat.round, at: Date.now() }) });
       const lead = combat.scene.tokens.get(p.from); if (!lead) { await refuse("its leader is gone"); continue; }
       if (p.round !== combat.round) { await refuse("the round moved on before it was given"); continue; }
       if (!await ensureScene(combat)) { await refuse(cantOpen()); continue; }
@@ -3439,16 +3452,17 @@ async function runPending(combat) {
         await packetsDone();
         const { labels, fresh } = labelsFor(combat, lead), target = p.targetId ? combat.scene.tokens.get(p.targetId) : null;
         if (p.targetId && !target) return refuse("that creature is gone");
+        if (target && !(turns(combat).memory?.[lead.id]?.[target.id]?.round === combat.round) && !target.actor?.isAllyOf?.(lead.actor)) return refuse(`${lead.name} doesn't perceive that creature this round`);
         if (target && !labels[target.id]) { const f = assignLabels(labels, [target.id], target.actor?.isAllyOf?.(lead.actor) ? "M" : "E"); Object.assign(fresh, f); Object.assign(labels, f); }
         let text = ""; if (p.text) { const g = orderGate(combat, lead, p.text, labels), bad = noteRefusal(g, lead.name); if (bad) return refuse(bad); text = g.text; }
-        const c = cleanOrder({ part: p.part, job: p.job, at: p.at, say: p.say, text, target: target ? labels[target.id] : null }, { gm: true }); if (!c.ok) return refuse(c.reason);
+        const c = fromPending(p, { text, target: target ? labels[target.id] : null }); if (!c.ok) return refuse(c.reason);
         if (Object.keys(fresh).length) await saveTurns(combat, Object.fromEntries(Object.entries(fresh).map(([k, v]) => [`labels.${k}`, v])));
         const out = orderOut(combat, lead, c.order, { by: "gm" }); if (!out.ok) return refuse(out.why);
         await saveTurns(combat, { ...out.change, [`orders.pending.${key}`]: gone(), [`orders.refused.${key}`]: null });
         const msg = await orderChat(combat, lead, out.entry).catch(e => { console.warn(`${ID} | order chat`, e); return null; });
         if (msg) await saveTurns(combat, { [`orders.log.${out.key}.msg`]: msg });
       } catch (e) { console.error(`${ID} | order`, e); await refuse(`something went wrong (${e.message})`).catch(() => {}); } });
-    } catch (e) { console.error(`${ID} | order`, e); await saveTurns(combat, { [`orders.pending.${key}`]: gone(), [`orders.refused.${key}`]: whole({ why: e.message, at: Date.now() }) }).catch(() => {}); }
+    } catch (e) { console.error(`${ID} | order`, e); await saveTurns(combat, { [`orders.pending.${key}`]: gone(), [`orders.refused.${key}`]: whole({ why: e.message, round: combat.round, at: Date.now() }) }).catch(() => {}); }
     finally { pendingNow.delete(lock); }
   }
 }

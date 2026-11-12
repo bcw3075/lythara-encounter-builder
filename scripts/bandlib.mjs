@@ -48,12 +48,14 @@ export function secondOf(scene, band) { const mark = band?.second; if (!mark) re
 /** The kinds of creature in a band, each with the id an order names its job by (orders.mjs `jobKey`: "r2" for a build row, "k0" for a kind the
     build didn't place, by its place among those), its name and its monsters. */
 export function jobGroups(scene, band) {
-  const rows = briefOf(scene)?.creatures ?? [], groups = new Map(), loose = [];
+  const rows = briefOf(scene)?.creatures ?? [], groups = new Map(), loose = new Map();
   rows.forEach((c, g) => { if (c.band === band.key) groups.set(`r${g}`, { id: `r${g}`, ref: { row: g }, name: c.name || "Creature", tokens: [] }); });
   for (const t of membersOf(scene, band.key)) { const r = builtRef(scene, t);
     if (r) { groups.get(`r${r.row}`)?.tokens.push(t.id); continue; }
-    const kind = kindFacts(t.actor); let n = loose.indexOf(kind.key); if (n < 0) { n = loose.push(kind.key) - 1; groups.set(`k${n}`, { id: `k${n}`, ref: { kind: kind.key }, name: kind.kindName, tokens: [] }); }
-    groups.get(`k${n}`).tokens.push(t.id); }
+    /* the id comes from the kind's own key, not from its place on a list, so it stays the same when another kind's last token leaves the map
+       (0.28.0 review 11: a standing job order would pass to the next kind) */
+    const kind = kindFacts(t.actor); if (!loose.has(kind.key)) { let n = [...kind.key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 1000, 7); while (groups.has(`k${n}`)) n = (n + 1) % 1000; loose.set(kind.key, `k${n}`); groups.set(`k${n}`, { id: `k${n}`, ref: { kind: kind.key }, name: kind.kindName, tokens: [] }); }
+    groups.get(loose.get(kind.key)).tokens.push(t.id); }
   return [...groups.values()];
 }
 /** The layers a band's nature is read from (bands.mjs `natureOf`): this fight's (the Combat's `bands` flag: nothing writes it before tier 3b), this
@@ -83,11 +85,13 @@ export function bandPacket(scene, tok, combat, { labelOf = () => null, fallen = 
   const unseen = t => !!t?.hidden && !t.getFlag(ID, "escaped"), state = lead.gone ? "gone" : lead.tok && !unseen(lead.tok) ? fallen(lead.tok) : null, leads = !!lead.tok && lead.tok.id === tok.id;
   const { band: out, held } = bandForPacket({ discipline: mine, nature, plan: planOf(scene, band, combat), me: { row: ref?.row, kind: ref ? null : kindFacts(tok.actor)?.key, leads: leads && !state }, leader: lead.tok && !leads ? labelOf(lead.tok.id) : null, nameOf, people: partyPeople(scene, labelOf) });
   let bandNow = null;
-  if (state && (lead.tok || lead.gone) && !leads) { const next = nature.ifLeaderFalls?.pick === "next" ? nextInLine(members.filter(t => !unseen(t)).map(t => ({ ...fact(scene, t, combat), standing: !fallen(t) })), lead.tok?.id ?? null) : null;
+  if (state && (lead.tok || lead.gone) && !leads) { const facts = members.filter(t => !unseen(t)).map(t => ({ ...fact(scene, t, combat), standing: !fallen(t) })), sec = secondOf(scene, band);
+    /* until the module has acted on the fall, the same answer it will give: the named second first (0.28.0 review 13) */
+    const next = nature.ifLeaderFalls?.pick !== "next" ? null : facts.some(m => m.id === sec?.id && m.id !== lead.tok?.id && m.standing && PLANNED.includes(m.discipline)) ? sec.id : nextInLine(facts, lead.tok?.id ?? null);
     bandNow = leaderFell({ discipline: mine, state, falls: nature.ifLeaderFalls?.pick ?? null, next: next ? (next === tok.id ? "you" : labelOf(next) ?? "another of its band") : null }); }
   /* the leader that fell earlier in this fight, once the module has acted on it (0.28.0): the band is still told, and who leads now */
   const fell = fightBand(combat, band.key)?.fell;
-  if (!bandNow && fell?.state && !state) bandNow = leaderFell({ discipline: mine, state: fell.state, falls: fell.pick ?? null, next: lead.took && lead.tok ? (leads ? "you" : labelOf(lead.tok.id) ?? "another of its band") : null });
+  if (!bandNow && fell?.state && !state && lead.took) bandNow =   /* only while another leads: a leader that got back up leads again and nobody is told it is down (review 7) */ leaderFell({ discipline: mine, state: fell.state, falls: fell.pick ?? null, next: lead.took && lead.tok ? (leads ? "you" : labelOf(lead.tok.id) ?? "another of its band") : null });
   return { band: out, bandNow, held };
 }
 

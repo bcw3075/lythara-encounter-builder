@@ -30,6 +30,10 @@ export function cleanOrder(raw, { gm = false } = {}) {
   else return bad(raw.part === "job" ? `an order that changes a job needs "target" (a creature's label: that kind goes for it, or protects it when it is one of its own) or "at" (a square to take).` : `an order that changes the objective needs "target" (a creature's label: everyone goes for it, or protects it when it is one of their own) or "at" (a square to hold).`);
   return { ok: true, order: out };
 }
+/** An order from the GM's box as it waits on the flag for the runner, and back again once the runner has the creature's label and her words in
+    labels. The time stamp is `ts`: `at` is the order's square (0.28.0 review 1: a stamp under `at` replaced the square of every Hold here). */
+export const toPending = (order = {}, stamp = {}) => ({ part: order.part, ...(order.targetId ? { targetId: String(order.targetId) } : {}), ...(square(order.at) ? { at: square(order.at) } : {}), ...(order.job ? { job: String(order.job) } : {}), ...(order.text ? { text: String(order.text) } : {}), ...(order.say ? { say: String(order.say) } : {}), from: stamp.from ?? null, round: stamp.round ?? 0, ts: stamp.ts ?? 0 });
+export const fromPending = (p = {}, { target = null, text = "" } = {}) => cleanOrder({ part: p.part, job: p.job, at: p.at, say: p.say, text, target }, { gm: true });
 /** An order in the words one hearer is sent, or the GM reads. ctx: { ally (the target is on the hearer's own side), mine (the job is the hearer's
     own kind's), jobName (the kind's name), fallBack (where the band's plan says falling back leads, in words, or "") }. */
 export function orderWords(o, { ally = false, mine = false, jobName = "", fallBack = "" } = {}) {
@@ -101,7 +105,7 @@ export function ordersForPacket({ standing = {}, wordsOf = () => "", unseen = []
 /* ---------- the leader falls (R3-2, acted on by the module since 0.28.0) ---------- */
 /** Who hurt a creature last, as its own notebook has it: the label of the last sure "hurt" line, or null. */
 export function lastHurtBy(book = {}) {
-  const lines = Object.entries(book ?? {}).filter(([, l]) => l && l.k === "hurt" && !l.x && LABEL.test(String(l.a ?? ""))).sort((a, b) => a[0] < b[0] ? -1 : 1);
+  const lines = Object.entries(book ?? {}).filter(([, l]) => l && l.k === "hurt" && !l.x && /^E\d{1,3}$/.test(String(l.a ?? "")))   /* an enemy's label only: a blow from its own side isn't avenged on an ally (review 14) */.sort((a, b) => a[0] < b[0] ? -1 : 1);
   return lines.length ? lines.at(-1)[1].a : null;
 }
 /** What the module does when a band's leader has fallen, by the band's pick. In: pick; state ("down" | "dead" | "fled" | "gone"); members:

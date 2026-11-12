@@ -144,7 +144,8 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
       isn't ticked for Angel. Three quick buttons and "Something else…" for one kind's job (or the goal) in her own words; one sentence said
       aloud for the chat and the History; who hears it, with her calls; one order a round. The draft is this browser's until she gives it. */
   _orderBox(c) {
-    const cur = c.started ? c.combatant?.token : null; if (!cur || cur.getFlag(ID, "run") || !runnable(cur)) return "";
+    const cur = c.started ? c.combatant?.token : null; if (!cur || !runnable(cur)) return "";
+    if (cur.getFlag(ID, "run") && currentRequest(c)?.state !== "manual") return "";   /* ticked for Angel: only once she has taken this turn with Play it myself (review 12) */
     if (!this._order || this._order.token !== cur.id || this._order.round !== c.round) this._order = { token: cur.id, round: c.round, mode: null, targetId: "", at: null, job: "", text: "", say: "" };
     const d = this._order, p = orderPreview(c, cur.id, d.mode === "other" && d.text.trim() ? { text: d.text } : null); if (!p) return "";
     const labels = c.getFlag(ID, "turns")?.labels ?? {}, nameOf = l => { const a = Object.entries(labels).find(([, v]) => v === l); return a ? c.scene.tokens.get(a[0])?.name ?? null : null; }, named = t => String(t ?? "").replace(/\b[EM]\d{1,3}\b/g, l => nameOf(l) ?? l);
@@ -173,7 +174,9 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     const stage = canvas.stage; this.minimize(); ui.notifications.info("Click the square to hold (right-click or Escape to cancel).");
     const end = () => { stage.off("pointerdown", on); document.removeEventListener("keydown", key, true); Hooks.off("canvasTearDown", torn); this._endPick = null; };
     const stop = () => { end(); if (this.rendered) { this.maximize(); this.render(); } };
-    const on = ev => { if (ev.button === 2) return stop(); if (ev.button !== 0) return; const pt = ev.getLocalPosition(stage), dim = canvas.scene.dimensions; d.at = [Math.floor((pt.x - dim.sceneX) / dim.size), Math.floor((pt.y - dim.sceneY) / dim.size)]; stop(); };
+    const on = ev => { if (ev.button === 2) return stop(); if (ev.button !== 0) return; const pt = ev.getLocalPosition(stage), dim = canvas.scene.dimensions, sq = [Math.floor((pt.x - dim.sceneX) / dim.size), Math.floor((pt.y - dim.sceneY) / dim.size)];
+      if (sq[0] < 0 || sq[1] < 0 || sq[0] >= Math.round(dim.sceneWidth / dim.size) || sq[1] >= Math.round(dim.sceneHeight / dim.size)) return ui.notifications.warn("Click a square inside the map.");
+      d.at = sq; stop(); };
     const key = ev => { if (ev.key === "Escape") { ev.stopPropagation(); stop(); } };
     const torn = () => { end(); };
     stage.on("pointerdown", on); document.addEventListener("keydown", key, true); Hooks.on("canvasTearDown", torn); this._endPick = end;
@@ -295,7 +298,8 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
       if (d.mode === "other" && !d.text.trim()) return ui.notifications.warn("Write what they are to do first.");
       this._ordering = true; el.disabled = true;
       const order = d.mode === "fallBack" ? { part: "fallBack" } : d.mode === "on" ? { part: "objective", targetId: d.targetId } : d.mode === "hold" ? { part: "objective", at: d.at ?? orderPreview(c, d.token)?.square } : { part: d.job ? "job" : "objective", ...(d.job ? { job: d.job } : {}), text: d.text.trim() };
-      giveOrder(c, d.token, { ...order, ...(d.say.trim() ? { say: d.say.trim() } : {}) }).then(() => { this._order = null; }).catch(e => ui.notifications.error(e.message)).finally(() => { this._ordering = false; this._deferred = false; if (this.rendered) super.render(); }); });
+      /* the draft stays until the order shows as given (the box then folds to one line), so a refusal by the runner loses none of her words (review 5) */
+      giveOrder(c, d.token, { ...order, ...(d.say.trim() ? { say: d.say.trim() } : {}) }).catch(e => ui.notifications.error(e.message)).finally(() => { this._ordering = false; this._deferred = false; if (this.rendered) super.render(); }); });
     root.querySelector('[data-do="history"]')?.addEventListener("click", ev => { ev.preventDefault(); Hooks.callAll(`${ID}.openHistory`); });
   }
 }
