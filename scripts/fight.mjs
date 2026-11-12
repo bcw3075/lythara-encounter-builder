@@ -416,7 +416,7 @@ function situationNow(combat, tok, labels = {}, others = null) {
 /* whose turn the runner last handled, by combat: a turn can pass with no `updateCombat` carrying `turn` (0.24.0, below) */
 const turnOf = new Map();
 /** A fight is over: nothing of it is kept on this page. */
-export const onCombatGone = combat => { turnOf.delete(combat?.id); };
+export const onCombatGone = combat => { turnOf.delete(combat?.id); clearTimeout(looking.get(combat?.id)); looking.delete(combat?.id); };
 /** The current combatant was deleted (Let it get away, or the GM removing it): the turn number stays the same, so core hands the turn to the next
     survivor with `combatTurnChange` and the system's turn start but no `updateCombat` with `turn` in it (14.370, seen live 2026-11-10: the next
     ticked monster was never asked). Called from both `combatTurnChange` and `deleteCombatant`; it waits a moment so an ordinary turn change, which
@@ -427,6 +427,15 @@ export function onTurnHandedOn(combat) {
     if (!handedOn(turnOf.has(combat.id), turnOf.get(combat.id) ?? null, now)) return;
     onCombatUpdate(combat, { turn: combat.turn }); }, 150);
 }
+/* A second look a moment after every turn change (0.29.0, seen live): when two turn changes land within about 200 ms (an Auto monster ends its
+   turn and the GM presses next turn in the same moment), this page's `combat.combatant` can read the creature before for an instant, so the look
+   above takes the turn for an unticked creature's and nobody asks for the monster's. `onTurnChange` asks at most once for a turn, so looking
+   again costs nothing when the first look was right. */
+const LOOK_AGAIN_MS = 1200, looking = new Map();
+function lookLater(combat) {
+  clearTimeout(looking.get(combat.id));
+  looking.set(combat.id, setTimeout(() => { looking.delete(combat.id); if (game.combats.get(combat.id)?.started) onTurnChange(combat).catch(e => console.error(`${ID} | turn`, e)); }, LOOK_AGAIN_MS));
+}
 export function onCombatUpdate(combat, change) {
   if (!isRunner()) return;
   if ("turn" in change || "round" in change) turnOf.set(combat.id, combat.combatant?.id ?? null);
@@ -435,7 +444,8 @@ export function onCombatUpdate(combat, change) {
   if ("turn" in change || "round" in change) turnReactions(combat).catch(e => console.warn(`${ID} | reactions`, e));   /* monsters' reactions (0.21.0): open offers lapse, the new creature's reaction comes back */
   if ("turn" in change || "round" in change) leaveWaiting(combat).catch(e => console.warn(`${ID} | waiting`, e)).then(() => dropInstantAreas(combat, currentRequest(combat) ? { id: currentRequest(combat).id, pos: 0 } : null)).catch(e => console.warn(`${ID} | areas`, e));
   if ("turn" in change || "round" in change) { const prev = { ...(combat.previous ?? {}) };   /* the turn that just ended, read before anything awaits */
-    fallIfAloft(combat, prev).catch(e => console.warn(`${ID} | fall`, e)).then(() => sinkNote(combat, prev)).catch(e => console.warn(`${ID} | sink`, e)).then(() => settleClimbers(combat)).catch(e => console.warn(`${ID} | climbing`, e)).then(() => settleBurrowers(combat)).catch(e => console.warn(`${ID} | burrowing`, e)).then(() => noteWhatTheySense(combat)).catch(e => console.warn(`${ID} | memory`, e)).then(() => settleBands(combat)).catch(e => console.warn(`${ID} | bands`, e)).then(() => onTurnChange(combat)).catch(e => console.error(`${ID} | turn`, e)); }
+    fallIfAloft(combat, prev).catch(e => console.warn(`${ID} | fall`, e)).then(() => sinkNote(combat, prev)).catch(e => console.warn(`${ID} | sink`, e)).then(() => settleClimbers(combat)).catch(e => console.warn(`${ID} | climbing`, e)).then(() => settleBurrowers(combat)).catch(e => console.warn(`${ID} | burrowing`, e)).then(() => noteWhatTheySense(combat)).catch(e => console.warn(`${ID} | memory`, e)).then(() => settleBands(combat)).catch(e => console.warn(`${ID} | bands`, e)).then(() => onTurnChange(combat)).catch(e => console.error(`${ID} | turn`, e));
+    lookLater(combat); }
   act(combat);
 }
 /* ---------- falling ---------- */

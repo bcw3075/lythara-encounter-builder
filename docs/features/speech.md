@@ -85,3 +85,4 @@ Settled by Angel, told to Rhea in the release note, hers to change:
 - A reload of the runner's page between a sentence's record and its chat line leaves it said with no line in chat (the History has it), as for an order.
 - A monster on the party's side never speaks or yields through the module.
 - The thinker isn't told whether anyone understood what it said.
+- A prisoner put back in the fight gets a new combatant, so the History shows a "played by the GM" line for it in the rounds before, beside its real turns (the same as a monster brought back after an escape).
