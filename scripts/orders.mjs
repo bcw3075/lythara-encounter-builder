@@ -104,9 +104,20 @@ export function ordersForPacket({ standing = {}, wordsOf = () => "", unseen = []
 
 /* ---------- the leader falls (R3-2, acted on by the module since 0.28.0) ---------- */
 /** Who hurt a creature last, as its own notebook has it: the label of the last sure "hurt" line, or null. */
-export function lastHurtBy(book = {}) {
-  const lines = Object.entries(book ?? {}).filter(([, l]) => l && l.k === "hurt" && !l.x && /^E\d{1,3}$/.test(String(l.a ?? "")))   /* an enemy's label only: a blow from its own side isn't avenged on an ally (review 14) */.sort((a, b) => a[0] < b[0] ? -1 : 1);
+export function lastHurtBy(book = {}, isEnemy = l => /^E\d{1,3}$/.test(l)) {
+  const lines = Object.entries(book ?? {}).filter(([, l]) => l && l.k === "hurt" && !l.x && /^[EM]\d{1,3}$/.test(String(l.a ?? "")) && isEnemy(String(l.a)))   /* an enemy's label only: a blow from its own side isn't avenged on an ally (review 14) */.sort((a, b) => a[0] < b[0] ? -1 : 1);
   return lines.length ? lines.at(-1)[1].a : null;
+}
+/** Who struck the leader down (0.28.0 live test). First the creature whose blow took it to 0 hit points: the runner notes that from the blow's
+    own card (`dropped`: { by: a token id, or null when the card names nobody }), because a creature that is down writes nothing in its own
+    notebook, so the killing blow is never there. Else the last sure blow its notebook holds. Only an enemy counts, and that is asked of the
+    creature itself (`isEnemy(tokenId)`), never read off a label's letter: a label's letter is whoever first needed it (a party member first
+    labelled from its own side's notebook is an "M"). Out: { id, label } (label null when it has none yet) or null. */
+export function dropperOf({ dropped = null, book = {}, labels = {}, isEnemy = () => false } = {}) {
+  if (dropped?.by && isEnemy(dropped.by)) return { id: dropped.by, label: labels[dropped.by] ?? null };
+  const byLabel = Object.fromEntries(Object.entries(labels ?? {}).map(([id, l]) => [l, id]));
+  const l = lastHurtBy(book, x => !!byLabel[x] && isEnemy(byLabel[x]));
+  return l ? { id: byLabel[l], label: l } : null;
 }
 /** What the module does when a band's leader has fallen, by the band's pick. In: pick; state ("down" | "dead" | "fled" | "gone"); members:
     [{ id, level, speaks, discipline, standing }] (the fallen leader among them); leaderId; second (the id of the named second, or null); dropper

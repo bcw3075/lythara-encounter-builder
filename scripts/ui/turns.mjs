@@ -64,7 +64,7 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
         return rest.length ? ` Also in the area: ${listWords(rest)}.` : ""; };
       /* orders (0.28.0): on the leader's card, who would hear the order its plan still holds (her calls can change that before Do it); on a
          member's, this round's order as it heard it, or that it didn't and why */
-      const oc = tok ? orderCard(c, tok.id) : null, orderToCome = (r.steps ?? []).some((s, i) => s.do === "order" && i >= pos && !r.log?.[i]?.given && !r.log?.[i]?.skipped);
+      const stepToCome = (r.steps ?? []).find((s, i) => s.do === "order" && i >= pos && !r.log?.[i]?.given && !r.log?.[i]?.skipped) ?? null, orderToCome = !!stepToCome, oc = tok ? orderCard(c, tok.id, stepToCome?.order ?? null) : null;
       const orderLine = !oc ? "" : oc.leads ? (orderToCome && ["ready", "held", "stopped"].includes(r.state) ? this._hearHtml(oc.hearers) : "")
         : oc.heard ? `<p class="leb-mine"><b class="leb-oh">Order heard</b> (round ${c.round}, from its leader): ${esc(oc.words)}.${oc.holds ? ` ${esc(oc.holds)}.` : ""}</p>`
         : `<p class="leb-mine"><b class="leb-warn">Didn't hear</b> this round's order (it ${esc(oc.why ?? "didn't hear it")}): it goes on as before.</p>`;
@@ -137,7 +137,7 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
   }
   /** Who would hear this round's order, each with her own call ("for what the module can't know": a tick lasts the round). */
   _hearHtml(h) {
-    const rows = h.list.filter(x => x.listens || x.called).map(x => `<label class="leb-hr" title="Ticked: it doesn't get this round's order. Your own tick or untick lasts this round."><span class="${x.hears ? "leb-yes" : "leb-no"}">${x.hears ? "✓" : "✗"}</span><span>${esc(x.name)} ${x.hears ? "hears it" : esc(x.why ?? "doesn't hear it")}</span><span class="leb-mine"><input type="checkbox" data-hear="${esc(x.id)}" ${x.hears ? "" : "checked"}> can't hear</span></label>`).join("");
+    const rows = h.list.filter(x => x.listens || x.called).map(x => `<label class="leb-hr" title="Ticked: it doesn't get this round's order. Your own tick or untick lasts this round."><span class="${x.hears ? "leb-yes" : "leb-no"}">${x.hears ? "✓" : "✗"}</span><span>${esc(x.name)} ${x.hears ? "hears it" : esc(x.why ?? "doesn't hear it")}${x.unseen?.length ? ` <span class="leb-mine">· hasn't seen ${esc(listWords(x.unseen))} yet, so it learns ${x.unseen.length === 1 ? "it is" : "they are"} there, not where</span>` : ""}</span><span class="leb-mine"><input type="checkbox" data-hear="${esc(x.id)}" ${x.hears ? "" : "checked"}> can't hear</span></label>`).join("");
     return `<div class="leb-hear">${rows || `<p class="leb-mine">Nobody in its band is left to follow an order.</p>`}${h.canTest ? "" : `<p class="leb-mine">Open the fight's map on this page to see who is out of earshot.</p>`}</div>`;
   }
   /** The Give orders box (Rhea, R3-5; the sample she approved on 2026-11-11): on the card whenever the creature whose turn it is leads a band and
@@ -147,7 +147,8 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     const cur = c.started ? c.combatant?.token : null; if (!cur || !runnable(cur)) return "";
     if (cur.getFlag(ID, "run") && currentRequest(c)?.state !== "manual") return "";   /* ticked for Angel: only once she has taken this turn with Play it myself (review 12) */
     if (!this._order || this._order.token !== cur.id || this._order.round !== c.round) this._order = { token: cur.id, round: c.round, mode: null, targetId: "", at: null, job: "", text: "", say: "" };
-    const d = this._order, p = orderPreview(c, cur.id, d.mode === "other" && d.text.trim() ? { text: d.text } : null); if (!p) return "";
+    const d = this._order, p = orderPreview(c, cur.id, d.mode === "other" && d.text.trim() ? { text: d.text } : d.mode === "on" && d.targetId ? { targetId: d.targetId } : null); if (!p) return "";
+    if (d.job && !p.jobs.some(j => j.id === d.job)) d.job = "";   /* a kind no longer offered (nobody left in it to take an order) */
     const labels = c.getFlag(ID, "turns")?.labels ?? {}, nameOf = l => { const a = Object.entries(labels).find(([, v]) => v === l); return a ? c.scene.tokens.get(a[0])?.name ?? null : null; }, named = t => String(t ?? "").replace(/\b[EM]\d{1,3}\b/g, l => nameOf(l) ?? l);
     const head = `<p><b>Give orders</b> <span class="leb-mine">${esc(cur.name)} leads ${esc(p.band)} · one a round · speaking costs no action</span></p>`;
     if (p.last) return `<div class="leb-card leb-ob">${head}<p><b>Order given in round ${p.last.r}:</b> ${esc(named(p.last.words))}. <span class="leb-mine">The next one can go out in round ${p.last.r + 1}.</span></p></div>`;
