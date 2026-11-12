@@ -21,6 +21,9 @@ import { SWIM_DC, movedOn, shouldFall, shouldSink } from "../../scripts/turn.mjs
 import { SETTLE, handedOn, settleFrom, settleWait } from "../../scripts/turn.mjs";
 import { CLIMB_DC, climbResult, nextClimb } from "../../scripts/turn.mjs";
 import { endsCover as endsCover2 } from "../../scripts/turn.mjs";
+import { stepLabels, untouched } from "../../scripts/turn.mjs";
+import { shiftHeard } from "../../scripts/orders.mjs";
+import { acAdds, coverInDc } from "../../scripts/react.mjs";
 import { groupChanges, tickGroups } from "../../scripts/ui/ticks.mjs";
 import { climbDistance, treeTop, treesBeside } from "../../scripts/move.mjs";
 import { verticalGap } from "../../scripts/area.mjs";
@@ -1804,4 +1807,13 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
     check("memory: a creature healing itself reads as such", Mem2.render({ "001": { k: "heal", a: "E5", t: "E5", r: 1, at: 1 } }, { rung: 3 }).remembers[0].text === "E5 healed itself." && Mem2.render({ "001": { k: "heal", a: "E5", t: "E2", r: 1, at: 1 } }, { rung: 3 }).remembers[0].text === "E5 healed E2.");
   }
 }
+/* 0.29.1: the close-out's bugs and R-1 */
+{ check("R-1: steps labelled by cost", JSON.stringify(stepLabels([{ do: "order" }, { do: "strike" }, { do: "spell", actions: 2 }, { do: "say" }])) === JSON.stringify(["Free", "Action 1", "Actions 2–3", "Free"]));
+  check("R-1: a re-plan carries the count on; nothing and a reaction", JSON.stringify(stepLabels([{ do: "stride" }, { do: "none" }], 2)) === JSON.stringify(["Action 3", ""]) && stepLabels([{ do: "strike" }], 0, { reaction: true })[0] === "Reaction" && stepLabels([{ do: "ability", actions: 0 }])[0] === "Free" && stepLabels([{ do: "delay" }, { do: "strike" }])[0] === "" && stepLabels([{ do: "delay" }, { do: "strike" }])[1] === "Action 1");
+  check("F-1: untouched is only a request nothing of has run", untouched({ state: "requested" }) && untouched({ state: "ready", pos: 0, log: {} }) && !untouched({ state: "ready", pos: 1, log: {} }) && !untouched({ state: "ready", pos: 0, log: { 0: { started: true } } }) && !untouched({ state: "running" }) && !untouched({ state: "requested", parent: "x" }) && !untouched({ state: "requested", reaction: true }) && !untouched({ state: "ready", go: true }) && !untouched(null));
+  const st = { goal: { r: 1, o: { part: "objective", at: [3, 4] } }, jobs: { a: { r: 1, o: { part: "job", job: "a", target: "E1" } }, b: { r: 2, o: { part: "job", job: "b", at: [0, 9] } } } }, sh = shiftHeard(st, 10, 0);
+  check("B-1 (found with it): held squares move with the ground", sh.goal.o.at.join() === "13,4" && sh.jobs.b.o.at.join() === "10,9" && sh.jobs.a.o.target === "E1" && st.goal.o.at.join() === "3,4" && shiftHeard(st, 0, 0) === null && shiftHeard({ goal: { r: 1, o: { part: "objective", target: "E2" } }, jobs: {} }, 10, 0) === null);
+  check("B-3: cover in the DC read from the card's options", coverInDc(["self:x", "target:cover-level:lesser", "target:cover-bonus:1"]) === 1 && coverInDc(["target:cover-bonus:2", "target:cover-bonus:4"]) === 4 && coverInDc(undefined) === 0 && coverInDc(["cover-bonus:2"]) === 0);
+  check("B-3: Nimble Dodge over lesser cover adds 1, over greater nothing", acAdds(2, 1) === 1 && acAdds(2, 4) === 0 && acAdds(2, 0) === 2 && acAdds(0, 0) === 0);
+  check("B-3: the close-out's case stays a hit (13 against 12 + 1)", degreeAgainst(13, 6, 12 + acAdds(2, Math.max(0, coverInDc(["target:cover-bonus:1"])))) === 2); }
 console.log(`${good} passed, ${bad} failed`); process.exit(bad ? 1 : 0);

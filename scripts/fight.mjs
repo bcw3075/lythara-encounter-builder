@@ -1,19 +1,19 @@
 /* A fight's turns. One named account does the work (the runner: the Claude Bridge unless the setting says otherwise), on its own page with the
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. It runs Strikes, Strides, Steps, Crawls, Fly, Swim, Climb, Release, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek, Interact, Delay and fleeing off the map; what is still to come is in the repo's docs/features and the project's plan doc. */
-import { handedOn, settleFrom, settleWait, CHANGEABLE, NOTE_MAX, changeProblem, describeStep, nameWords, noteForThinker, planPrint } from "./turn.mjs";
+import { handedOn, untouched, settleFrom, settleWait, CHANGEABLE, NOTE_MAX, changeProblem, describeStep, nameWords, noteForThinker, planPrint } from "./turn.mjs";
 import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, SAVE_MULT, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, shouldSink, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract, nextClimb, climbResult } from "./turn.mjs";
 import { BURROW_DEPTH, FT, distanceBetween, burrowWorld, crossesWalls, cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, heightWhenCut, rockSquares, routeWords, swimWorld, glideWorld, treeTop, treesBeside, wallSquares, waterKinds, waterUnder } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, visibleConditions } from "./perceive.mjs";
 import { mindOf } from "./library.mjs";
 import { PLANNED, bandKeyOf, bandOf, bandPacket, bandsOf, disciplineOf, fightBand, jobGroups, langsOf, leaderOf, membersOf, natureLayers, planOf, secondOf, shiftBandSpots } from "./bandlib.mjs";
 import { natureOf } from "./bands.mjs";
-import { HOLDS, NEVER_GIVES_UP, applyHeard, canOrder, cleanOrder, fallBackWords, fallOutcome, dropperOf, fromPending, hearing, labelsIn, logWords, orderLanguage, orderWords, ordersForPacket, roundLine, toPending } from "./orders.mjs";
+import { HOLDS, NEVER_GIVES_UP, applyHeard, canOrder, cleanOrder, fallBackWords, fallOutcome, dropperOf, fromPending, hearing, labelsIn, logWords, orderLanguage, orderWords, ordersForPacket, roundLine, shiftHeard, toPending } from "./orders.mjs";
 import { namer } from "./history.mjs";
 import { RUNGS, STORE_MAX, GM_LINE_MAX, evict, forPacket, gmLine, lineKey, render, rethinkFor, rungOf, severity, sideWords, spellWords, witnessLines } from "./memory.mjs";
 import { readMap, partySize, suggestedLevel } from "./builder.mjs";
 import { aimArea, aimWords, alliesCaught, burstReachable, caughtBy, shapeOf, squaresNear } from "./area.mjs";
-import { AC_ROWS, CHOICES, GUILT, KNOWN, MONSTER_REACTIONS, answerWords, barrierWords, canReact, castRank, choiceWords, earthLess, glimpseResistance, guiltLines, guiltWords, harmWords, missWords, notAskedWords, shieldGrantsBlock, spentRows, untilNextTurnEnds, readCard, cardTrigger, degreeAgainst, equipTrigger, finished, fits, gateWords, moveTrigger, proneOffTrigger, reactionStrike, reactionsOf, routeGates, squaresAlong, untilFor } from "./react.mjs";
+import { AC_ROWS, CHOICES, GUILT, KNOWN, MONSTER_REACTIONS, answerWords, barrierWords, acAdds, canReact, castRank, coverInDc, choiceWords, earthLess, glimpseResistance, guiltLines, guiltWords, harmWords, missWords, notAskedWords, shieldGrantsBlock, spentRows, untilNextTurnEnds, readCard, cardTrigger, degreeAgainst, equipTrigger, finished, fits, gateWords, moveTrigger, proneOffTrigger, reactionStrike, reactionsOf, routeGates, squaresAlong, untilFor } from "./react.mjs";
 import { MAX_TRIES, choiceOut, cleanChoice, cleanMeta, cleanPlan, eventOut, hello, isChoice, listening, live, nextSeq, pickEvent, stale, stallOf, text, waitSeconds } from "./brain.mjs";
 import { esc } from "./journal.mjs";
 import { breaksYield, gestureWords, orderHtml, sayHtml, speechFor, speechForPacket, speechLanguage, understands } from "./speech.mjs";
@@ -392,6 +392,7 @@ async function onTurnChange(combat) {
     if (!opened || !tok.object) return await save(combat, id, { ...base, labels: {}, note: cantOpen() });   /* no map, no packet: words instead of silent wrong answers */
     let built; try { built = await buildPacket(combat, tok); } catch (e) { console.error(`${ID} | packet`, e); return await save(combat, id, { ...base, labels: {}, note: `I couldn't work out what ${tok.name} perceives (${e.message}). Play this turn yourself.` }); }
     await saveTurns(combat, { [`requests.${id}`]: { ...base, labels: built.labels, packet: built.packet, ...(built.mindHeld.length ? { mindHeld: built.mindHeld } : {}), seen: situationNow(combat, tok, built.labels, built.others), nbAt: Date.now(), note: null, tries: 0, pos: 0 }, ...eventChange("turn", id, 0), ...packetExtras(combat, tok, built) });
+    if (!tok.getFlag(ID, "run")) await playMyself(combat, id);   /* unticked while it was being asked for (0.29.1 review 1): hers, as an untick on the turn is */
   } finally { starting.delete(key); }
 }
 const cantOpen = () => `${game.user.name} couldn't open the fight map. Play this turn yourself.`;
@@ -530,6 +531,12 @@ function act(combat) {
 export function onTokenFlag(tok, change) {
   if (!isRunner()) return;
   if (foundry.utils.getProperty(change, `flags.${ID}.run`)) for (const c of game.combats.filter(c => c.started && c.combatant?.tokenId === tok.id)) onTurnChange(c).catch(e => console.error(`${ID} | turn`, e));
+  /* unticked during its own turn (0.29.1, F-1; Rhea, 2026-11-12: "Close it as Play it myself"): a request nothing of has run yet closes as Play it
+     myself would, so a listening chat can't plan for a monster she has taken over. A turn Angel has started is left alone. */
+  if (foundry.utils.getProperty(change, `flags.${ID}.run`) === false) for (const c of game.combats.filter(c => c.started && c.combatant?.tokenId === tok.id)) {
+    const r = currentRequest(c);
+    if (r?.tokenId === tok.id && untouched(r) && !running.has(r.id)) playMyself(c, r.id).catch(e => console.error(`${ID} | untick`, e));
+  }
   /* its yield ended during its own turn (Fight on, a blow; 0.29.0): it gets the turn the module was passing */
   if (foundry.utils.hasProperty(change, `flags.${ID}.yieldOver`) && !yieldOf(tok)) for (const c of game.combats.filter(c => c.started && c.combatant?.tokenId === tok.id)) onTurnChange(c).catch(e => console.error(`${ID} | turn`, e));
   /* Auto ticked while its plan waits on the card (ready: before its first step, or between steps for Next step): it runs as if Auto had been on from the
@@ -904,8 +911,10 @@ async function judgeNow(combat, requestId) {
   }
   const c = checkPlan(clean.plan, await gather(combat, r, undefined, { moves: hasMove(clean.plan.steps), spells: hasSpell(clean.plan.steps) }));
   if (!c.ok) return reject(combat, requestId, c.reason);
-  await save(combat, requestId, { state: "ready", plan: whole(clean.plan), steps: c.steps, verdict: null });
   const tok = combat.scene.tokens.get(r.tokenId);
+  /* unticked while the plan was being checked, or the untick's save landed under the hand-in (0.29.1 review 1): hers, as an untick on the turn is */
+  if (tok && !tok.getFlag(ID, "run") && !r.reaction) { await save(combat, requestId, { state: "manual", plan: whole(clean.plan), steps: c.steps, verdict: null }); return { state: "manual", reason: "The GM took this turn over (Angel was unticked)." }; }
+  await save(combat, requestId, { state: "ready", plan: whole(clean.plan), steps: c.steps, verdict: null });
   if (tok?.getFlag(ID, "auto") && !request(combat, requestId).gmWait) (async () => { if (!(await pausedAuto(combat, requestId, tok)) && request(combat, requestId)?.state === "ready" && !request(combat, requestId).hold && !request(combat, requestId).gmWait) await doIt(combat, requestId); })().catch(e => console.error(e));   /* Auto's own start waits out the game's pause; read again after it (0.17.0 review) */
   return { state: "ready", steps: c.steps };
 }
@@ -1094,7 +1103,7 @@ async function runStrike(combat, id, i, step, tok, target) {
         /* Nimble Dodge used before the roll (0.20.0): +2 circumstance to AC against this attack, over what circumstance bonus it already had (they don't
            stack); read against the attack's own DC, and recorded in the same save as the attack (review findings 5 and 17) */
         const base = roll?.degreeOfSuccess ?? message.rolls?.[0]?.degreeOfSuccess ?? 0, raised = acRaised(combat, id, i, target), bonus = raised.bonus, check = message.rolls?.[0] ?? roll;
-        const add = bonus ? Math.max(0, bonus - circNow(target.actor)) : 0, dc = add ? (message.flags?.pf2e?.context?.dc?.value ?? target.actor.armorClass?.value ?? 0) + add : null, degree = add && check ? degreeAgainst(check.total, check.dice?.[0]?.total, dc) : base;
+        const add = bonus ? acAdds(bonus, Math.max(circNow(target.actor), coverInDc(message.flags?.pf2e?.context?.options))) : 0, dc = add ? (message.flags?.pf2e?.context?.dc?.value ?? target.actor.armorClass?.value ?? 0) + add : null, degree = add && check ? degreeAgainst(check.total, check.dice?.[0]?.total, dc) : base;
         await record({ attack: { message: message.id, degree, ...(degree !== base ? { was: base, against: dc } : {}), ...(left != null ? { ammoLeft: left } : {}) } });
         if (degree !== base) await addNote(combat, id, `${raised.by}: against AC ${dc} ${step.itemName}'s ${OUTCOMES[base] ?? "result"} becomes a ${OUTCOMES[degree] ?? "different result"}.`);
         if (base >= 2 && degree < 2) await sayToAll(target, missWords(target.name, raised.by));   /* every reduction says why (Rhea, 2026-11-11) */
@@ -2364,6 +2373,14 @@ async function afterExtend(combat, requestId, side, tok, { shifted = shiftFor(si
   const scene = combat.scene, from = request(combat, requestId)?.extendFrom, [cols, rows] = mapSquares(scene);
   const dx = side === "west" ? (Array.isArray(from) ? Math.max(0, cols - from[0]) : EXTEND_SQUARES) : 0, dy = side === "north" ? (Array.isArray(from) ? Math.max(0, rows - from[1]) : EXTEND_SQUARES) : 0, change = { [`requests.${requestId}.extended`]: side, [`requests.${requestId}.extending`]: null };
   if (dx || dy) for (const [who, mem] of Object.entries(turns(combat).memory ?? {})) for (const [id, m] of Object.entries(mem ?? {})) if (Array.isArray(m?.square)) change[`memory.${who}.${id}.square`] = [m.square[0] + dx, m.square[1] + dy];
+  /* a held order's square moves with the ground too (0.29.1, found with bug B-1). A pending order from the GM's box is left as it is: it may have
+     been picked on the grown map, and it is given within seconds (review 5) */
+  if (dx || dy) for (const [id, st] of Object.entries(ordersOf(combat).heard ?? {})) { const moved = shiftHeard(st, dx, dy); if (moved) change[`orders.heard.${id}`] = whole(moved); }
+  /* a climber's tree is a square on its token (bug B-1, 0.29.1): unshifted, the next turn change found it "no longer up its tree" and took its flag and
+     Off-Guard away. Shifted before the request stops being `extending`, so a reload in between resumes here; marked with the request, so a resume
+     never shifts it twice (review 4) */
+  if (dx || dy) for (const t of scene.tokens) { const f = t.getFlag(ID, "climbing"); if (Array.isArray(f?.at) && f.at.length === 2 && f.shifted !== requestId)
+    await watched(() => t.setFlag(ID, "climbing", { ...f, at: [f.at[0] + dx, f.at[1] + dy], shifted: requestId })).catch(e => console.error(`${ID} | climbing`, e)); }
   await saveTurns(combat, change);
   await shiftBandSpots(scene, dx, dy).catch(e => console.error(`${ID} | rally spots`, e));   /* a band's rally spot is a square too */
   if ((tok.movementHistory?.length ?? 0) > history && tok.clearMovementHistory) await tok.clearMovementHistory();
@@ -2844,7 +2861,7 @@ async function hitGate(combat, id, i, step, tok, target, what, get) {
   if (used("reactive-shield")) {
     const before = circNow(target.actor, { noShield: true });
     if (!target.actor.attributes?.shield?.raised) await watched(async () => game.pf2e.actions.get?.("raise-a-shield")?.use?.({ actors: [target.actor] }) ?? game.pf2e.actions.raiseAShield?.({ actors: [target.actor] })).catch(e => console.warn(`${ID} | raise a shield`, e));
-    const m = game.messages.get(rec.attack.message), check = m?.rolls?.[0], add = Math.max(0, (target.actor.attributes?.shield?.ac ?? 0) - before), dc = (m?.flags?.pf2e?.context?.dc?.value ?? target.actor.armorClass?.value ?? 0) + add;
+    const m = game.messages.get(rec.attack.message), check = m?.rolls?.[0], add = acAdds(target.actor.attributes?.shield?.ac ?? 0, Math.max(before, coverInDc(m?.flags?.pf2e?.context?.options))), dc = (m?.flags?.pf2e?.context?.dc?.value ?? target.actor.armorClass?.value ?? 0) + add;
     if (check && add) { degree = degreeAgainst(check.total, check.dice?.[0]?.total, dc); if (degree !== rec.attack.degree) { change.attack = { ...rec.attack, degree, was: rec.attack.degree, against: dc }; await addNote(combat, id, `Reactive Shield: against AC ${dc} ${step.itemName}'s ${OUTCOMES[rec.attack.degree]} becomes a ${OUTCOMES[degree]}.`);
       if (degree < 2) await sayToAll(target, missWords(target.name, "Reactive Shield")); } }
   }

@@ -81,6 +81,17 @@ export function degreeAgainst(total, natural, dc) {
   if (natural === 20) d++; else if (natural === 1) d--;
   return Math.max(0, Math.min(3, d));
 }
+/** The circumstance cover bonus PF2e already put in an attack's DC, from the attack card's roll options (`target:cover-bonus:<n>`; 0.29.1, bug B-3).
+    Visioner's cover is a modifier predicated on the attacker, so it reads as disabled on the target's AC outside the roll: without this a reaction's
+    +2 was added on top of a cover bonus the DC already held, though circumstance bonuses don't stack. options: the card's `context.options`. */
+export function coverInDc(options = []) {
+  let best = 0;
+  for (const o of Array.isArray(options) ? options : []) { const m = /^target:cover-bonus:(\d+)$/.exec(String(o)); if (m) best = Math.max(best, Number(m[1])); }
+  return best;
+}
+/** What a reaction that raises AC adds to a DC: only what it beats of the circumstance bonus already counted (circumstance bonuses don't stack).
+    bonus: the reaction's; had: the best circumstance bonus already in the DC. */
+export const acAdds = (bonus, had) => Math.max(0, (Number(bonus) || 0) - Math.max(0, Number(had) || 0));
 /** What the reactor is told, in a sentence. who: the mover as the reactor may see it ("The Sod Hound" or "A creature"); kind: the monster's action. */
 export function gateWords(gate, who, { kind = "", reaction = "" } = {}) {
   const W = { move: `${who} is moving out of a square in your reach`, stay: `${who} ${kind || "uses a move action"} in your reach`, manipulate: `${who} uses a manipulate action in your reach${kind ? ` (${kind})` : ""}`,

@@ -1,7 +1,7 @@
 ---
 feature: card-ui
 files: [scripts/ui/turns.mjs, scripts/ui/ticks.mjs]
-functions: [fight.mjs:onPreCreateMessage, fight.mjs:onCreateMessage, fight.mjs:waitFor, fight.mjs:waitForAny, fight.mjs:clickWith, fight.mjs:openWindows, fight.mjs:isPrompt, fight.mjs:watched, fight.mjs:cardEl, fight.mjs:cardButton, fight.mjs:boundPanel, fight.mjs:freshButton, fight.mjs:press, fight.mjs:applyOnCard, fight.mjs:redrawn]
+functions: [fight.mjs:onPreCreateMessage, fight.mjs:onCreateMessage, fight.mjs:waitFor, fight.mjs:waitForAny, fight.mjs:clickWith, fight.mjs:openWindows, fight.mjs:isPrompt, fight.mjs:watched, fight.mjs:cardEl, fight.mjs:cardButton, fight.mjs:boundPanel, fight.mjs:freshButton, fight.mjs:press, fight.mjs:applyOnCard, fight.mjs:redrawn, turn.mjs:stepLabels]
 dependsOn: []
 since: 0.10.0
 ---
@@ -12,6 +12,7 @@ The Monster Turns window and plan card (`ui/turns.mjs`), and driving chat cards:
 **Design-era decisions (from the 2026-11-05/06 plan; the lines above are the skill's summary of the same choices):**
 - **Rhea stays in charge:** an "Angel runs this" checkbox per monster; a private plan card with Do it / Change / Play it myself; optional auto-act per monster. If the thinking route is unavailable, she plays the turn herself, so a fight never gets stuck.
 Its own GM-only window, **Monster Turns**, listing NPC combatants: "Angel runs this", auto-act, model (stored now, used at step 5), and a light showing whether a thinker is listening. **PF2e HUD's tracker is not modified,** because its markup can change with any update and mods surviving updates is Rhea's main worry. No whispered chat cards: the panel holds the plan, and the public chat shows only the real roll cards.
+- **Plan steps labelled by what they cost (0.29.1, R-1; Rhea, 2026-11-12: "Right now it's listed in steps, 1, 2, 3, 4. I'd like it to show what it's doing with each action. Free: / Action 1: / Action 2: / Action 3:").** She had read a free order as one of the boss's actions. Each step on the card and in the Change panel starts with its cost: **Free**, **Action n**, or **Actions n–m** for a two- or three-action activity (Angel's proposal for those, not yet answered either way), counted on from what the turn already spent, so a re-plan carries on the count; a monster's own reaction reads **Reaction**; a step that does nothing and a Delay (no action at all) have no label (`stepLabels` in turn.mjs; the Change panel labels the plan's own steps). The Change panel's heading says "from the start" or "from here on" in place of a step number.
 
 ## How it works
 - **Bands on the card (0.26.0):** a held band line is named with the held mind lines (`mindHeld` keys starting `band.`, in the words of `bands.mjs` `HELD_LABEL`). At the map's edge a monster with others of its band still in the fight gets two buttons, Let this one go and Let the whole band go (`docs/features/fleeing.md`, decision 12); one press disables every edge button on that card. A card's buttons wrap onto a second row when they don't fit (four at the edge in a narrow window squeezed their words before).
@@ -50,6 +51,7 @@ Record every id below in the release's change record when this feature, or a fea
 - **The Monster Turns window shows the fight on the scene its browser views,** so it must redraw on `canvasReady` and on fights, combatants and tokens changing, not only on fight updates (fixed in 0.5.1; before that a scene change left "No fight on this scene").
 - **Visioner's card buttons from code (found live on 0.8.0):** a press right after the card appears can come before Visioner binds its panel's click handler and does nothing, and a card drawn while the runner viewed another scene keeps a panel that finds no token ("No changes to apply"). `press` redraws the card (`ui.chat.updateMessage`) with the fight map open, waits for the panel's jQuery click handler, and counts a press only when the button is `processing` straight after the click. Read Apply's answer from the pressed button, never the card again: a redrawn card always shows Apply.
 - **A card waiter's timer must remove only its own waiter** (`waitFor`, `waitForAny`): a stage that ends early without its card would otherwise remove the next stage's waiter (0.9.0 review).
+- **A fold-out's own title takes focus (0.29.1, bug B-2, seen in Rhea's browser 2026-11-12):** a click that opens or closes a `<details>` leaves `document.activeElement` on its `<summary>`. `_typing()` counted any focus inside `.leb-nb` as typing, so every redraw waited until she clicked elsewhere: a ready plan showed as "Waiting for a plan". The notebook's box and buttons still hold a redraw (the press-and-release trap above); its `<summary>` holds one only while the mouse is down on it (`_pressing`, released on `pointerup`), so the opening click isn't lost either (0.29.1 review 6).
 
 ## Open items
 (none recorded yet)

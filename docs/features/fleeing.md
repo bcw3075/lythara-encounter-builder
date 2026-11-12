@@ -66,6 +66,7 @@ Build choices (Angel, 2026-11-08, within the design; Rhea can change them):
 - **Don't advance the turn before deleting the current combatant (live, 2026-11-08):** `nextTurn()` then `deleteEmbeddedDocuments` skipped the next creature's turn (round 1 → 2 with Test Hero's turn lost). Core moves the turn on by itself when the current combatant is deleted; the module just deletes.
 - **Rolling initiative by script opens PF2e's roll dialog (live, 2026-11-08):** `rollInitiative` hung on the AI page waiting for it. Pass `skipDialog: true`; it goes through to the statistic roll.
 - **A timeout on another module's job doesn't stop the job:** offering Extend again after a Survey Sheet timeout would have grown the map twice.
+- **Every square the module keeps moves with an extension west or north (0.29.1):** remembered squares, rally spots, a climber's tree (`climbing.at`, bug B-1; shifted before the request stops being `extending`, and marked `shifted: <request id>` so a resume after a reload never shifts it twice) and a held order's square (`shiftHeard` in orders.mjs) are all shifted in `afterExtend`; a pending order from the Give orders box is not (`docs/features/orders.md`). An extension made outside the flee buttons (the Survey Sheet's own Extend during a fight) shifts none of them: not handled.
 
 ## Open items
 - "Let the whole band go" makes nobody run: each member still flees by its own mind, and one that fights on stays. Nothing tells the thinker the band was let go.

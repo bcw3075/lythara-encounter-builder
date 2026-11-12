@@ -828,6 +828,20 @@ export function nextClimb(rec = {}, step = {}, elev = 0) {
   if (step.dc && !rec.climb) return rec.climbStarted ? "ask" : "roll";
   return "move";
 }
+/** The plan card's label for each step, by what it costs (0.29.1, R-1; Rhea, 2026-11-12: "Free: / Action 1: / Action 2: / Action 3:" in place of
+    1, 2, 3, 4): a free step "Free", a one-action step "Action n", a two- or three-action step "Actions n–m", counting on from the actions this turn
+    already spent (a re-plan carries on the count); a monster's reaction "Reaction"; a step that does nothing, and a Delay (no action at all), have no label. */
+export function stepLabels(steps = [], spent = 0, { reaction = false } = {}) {
+  let n = Math.max(0, Number(spent) || 0);
+  return steps.map(s => {
+    if (reaction) return "Reaction";
+    if (!s || s.do === "none" || s.do === "delay") return "";   /* Delay is no action at all (review 8) */
+    const cost = s.do === "ability" || s.do === "spell" ? Math.max(0, Number(s.actions ?? 1) || 0) : COSTS[s.do] ?? 0;
+    if (!cost) return "Free";
+    const from = n + 1; n += cost;
+    return cost === 1 ? `Action ${from}` : `Actions ${from}–${n}`;
+  });
+}
 export function describeStep(s) {
   if (s.do === "none") return "Does nothing.";
   if (s.do === "fly") return flyWords(s);
@@ -1001,6 +1015,10 @@ export function tookTurn(requests = {}, round, combatantId) {
   const mine = Object.values(requests ?? {}).filter(r => r && !r.reaction && r.round === round && r.combatantId === combatantId).sort((a, b) => (a.since ?? 0) - (b.since ?? 0));
   return mine.length > 0 && mine.at(-1).state === "manual";
 }
+/** A turn request nothing of has run yet (0.29.1, F-1): still waiting for a plan, or a plan ready before its first step with nothing logged and no
+    Do it pressed. Unticking Angel then closes it as Play it myself; anything further along is left alone. A re-plan (`parent`) is part of a turn
+    already under way. */
+export const untouched = r => !!r && !r.reaction && !r.parent && !r.go && (r.state === "requested" || (r.state === "ready" && !(r.pos > 0) && !Object.keys(r.log ?? {}).length));
 /** Whether a request has work in flight or about to start. Waiting on a person or a plan doesn't count. */
 export const requestBusy = r => !!r && (r.state === "running" || r.state === "submitted" || r.state === "extending" || !!r.go || !!r.extend);
 /** The note to show between turns: only the latest finished turn's, so an old warning never outlives the turn it was about. A turn that was re-planned

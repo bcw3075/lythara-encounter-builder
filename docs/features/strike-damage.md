@@ -70,6 +70,7 @@ Record every id below in the release's change record when this feature, or a fea
 - Undo at 0 HP leaves Wounded, Prone, Off-Guard and the moved initiative; the card says so.
 - **A Target Helper row or PF2e's Damage button applies again after the module has applied,** even once Toolbelt marks the row applied. Toolbelt fills the row from the roll's target, not only the account's targets, in a `preCreateChatMessage` hook that runs after this module's: clearing targets doesn't remove it, and removing it has to happen after the card is made.
 - **Undo at 0 HP doesn't undo everything.** It restores HP but leaves Wounded, Prone and Off-Guard, and the moved initiative. The card says so.
+- **A reaction that raises AC reads the attack's own DC (0.29.1):** `runStrike` adds only what the reaction beats of the circumstance bonus already in the DC, now read from the card's roll options too (bug B-3; `docs/features/reactions.md` Traps).
 
 ## Open items
 - D1's full matrix wasn't re-run for 0.9.0 (18 of 18 hits applied once in the measured fight instead).

@@ -88,6 +88,15 @@ export function applyHeard(standing = {}, order, round = 0) {
   else out.goal = { r: round, o };
   return out;
 }
+/** A hearer's standing orders after the map grew west or north (0.29.1, found with bug B-1): a "hold at" or "take the square" moves with the
+    ground, as remembered squares and rally spots do. Null when nothing in it names a square. */
+export function shiftHeard(standing = {}, dx = 0, dy = 0) {
+  if (!dx && !dy) return null;
+  const move = e => { const at = square(e?.o?.at); return at ? { ...e, o: { ...e.o, at: [at[0] + dx, at[1] + dy] } } : e; };
+  const goal = standing.goal ? move(standing.goal) : undefined, jobs = Object.fromEntries(Object.entries(standing.jobs ?? {}).map(([k, e]) => [k, move(e)]));
+  const changed = goal !== standing.goal || Object.keys(jobs).some(k => jobs[k] !== standing.jobs[k]);
+  return changed ? { ...(goal ? { goal } : {}), jobs } : null;
+}
 /** The labels a hearer's standing orders name. */
 export const labelsIn = (standing = {}) => [...new Set([standing.goal?.o, ...Object.values(standing.jobs ?? {}).map(j => j.o)].flatMap(o => !o ? [] : [...(o.target ? [o.target] : []), ...(String(o.text ?? "").match(/\b[EM]\d{1,3}\b/g) ?? [])]))];
 
