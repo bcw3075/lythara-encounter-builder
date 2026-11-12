@@ -3,8 +3,9 @@
 import { BURROW_DEPTH, FT, burrowVertical, climbDistance, distanceBetween, headingOf, heightCost, swimDistance } from "./move.mjs";
 import { placeable } from "./area.mjs";
 import { cleanOrder, orderWords } from "./orders.mjs";
+import { cleanSay } from "./speech.mjs";
 /** What each step kind costs. An ability's cost is its own (0 for a free action); 1 here is only the fallback. */
-export const COSTS = { strike: 1, stride: 1, fly: 1, swim: 1, climb: 1, burrow: 1, release: 0, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, flee: 1, interact: 1, delay: 0, order: 0, none: 0 };
+export const COSTS = { strike: 1, stride: 1, fly: 1, swim: 1, climb: 1, burrow: 1, release: 0, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, flee: 1, interact: 1, delay: 0, order: 0, say: 0, none: 0 };
 /* Interact and Delay (0.12.0). Interact (https://2e.aonprd.com/Actions.aspx?ID=2296): 1 action, manipulate; the module can't know what a monster does
    with its hands, so it posts a card saying what, and the GM applies it, as for any ability the module can't run. Restrained bars manipulate actions;
    Grabbed asks a DC 5 flat check for them, lost on a failure. Delay (ID 2294): a free action when its turn begins, so it must be the plan's only step and
@@ -53,11 +54,11 @@ export const SEEK = { burst: 15, cone: 30, range: 30 };
 export const sneakSpeed = speed => Math.floor(Math.floor((Number(speed) || 0) / 2) / STEP_FT) * STEP_FT;
 /** Actions that keep a hidden or undetected creature so (Rules: Hide, Sneak: anything other than Hide, Sneak or Step makes it observed). An attack keeps
     its off-guard for that attack and reveals it after; anything else reveals it just before (Rhea chose this, 2026-11-07). "none" does nothing at all. */
-const KEEPS_HIDDEN = ["hide", "sneak", "step", "none", "delay", "order"];   /* an order is speech, which is no action at all (0.28.0, design review 6) */
+const KEEPS_HIDDEN = ["hide", "sneak", "step", "none", "delay", "order", "say"];   /* an order is speech, which is no action at all (0.28.0, design review 6) */
 /** Whether a step is an attack: a Strike, or an ability or spell with the attack trait. */
 export const isAttack = s => s?.do === "strike" || ((s?.do === "ability" || s?.do === "spell") && !!s.attack);
 /** Whether the monster comes out of hiding just before this step (true) or just after it (an attack), or not at all. */
-export const revealsBefore = s => !!s && !KEEPS_HIDDEN.includes(s.do) && !isAttack(s);
+export const revealsBefore = s => !!s && (!KEEPS_HIDDEN.includes(s.do) || (s.do === "say" && s.intent === "yield")) && !isAttack(s);   /* giving itself up shows it (0.29.0 review 10) */
 export const revealsAfter = s => isAttack(s);
 const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
 /** "A", "A and B", "A, B and C". */
@@ -96,11 +97,14 @@ export const listWords = (xs = []) => xs.length < 2 ? xs.join("") : `${xs.slice(
     through), and route's kind "burrow" with { surface } (it comes up at the end, so the end square must be free of creatures it knows of).
     Orders (0.28.0): orders ({ ok, why (why it can't give one now), jobs: [{ id, name }] (the kinds in its band whose job an order can change),
     fallBack (where its band's plan says falling back leads, in words) }; null for a creature that leads no band).
+    Speech (0.29.0): speech ({ say: { ok, why }, yield: { ok, why } }: whether it may say its sentence to the party now and whether it may
+    yield, speech.mjs `speechFor`) and yielded (it has yielded and stands down: every plan is refused).
     Earth Glide (0.17.0): glides (it burrows through rock and earth: soilAt then means "it can dig there", rock included) and surfaceAt(square) (its
     footprint there is open floor it can come up onto, not inside rock, a wall, a trunk or deep water). */
 export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
-  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, herePos = ctx.me?.pos ?? here, hereElev = Number(ctx.me?.elev) || 0, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, surfaced = false, fled = false, ordered = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {}, shots = {};
+  if (ctx.yielded) return { ok: false, reason: "It has yielded and stands down: it takes no actions until the GM answers its yield." };   /* 0.29.0, design review 3 */
+  let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, herePos = ctx.me?.pos ?? here, hereElev = Number(ctx.me?.elev) || 0, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, surfaced = false, fled = false, ordered = false, said = false, gaveUp = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {}, shots = {};
   /* up a tree it climbed (it holds on there: no Stride, Step and the like until it climbs down), and what it holds in its hands */
   let tree = hereElev > 0 && ctx.onTree ? ctx.onTree : null, below = !!ctx.below; if (below) hereElev = 0;   /* its token sits below 0; once up it stands at 0 */ const holding = new Map((ctx.holding ?? []).map(h => [h.id, h.name])), released = new Set();
   const upTree = word => `it is ${Math.round(hereElev)} ft up the tree at [${tree.at[0]}, ${tree.at[1]}], so it can't ${word} there: a Climb (a "climb" step) with "height": 0 gets it down${ctx.flySpeed > 0 ? `, or it can Fly off` : ""}.`;
@@ -112,6 +116,7 @@ export function checkPlan(plan, ctx) {
     if (sought) return { ok: false, reason: `${at}: a Seek has to be the plan's last step. You are asked again after it, with what it found.` };
     if (surfaced) return { ok: false, reason: `${at}: coming up out of the ground has to be the plan's last step: below ground it perceives little, so you are asked again at the surface with what it perceives there.` };
     if (fled) return { ok: false, reason: `${at}: a flee has to be the plan's last step: at the edge the GM decides, and you are asked again if the map is extended.` };
+    if (gaveUp) return { ok: false, reason: `${at}: a yield has to be the plan's last step: it stands down, and nothing after it would happen.` };
     /* burrowed (0.16.0): earth stands between it and everything (no line of effect, Rules ID 2382), so it can only Burrow (on, or up), Delay or do nothing */
     if (below && !["burrow", "delay", "none"].includes(step.do)) return { ok: false, reason: `${at}: it is burrowed under the ground, where it can't reach, see or affect anything above. A Burrow with "up": true brings it to the surface first (1 action).` };
     if (step.do === "spell") {
@@ -165,6 +170,20 @@ export function checkPlan(plan, ctx) {
       const mine = o.target && (ctx.allyLabels?.includes?.(o.target) || !!ctx.allies?.[o.target]);
       if (o.target && !mine && !ctx.targets?.[o.target]) return { ok: false, reason: `${at}: it can only send its band at a creature it perceives itself, and it doesn't perceive "${o.target}".` };
       steps.push({ do: "order", order: o, words: orderWords(o, { ally: !!mine, jobName: kinds.find(j => j.id === o.job)?.name ?? "", fallBack: oc.fallBack ?? "" }) }); ordered = true; continue;
+    }
+    /* a sentence to the party (0.29.0, Rhea's R3-7): speech, so it costs no action; one a round; a yield ends the plan, and a creature with no
+       language can still yield by what it does */
+    if (step.do === "say") {
+      const sc = ctx.speech ?? { say: { ok: false, why: "it can't speak to them here" }, yield: { ok: false, why: "it can't yield here" } };
+      if (said) return { ok: false, reason: `${at}: one sentence a round: this plan already has one.` };
+      const c = cleanSay({ intent: step.intent, say: step.say }); if (!c.ok) return { ok: false, reason: `${at}: ${c.reason}` };
+      const isYield = c.say.intent === "yield";
+      if (isYield && !sc.yield?.ok) return { ok: false, reason: `${at}: it can't yield now: ${sc.yield?.why}.` };
+      if (!isYield && !sc.say?.ok) return { ok: false, reason: `${at}: it can't speak to them now: ${sc.say?.why}.` };
+      /* its last action may end the turn before it speaks (a re-plan with no actions left ends it), as for an order */
+      if (n > 0 && left <= 0) return { ok: false, reason: `${at}: ${isYield ? "yield" : "say it"} before its last action, not after: once its actions are spent the turn can end before it speaks.` };
+      const words = sc.say?.ok ? c.say.words : "";   /* one that can't speak now yields without words */
+      steps.push({ do: "say", intent: c.say.intent, ...(words ? { say: words } : {}) }); said = true; gaveUp = isYield; continue;
     }
     if (step.do === "delay") {
       if (n > 0 || plan.steps.length > 1) return { ok: false, reason: `${at}: a delay has to be the plan's only step: it is a free action taken as the turn begins, and the rest of the turn doesn't happen yet.` };
@@ -636,6 +655,7 @@ export function doneStep(step, rec = {}) {
   if (step.do === "climb") return { do: "climb", height: step.height, result: climbResult(step, rec) };
   if (step.do === "release") return { do: "release", item: step.itemName ?? step.item, result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.dropped ? "dropped it" : "unknown" };
   if (step.do === "order") return { do: "order", order: step.words, result: rec.given ? `given${Array.isArray(rec.heard) ? `: ${rec.heard.length ? `${rec.heard.length} of its band heard it` : "nobody heard it"}` : ""}` : rec.skipped ? `not given (${rec.skipped})` : "unknown" };
+  if (step.do === "say") return { do: "say", intent: step.intent, result: rec.said ? (step.intent === "yield" ? "yielded: it stands down" : "said") : rec.skipped ? `not said (${rec.skipped})` : "unknown" };
   if (step.do === "interact") return { do: "interact", what: step.what, result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.posted ? "card posted for the GM to apply" : "unknown" };
   if (step.do === "delay") return { do: "delay", after: step.after, result: rec.moved ? "delayed: its turn comes back after that creature's" : rec.ended ? "turn ended; its place in the order may not have moved" : "unknown" };
   if (step.do === "ability") return { do: "ability", item: step.item, ...(step.target ? { target: step.target } : {}), result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.check ? CHECK_OUTCOMES[rec.check.degree] ?? "unknown" : rec.posted ? (step.mode === "hold" ? "kept hold" : "card posted for the GM to apply") : "unknown" };
@@ -841,6 +861,7 @@ export function describeStep(s) {
   if (s.do === "climb") return climbWords(s);
   if (s.do === "release") return `Releases its ${s.itemName ?? s.item}, which drops on its square${s.flat ? ` (a DC ${s.flat} flat check first, as it is grabbed)` : ""} (free action).`;
   if (s.do === "order") return `Orders its band: ${s.words}${s.order?.say ? `. It says: “${s.order.say}”` : ""} (free: speaking costs no action).`;
+  if (s.do === "say") return s.intent === "yield" ? `Yields: it stops fighting and gives itself up${s.say ? `, saying: “${s.say}”` : " (no words)"}. Its turn ends, and Accepted or Fight on is yours to press (free: speaking costs no action).` : `Says to the party (${s.intent === "bargain" ? "a bargain" : "a threat"}): “${s.say}” (free: speaking costs no action).`;
   if (s.do === "interact") return `Interacts: ${s.what}${s.flat ? ` (a DC ${s.flat} flat check first, as it is grabbed)` : ""}. Its card goes to chat for you to apply.`;
   if (s.do === "delay") return `Delays until after ${s.after}'s turn: its turn ends now, and it comes back into the order right after ${s.after} (free action).`;
   return `${s.itemName} at ${s.targetName}${s.variant ? `, attack ${s.variant + 1}` : ""}${s.flat ? `, after a DC ${s.flat} flat check` : ""}.`;

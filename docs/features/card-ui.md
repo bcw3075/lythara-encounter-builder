@@ -32,6 +32,7 @@ Its own GM-only window, **Monster Turns**, listing NPC combatants: "Angel runs t
 - **0.27.0:** the Party reactions block (a box for each creature on the party's side that can react, with how it was ticked), a reaction row's own button labels, and the open repent-or-refuse question with Repent and Refuse (`choiceHtml`) under the turn's card or a monster's reaction: all described in `reactions.md`. The redraw that follows a fight also redraws the player's chip (`main.mjs`).
 
 - **0.28.0 (`docs/features/orders.md`):** the Give orders box (`_orderBox`: on the card when the creature whose turn it is leads a band and isn't ticked; its draft is kept on the window object, and a redraw waits while one of its text fields has focus), the hearing ticks (`_hearHtml`, on the box and on the leader's card while its plan holds an order to come), and a member's "Order heard" or "Didn't hear" line.
+- **Yielding (0.29.0):** a monster that stands down has Accepted and Fight on on its row where its ticks were (`data-ytoken`, so the tick handlers pass it by), a card of its own with what it said and a third button, Play it myself, and prisoners are listed under Escaped with Back in the fight. One press greys every button for that monster (`docs/features/speech.md`).
 
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.

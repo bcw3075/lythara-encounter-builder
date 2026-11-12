@@ -50,7 +50,7 @@ Settled by Angel, told to Rhea, hers to change:
 - (bd-5) {live} Minds Library by real clicks as AI: Kinds of group lists the one saved; New kind of group; a cell edited and taken away; rename; remove; Export then Import of that file (all the same).
 - (bd-6) {live} As a chat would: `api.minds.bands` `set` with no `by` writes as Angel, leaves a line and a leader mark the GM set and names them in `skipped`; with `force` it replaces them; `join` and `list` agree with the window.
 - (bd-7) {live,player} As the test player: nothing new on their page (no Minds windows, no Monster Turns), and what their browser holds of a band is recorded (the brief's flags reach every browser, as before).
-- (bd-8) {live,shared:brain} The hello carries the current prompt version and packet schema (28 and 5 since 0.28.0) with the band section; a turn planned through `fight_wait` and `fight_plan` from a packet with a band is accepted and runs.
+- (bd-8) {live,shared:brain} The hello carries the current prompt version and packet schema (29 and 6 since 0.29.0) with the band section; a turn planned through `fight_wait` and `fight_plan` from a packet with a band is accepted and runs.
 - (bd-9) {live} Old data: a profile saved before 0.26.0 with a "Works with others" pick shows as its Discipline in Monster Minds, the library and the packet; a build from before 0.26.0 opens with no band and plays as before.
 
 ## Traps
@@ -59,6 +59,7 @@ Settled by Angel, told to Rhea, hers to change:
 - **Asleep is not fallen.** A monster built asleep has Unconscious with its hit points whole; "down" for a leader is 0 HP or Dying (the 0.26.0 review found a sleeping boss told to its band as fallen).
 - **The guessed leader is counted over every member, fallen or not.** Counted over the living only, the guess would move to the next monster the moment the leader dropped and nobody would be told the leader fell.
 - **The two rule files import each other** (`minds.mjs` cleans a library entry's nature with `bands.mjs`; `bands.mjs` uses the mind rules' helpers): neither may use the other's exports while the file is first being read, only inside functions.
+- **A leader that gave itself up is fallen for its band (0.29.0):** `fellWord` in the fight code reads a member that stands down or is a prisoner as "yielded", the band's packets say its leader "has given itself up", and the band's pick is acted on as for any fall (`docs/features/speech.md`).
 
 ## Open items
 - Angel's pick of a leader moves on if the fallen leader's token is deleted from the map during the fight (a marked leader reads "gone" instead): mark the leader where that matters.

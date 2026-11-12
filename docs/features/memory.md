@@ -66,6 +66,7 @@ So the rule the code follows: **a card is the event; an HP drop with no card for
 - **What a player's browser holds:** a Combat's flags reach every browser, so every notebook does, where before only ticked monsters' packets did (review 10). It holds labels and fixed words, a monster's own spell names, and a GM's line as she wrote it after the name gate.
 
 - **0.28.0:** a creature healing itself reads "E5 healed itself." (it read "E5 healed E5."). A band that fights harder finds who struck its leader down in the blow's own card first (`onMemoryCard` keeps the origin of a damage card that leaves its creature at 0 hit points on the turns flag, `dropped`: the creature is down by then and writes nothing itself), and only then in the fallen leader's notebook (orders.mjs `dropperOf`, `lastHurtBy`: the last sure "hurt" line by an enemy).
+- **Yielding (0.29.0):** the side's tally counts members that stand down or are prisoners as "yielded", apart from down and fled (`sideOf`, `sideWords`), and a yield is a deed its allies see ("gave itself up", `noteDeed`). An enemy's damage-taken card on a yielded monster ends the yield from `onMemoryCard` (`docs/features/speech.md`).
 
 ## Checks
 - (me-1) {unit} The rules: lines for each kind of event and witness (seen, heard, unseen; enemy, ally, itself), no number or name kept, the ladder by rung, tallies and their words, unsure marked, allies' deeds since its last turn, the side's tally, the packet's notebook and its size, crossing out, eviction order, what makes it think again, keys, the packet's key order (schema 3), the change words, the prompt.
@@ -76,7 +77,7 @@ So the rule the code follows: **a card is the event; an HP drop with no card for
 - (me-6) {live,player} As the test player: no fold-out, no Monster Turns; what their browser holds of the notebook flag is recorded (labels and words only, no name, no number).
 - (me-7) {live,shared:history} History: "Remembered" under a plan, "What they remember now" at the end, Save to journal carries both, "changed since saved" after a cross-out; a fight with no monster turn saves its notebooks.
 - (me-8) {live} The runner's page reloaded mid-fight: every notebook gets one gap line for the round and nothing else is lost.
-- (me-9) {live,shared:brain} The hello carries the current prompt version and packet schema (28 and 5 since 0.28.0) with the notebook section; a turn planned through `fight_wait` and `fight_plan` from a packet with a notebook is accepted and runs.
+- (me-9) {live,shared:brain} The hello carries the current prompt version and packet schema (29 and 6 since 0.29.0) with the notebook section; a turn planned through `fight_wait` and `fight_plan` from a packet with a notebook is accepted and runs.
 
 ## Traps
 - **The HP update arrives before the damage-taken card,** and a card can come with no HP update at all (damage resisted to nothing, a shield taking all of it). Read the card; use the HP update only as the fallback after a wait.

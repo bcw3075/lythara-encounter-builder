@@ -6,8 +6,9 @@
    Pure: no Foundry globals, so the unit tests run it in Node. Rhea's decisions and the review's lines are in docs/features/orders.md. */
 import { PLANNED, nextInLine } from "./bands.mjs";
 import { cutWords } from "./minds.mjs";
+import { SPEECH_LOG, speechLogWords } from "./speech.mjs";
 
-export const ORDER_PARTS = ["objective", "job", "fallBack"];
+export const ORDER_PARTS = ["objective", "job", "fallBack", "yield"];   /* "yield" (0.29.0, R3-7): the leader tells its band to give themselves up */
 export const ORDER_CAPS = { say: 160, text: 120, jobs: 4, toldOf: 6, send: 900 };
 /** Her quick buttons on the Give orders box (R3-5), and the fourth for one kind's job in her own words. */
 export const QUICK = { fallBack: "Fall back", on: "Everyone on that one", hold: "Hold here", other: "Something else…" };
@@ -21,9 +22,9 @@ const JOB = /^[rk]\d{1,3}$/;
     GM's: a thinker's order is a label or a place, so nothing only the leader perceives can ride along in prose (design review 8). */
 export function cleanOrder(raw, { gm = false } = {}) {
   const bad = reason => ({ ok: false, reason }); if (!raw || typeof raw !== "object") return bad("An order is an object.");
-  if (!ORDER_PARTS.includes(raw.part)) return bad(`an order needs "part": "objective" (what the whole band goes for), "job" (what one kind of its members does) or "fallBack" (the call to fall back).`);
+  if (!ORDER_PARTS.includes(raw.part)) return bad(`an order needs "part": "objective" (what the whole band goes for), "job" (what one kind of its members does) or "fallBack" (the call to fall back) or "yield" (the call to give themselves up).`);
   const out = { part: raw.part }, say = cutWords(str(raw.say), ORDER_CAPS.say); if (say) out.say = say;
-  if (raw.part === "fallBack") return { ok: true, order: out };
+  if (raw.part === "fallBack" || raw.part === "yield") return { ok: true, order: out };
   if (raw.part === "job") { if (typeof raw.job !== "string" || !JOB.test(raw.job)) return bad(`an order that changes a job needs "job": the id of one of the kinds in "orders.give.jobs".`); out.job = raw.job; }
   const target = typeof raw.target === "string" && LABEL.test(raw.target) ? raw.target : null, at = square(raw.at), text = gm ? cutWords(str(raw.text), ORDER_CAPS.text) : "";
   if (text) out.text = text; else if (target) out.target = target; else if (at) out.at = at;
@@ -39,6 +40,7 @@ export const fromPending = (p = {}, { target = null, text = "" } = {}) => cleanO
 export function orderWords(o, { ally = false, mine = false, jobName = "", fallBack = "" } = {}) {
   if (!o) return "";
   if (o.part === "fallBack") return `fall back${fallBack ? ` ${fallBack}` : ""}`;
+  if (o.part === "yield") return "yield: stop fighting and give yourselves up";
   const body = o.text ? o.text : o.target ? (ally ? `protect ${o.target}` : o.part === "job" ? `go for ${o.target}` : `everyone on ${o.target}`) : o.at ? (o.part === "job" ? `take the square [${o.at[0]}, ${o.at[1]}]` : `hold at [${o.at[0]}, ${o.at[1]}]`) : "";
   return o.part === "job" ? `${mine ? "your job now" : `the job of ${jobName || "some of its band"} now`}: ${body}` : body;
 }
@@ -67,6 +69,7 @@ export function orderLanguage(speaker = [], members = []) {
 export function hearing({ member = {}, lang = null, call = null } = {}) {
   const no = why => ({ hears: false, why });
   if (member.fallen) return no("is down");
+  if (member.yielded) return no("has yielded");
   if (!PLANNED.includes(member.discipline)) return no("takes no spoken orders");
   if (call === "no") return no("can't hear it (your call)"); if (call === "yes") return { hears: true, why: null };
   if (member.asleep) return no("is unconscious");
@@ -140,7 +143,7 @@ export function fallOutcome({ pick = null, state = null, members = [], leaderId 
 export const NEVER_GIVES_UP = "Never, now: its leader was struck down and it fights on to the end.";
 
 /* ---------- the band log, in words (the History, the cards) ---------- */
-const FELL = { down: "is down", dead: "is dead", fled: "has fled the fight", gone: "is gone" };
+const FELL = { down: "is down", dead: "is dead", fled: "has fled the fight", gone: "is gone", yielded: "has given itself up" };
 /** One entry of the band log for the GM. nameOf(tokenId) → a name; named(text) turns labels into names; langName(slug) → "Goblin".
     Entries: { k: "order", band, r, by, from, o, words (as the leader meant it, in labels), say, lang, heard: [ids], missed: { id: why }, msg }
     and { k: "fell", band, r, was, state, pick, leader, loosen, objective, never }. */
@@ -159,6 +162,7 @@ export function logWords(e, { nameOf = id => id, named = s => s, langName = l =>
     if (e.pick === "stands") return `${who} The plan stands, and nobody changes it.`;
     return `${who} The band has no pick for this: each is told its leader fell.`;
   }
+  if (SPEECH_LOG.includes(e?.k)) return speechLogWords(e, { nameOf });   /* yielding (0.29.0): not a band's line, but the same log */
   return "";
 }
 /** What a member's card says of this round's order: { heard: words } when it heard one this round, { missed: why } when its band had one it

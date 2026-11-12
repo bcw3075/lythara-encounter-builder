@@ -10,6 +10,7 @@ import { LINES, MIND_SCHEMA } from "./minds.mjs";
 import { bandOf, bandViews, joinBand, removeBand, setBand } from "./bandlib.mjs";
 import { dropLibraryCache, dropOwn, giveOwn, kindFacts, libraryEntries, libraryExport, libraryGet, libraryImport, libraryPut, libraryRemove, mindLayers, mindOf, mindRows, rowProfile, setLines } from "./library.mjs";
 import { bandLog, bandLogWords, giveOrder, onRenderOrder, orderCard, orderPreview, setHearCall } from "./fight.mjs";
+import { acceptYield, backInFight, onRenderSay, prisonerList, refuseYield, yieldedList } from "./fight.mjs";
 import { chooseFor, onReactionCard, partyReactors, setReactionUsed, doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCombatGone, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, onMemoryCard, onMemoryUpdate, onMemoryHp, notebookOf, previewRemember, rememberAdd, rememberCross, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
 
 const CONTROL = "encounters", apps = new Map(), mindsApps = new Map(); let turnsApp = null, historyApp = null, historyTimer = null;
@@ -91,7 +92,7 @@ Hooks.on("updateActor", (actor, change, options) => { noteChange(actor); try { o
 Hooks.on("updateChatMessage", (message, change) => { onMessageUpdate(message, change); try { onMemoryUpdate(message, change); } catch (e) { console.warn(`${ID} | notebook`, e); } });
 Hooks.on("preUpdateCombatant", (combatant, change, options) => { keepTurn(combatant, change, options); });
 Hooks.on("updateCombatant", (combatant, change, options, userId) => { saveTurn(combatant, options, userId); noteChange(combatant); });
-Hooks.on("renderChatMessageHTML", (message, html) => { onRenderMessage(message, html); try { onRenderOrder(message, html); } catch (e) { console.warn(`${ID} | order line`, e); } });
+Hooks.on("renderChatMessageHTML", (message, html) => { onRenderMessage(message, html); try { onRenderOrder(message, html); onRenderSay(message, html); } catch (e) { console.warn(`${ID} | order line`, e); } });
 Hooks.on("pauseGame", () => { redrawTurns(); });   /* the card says when Auto is waiting on the pause */
 Hooks.on("updateCombat", (combat, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}`) || "turn" in change || "round" in change) redrawHistory(); if (turnsApp?.rendered && (foundry.utils.hasProperty(change, `flags.${ID}`) || "turn" in change || "round" in change)) turnsApp.render(); onCombatUpdate(combat, change); });
 /* a turn handed on with no `updateCombat` (the current combatant deleted, 0.24.0): `combatTurnChange` on the pages core tells, `deleteCombatant` on every page */
@@ -118,7 +119,10 @@ Hooks.once("ready", () => {
       /* the leader's orders (0.28.0): `orders.preview(combat, tokenId)` says whether that creature may give one now and who would hear it;
          `orders.give(combat, tokenId, order)` is the GM's Give orders box (never Angel's door: Angel's leader orders from its plan, with an "order"
          step); `orders.hear` is her call on one member for this round; `orders.log` and `orders.words` read the band log */
-      orders: { preview: orderPreview, give: giveOrder, hear: setHearCall, card: orderCard, log: bandLog, words: bandLogWords } },
+      orders: { preview: orderPreview, give: giveOrder, hear: setHearCall, card: orderCard, log: bandLog, words: bandLogWords },
+      /* speech and yielding (0.29.0): who stands down and this fight's prisoners; `accept`, `fightOn` (`{ own: true }` is Play it myself) and
+         `back` are the GM's buttons on Monster Turns: never Angel's door (a monster yields from its plan, with a "say" step) */
+      speech: { yielded: yieldedList, prisoners: prisonerList, accept: acceptYield, fightOn: refuseYield, back: backInFight } },
     /* monster minds (0.24.0), `api.minds`: how a chat reads and writes profiles (api.minds.set, api.minds.open, api.minds.library.put and the rest). `by: "angel"` never replaces a line whose words are the GM's unless `force`.
        This is the chat's door, so a write with no `by` is Angel's (the windows say "gm" themselves): only `by: "gm"` for words she dictated, and
        `giveOwn`, `dropOwn`, `library.remove` and `library.import` only when she asked for them. */

@@ -136,9 +136,9 @@ export function render(book, { rung = 3, since = 0 } = {}) {
 function wordsOf(l) { const r = render({ a: { ...l, x: undefined } }, { rung: 4 }); return r.remembers[0]?.text ?? r.allies[0]?.text ?? (l.k === "deed" ? `${l.a}: ${l.w}.` : ""); }
 
 /** Its side's tally, so "gives up when half are down" can be judged (design review 15). Counts only. */
-export function sideWords({ started = 0, standing = 0, down = 0, fled = 0 } = {}) {
-  if (started <= 1 && !down && !fled) return null;
-  return `Its side, counting itself: ${started} at the start, ${standing} standing${down ? `, ${down} down` : ""}${fled ? `, ${fled} fled` : ""}.`;
+export function sideWords({ started = 0, standing = 0, down = 0, fled = 0, yielded = 0 } = {}) {
+  if (started <= 1 && !down && !fled && !yielded) return null;
+  return `Its side, counting itself: ${started} at the start, ${standing} standing${down ? `, ${down} down` : ""}${fled ? `, ${fled} fled` : ""}${yielded ? `, ${yielded} yielded` : ""}.`;
 }
 
 /** The packet's `notebook` (schema 3, kept in 4): only what its Mind may use; blank parts left out; null when there is nothing. */

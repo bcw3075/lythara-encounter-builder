@@ -81,6 +81,7 @@ Result per pair: `observed / concealed / hidden / undetected / unnoticed`.
 - **Unusual abilities as text:** every monster's ability text goes in its packet, so a thinker can understand it even if the mod doesn't.
 - **Checked during step 1 (2026-11-05):** the module's own sight test against core's `testCollision` on a real woods map agreed on 2,997 of 3,000 pairs, so core counts one-way trunk rings once and sees past one medium trunk, not two. Sight past trunks is no longer unverified.
 
+- **Speech (0.29.0, schema 6):** `speech` comes after `orders`: whether it may say its sentence to the party this round and whether it may yield, each with the reason when not; never for the party's side. A creature in `perceived` or `allies` that has yielded or is a prisoner carries `yielded: true` (`docs/features/speech.md`).
 - **Orders (0.28.0, schema 5):** `orders` comes after `bandNow`, since it changes during the fight: what the monster has heard from its leader, whom it was told of and hasn't perceived (a label and nothing else: no square, no health word, never a target), and for a leader whether it may give this round's order (`docs/features/orders.md`).
 
 ## Checks

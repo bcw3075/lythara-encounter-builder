@@ -176,7 +176,7 @@ export function bandForPacket({ discipline = "loose", nature = {}, plan = {}, me
     null when nobody is left to lead. Out: the packet's `bandNow`, or null. */
 export function leaderFell({ discipline = "loose", state = null, falls = null, next = null } = {}) {
   if (!state || !PLANNED.includes(discipline)) return null;
-  const how = state === "fled" ? "has fled the fight" : state === "dead" ? "is dead" : state === "gone" ? "is gone" : "is down";
+  const how = state === "fled" ? "has fled the fight" : state === "dead" ? "is dead" : state === "gone" ? "is gone" : state === "yielded" ? "has given itself up" : "is down";
   return { leader: `Its leader ${how}.`, ...(falls === "next" ? { leadsNow: next ?? "nobody is left to lead" } : {}) };
 }
 /** Who leads when nobody was marked (the module's guess, shown as such): the highest-level member that follows a leader, one that can speak before

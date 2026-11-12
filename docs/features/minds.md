@@ -50,7 +50,7 @@ Settled by Angel, told to Rhea, hers to change:
 - (mi-6) {live,player} As the test player: the library journal isn't in their sidebar or openable, the Encounters tools aren't there, and what their browser holds of the library and of a scene's brief is recorded.
 - (mi-7) {live,shared:builder} A build from a brief with `tactics` on one row and `mind`, `own` and `band` on another, handed in through `api.submitBrief`: no Tactics page; the first row's Notes are its tactics, marked Angel's; the row's band is in the brief's `bands`; Rebuild keeps this encounter's lines and the single monster's profile, also from a Build window that was open while Monster Minds saved; a build made before 0.24.0 gives its brief's tactics as Notes (a Tactics page edited by hand since is not read).
 - (mi-8) {live} As a chat would: `api.minds.set` and `api.minds.library.put` with no `by` write as Angel, leave a line the GM wrote and name it in `skipped`; with `force` they replace it; `giveOwn` on a monster that has its own profile refuses.
-- (mi-9) {live,shared:brain} The hello carries the current prompt version and packet schema (28 and 5 since 0.28.0) with the mind section; a turn planned through `fight_wait` and `fight_plan` from a packet with a mind is accepted and runs.
+- (mi-9) {live,shared:brain} The hello carries the current prompt version and packet schema (29 and 6 since 0.29.0) with the mind section; a turn planned through `fight_wait` and `fight_plan` from a packet with a mind is accepted and runs.
 - (mi-10) {live} A party member with the Angel tick: no mind from the library or its stat block; one written for it in Monster Minds reaches its packet.
 
 ## Traps

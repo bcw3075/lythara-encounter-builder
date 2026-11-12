@@ -50,6 +50,7 @@ The "Encounters" control group uses no Ctrl or Shift click variants; both are ta
 - **0.27.0:** the client setting `chipPlace` (where a player put their reaction chip, registered by `registerChip`); `createChatMessage` also calls `onReactionCard` (a reaction's card ticks its owner's box); `updateCombat` and every redraw of Monster Turns call `drawChip` (a no-op on a GM's page), and so does `ready`; on the api's `fight`: `partyReactions` (`list(combat)`, `set(combat, tokenId, used)`) and `choose` (`choose(combat, requestId, "repent" | "refuse")`, which is `chooseFor`).
 
 - **0.28.0:** `renderChatMessageHTML` also calls `onRenderOrder` (a GM's page shows an order's words on its chat line); `api.fight.orders` (`preview`, `give`, `hear`, `card`, `log`, `words`).
+- **0.29.0:** `api.fight` has a `speech` group (`yielded`, `prisoners`, `accept`, `fightOn`, `back`: the GM's buttons), and the chat render hook also runs `onRenderSay`.
 
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.

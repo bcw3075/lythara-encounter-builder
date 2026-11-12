@@ -26,7 +26,7 @@ Hide, Sneak and Seek: the module presses Visioner's buttons on PF2e's secret car
   - **No target in the check:** `stopAiming` before PF2e's action, which would otherwise take a target left from an earlier step into the check's roll options.
   - **The thinker's memory of trying:** `turns.stealth` is cleared by any revealing action (`comeOut` runs for every such step and clears it first), whether or not anyone had the monster hidden; clearing it only when someone did would tell the thinker a failed Hide (found by the review). The packet words it as "has only Hidden, Sneaked or Stepped since", never "still hidden".
 
-- **0.28.0:** an `order` step keeps a hidden creature hidden (`KEEPS_HIDDEN`): speaking is no action, so it isn't the "anything else" that makes it observed.
+- **0.28.0:** an `order` step keeps a hidden creature hidden (`KEEPS_HIDDEN`): speaking is no action, so it isn't the "anything else" that makes it observed. **0.29.0:** a `say` step the same, except a yield: giving itself up brings it out of hiding first (`revealsBefore`).
 
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.
