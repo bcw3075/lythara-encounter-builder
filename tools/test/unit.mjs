@@ -1725,6 +1725,12 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
       check("live test: lasting damage names nobody, so the notebook decides; an empty one gives nobody", O.dropperOf({ dropped: { by: null }, book: bk, labels: lab, isEnemy: foe })?.label === "M4" && O.dropperOf({ dropped: null, book: {}, labels: lab, isEnemy: foe }) === null);
       check("live test: lastHurtBy asks who is an enemy when told how", O.lastHurtBy(bk, l => l === "M4") === "M4" && O.lastHurtBy(bk) === "E1");
     }
+    {
+      const Tn = await import("../../scripts/turn.mjs"), rq = (state, since, extra = {}) => ({ state, since, round: 4, combatantId: "c1", ...extra });
+      check("live test: Play it myself on a ticked leader is seen (the turn's latest request is manual)", Tn.tookTurn({ a: rq("manual", 5) }, 4, "c1") === true && Tn.currentOf({ a: rq("manual", 5) }, 4, "c1") === null);
+      check("live test: not taken while a plan is waited for, in another round, for another creature, or asked again after", Tn.tookTurn({ a: rq("requested", 5) }, 4, "c1") === false && Tn.tookTurn({ a: rq("manual", 5) }, 5, "c1") === false && Tn.tookTurn({ a: rq("manual", 5) }, 4, "c2") === false && Tn.tookTurn({ a: rq("manual", 5), b: rq("requested", 9) }, 4, "c1") === false && Tn.tookTurn({}, 4, "c1") === false);
+      check("live test: a reaction's request doesn't count either way", Tn.tookTurn({ a: rq("manual", 5), b: rq("ready", 9, { reaction: { by: "x" } }) }, 4, "c1") === true);
+    }
     check("leader falls: who struck it down is the last sure hurt in its own notebook", O.lastHurtBy({ "001": { k: "hurt", a: "E1", s: 2 }, "003": { k: "hurt", a: "E4", s: 3 }, "004": { k: "hurt", s: 1, sure: 0 }, "005": { k: "hurt", a: "someone it couldn't see", s: 1 }, "006": { k: "miss", t: "E9" } }) === "E4" && O.lastHurtBy({ "001": { k: "hurt", a: "E1", x: true } }) === null && O.lastHurtBy({}) === null && O.lastHurtBy({ "001": { k: "hurt", a: "E2", s: 1 }, "002": { k: "hurt", a: "M3", s: 3 } }) === "E2");
     /* the band log in words */
     const who2 = { L: "Sergeant", a: "Soldier 1", b: "Soldier 2", x: "Archer 2" }, lw = e => O.logWords(e, { nameOf: id => who2[id] ?? id, named: s => s.replace("E2", "Ezren"), langName: () => "Goblin", bandName: "the patrol" });

@@ -1,7 +1,7 @@
 ---
 feature: orders
 files: [scripts/orders.mjs]
-functions: [fight.mjs:noteDropped, fight.mjs:ordersOf, fight.mjs:langName, fight.mjs:soundBlocked, fight.mjs:gone, fight.mjs:bandLog, fight.mjs:orderFacts, fight.mjs:orderCtx, fight.mjs:hearersOf, fight.mjs:orderOut, fight.mjs:orderChat, fight.mjs:onRenderOrder, fight.mjs:runOrder, fight.mjs:ordersBlock, fight.mjs:settleBands, fight.mjs:settleBandsNow, fight.mjs:orderGate, fight.mjs:labelsFor, fight.mjs:orderPreview, fight.mjs:giveOrder, fight.mjs:setHearCall, fight.mjs:runPending, fight.mjs:orderCard, fight.mjs:bandLogWords]
+functions: [turn.mjs:tookTurn, fight.mjs:noteDropped, fight.mjs:ordersOf, fight.mjs:langName, fight.mjs:soundBlocked, fight.mjs:gone, fight.mjs:bandLog, fight.mjs:orderFacts, fight.mjs:orderCtx, fight.mjs:hearersOf, fight.mjs:orderOut, fight.mjs:orderChat, fight.mjs:onRenderOrder, fight.mjs:runOrder, fight.mjs:ordersBlock, fight.mjs:settleBands, fight.mjs:settleBandsNow, fight.mjs:orderGate, fight.mjs:labelsFor, fight.mjs:orderPreview, fight.mjs:giveOrder, fight.mjs:setHearCall, fight.mjs:runPending, fight.mjs:orderCard, fight.mjs:bandLogWords]
 dependsOn: [bands, packet, turn-loop, brain, memory, card-ui, history]
 since: 0.28.0
 ---
@@ -39,7 +39,7 @@ Settled by Angel, told to Rhea with the samples or in the release note, hers to 
 - **A named second** is a select on the band's page in Monster Minds, under the Leader. It is used only by "Next in line takes over".
 - **Fights harder needs someone to avenge:** the objective names the enemy whose blow took the leader to 0 hit points, when one of the leader's own side, awake, saw that enemy at that moment (kept from that blow's own card, because a creature that is down writes nothing in its notebook); when nobody of its side saw the striker, or the card names nobody (lasting damage), the enemy whose blow the leader's notebook has last and for sure; with neither, "whoever struck the leader down". A leader that fled or whose token is gone leaves the plan as it is. "Plan stands" and "Breaks and runs" still only tell the thinker in words.
 - **The one who takes over leads for the rest of the fight,** even if the old leader gets back up. If its own token leaves the map, the next in line is found again.
-- **Play it myself on a leader ticked for Angel** brings her box up for that turn.
+- **Play it myself on a leader ticked for Angel** brings her box up for that turn (`tookTurn`: this turn's latest request is "manual"; the turn's current request never is, which is why the box didn't come up in the first two test builds).
 
 ## How it works
 - **The rules** (`orders.mjs`, pure): `cleanOrder` gives `{ part, target | at | text, job, say }` (`text`, an order in the GM's own words, is taken only with `gm: true`); `orderWords` writes it for one hearer ("everyone on E2", "protect M3", "hold at [4, 9]", "your job now: go for E2", "fall back to the rally spot at [2, 2]"); `canOrder`, `orderLanguage` and `hearing` decide who may order, in what language and who gets it; `applyHeard` keeps a hearer's standing orders (`{ goal: { r, o }, jobs: { id: { r, o } } }`); `ordersForPacket` builds the packet's block; `fallOutcome` says what a leader's fall changes by the band's pick and `dropperOf` who struck it down; `logWords` and `roundLine` write the band log for the GM.

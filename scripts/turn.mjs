@@ -974,6 +974,12 @@ export function absorbOwn(seen = [], before = [], after = [], own = null) {
 export function currentOf(requests = {}, round, combatantId) {
   return Object.entries(requests).map(([id, r]) => ({ id, ...r })).filter(r => !["done", "manual"].includes(r.state) && !r.reaction && r.round === round && r.combatantId === combatantId).at(-1) ?? null;   /* a monster's reaction (0.21.0) is its own request, never the turn's */
 }
+/** Whether the GM has taken this turn herself with Play it myself: this turn's latest request (reactions aside) is "manual". `currentOf` never
+    answers a manual request, so the Give orders box asks here (0.28.0 live test: the box never came up for a ticked leader). */
+export function tookTurn(requests = {}, round, combatantId) {
+  const mine = Object.values(requests ?? {}).filter(r => r && !r.reaction && r.round === round && r.combatantId === combatantId).sort((a, b) => (a.since ?? 0) - (b.since ?? 0));
+  return mine.length > 0 && mine.at(-1).state === "manual";
+}
 /** Whether a request has work in flight or about to start. Waiting on a person or a plan doesn't count. */
 export const requestBusy = r => !!r && (r.state === "running" || r.state === "submitted" || r.state === "extending" || !!r.go || !!r.extend);
 /** The note to show between turns: only the latest finished turn's, so an old warning never outlives the turn it was about. A turn that was re-planned

@@ -1,7 +1,7 @@
 /* The Monster Turns window: GM only. Who's ticked, and the plan card for the turn in hand. PF2e HUD's tracker is left alone. */
 import { LINE_LABEL, MINDS } from "../minds.mjs";
 import { BAND_GO, HELD_LABEL } from "../bands.mjs";
-import { CHANGEABLE, NOTE_MAX, SIDES, WORD, applyEdits, changeProblem, planPrint, describeChanges, describeStep, editableParts, isMove, listWords } from "../turn.mjs";
+import { CHANGEABLE, NOTE_MAX, SIDES, WORD, applyEdits, changeProblem, planPrint, describeChanges, describeStep, editableParts, isMove, listWords, tookTurn } from "../turn.mjs";
 import { tickGroups, groupChanges } from "./ticks.mjs";
 import { esc } from "../journal.mjs";
 import { countingDown, offerWords } from "../react.mjs";
@@ -145,7 +145,7 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
       aloud for the chat and the History; who hears it, with her calls; one order a round. The draft is this browser's until she gives it. */
   _orderBox(c) {
     const cur = c.started ? c.combatant?.token : null; if (!cur || !runnable(cur)) return "";
-    if (cur.getFlag(ID, "run") && currentRequest(c)?.state !== "manual") return "";   /* ticked for Angel: only once she has taken this turn with Play it myself (review 12) */
+    if (cur.getFlag(ID, "run") && !tookTurn(c.getFlag(ID, "turns")?.requests, c.round, c.combatant?.id)) return "";   /* ticked for Angel: only once she has taken this turn with Play it myself (review 12) */
     if (!this._order || this._order.token !== cur.id || this._order.round !== c.round) this._order = { token: cur.id, round: c.round, mode: null, targetId: "", at: null, job: "", text: "", say: "" };
     const d = this._order, p = orderPreview(c, cur.id, d.mode === "other" && d.text.trim() ? { text: d.text } : d.mode === "on" && d.targetId ? { targetId: d.targetId } : null); if (!p) return "";
     if (d.job && !p.jobs.some(j => j.id === d.job)) d.job = "";   /* a kind no longer offered (nobody left in it to take an order) */
