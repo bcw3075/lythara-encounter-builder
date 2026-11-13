@@ -10,6 +10,8 @@ import { historyHTML, historyOf, journalHTML, namer, notebooksHTML } from "../hi
 import { bandLogWords, notebookOf, runnerName } from "../fight.mjs";
 import { bookPrint } from "../memory.mjs";
 import { MINDS } from "../minds.mjs";
+import { pronounOf } from "../library.mjs";
+import { pro } from "../pronoun.mjs";
 
 const STYLE = `.leb-history .leb-h-grey{opacity:.6;font-style:italic}.leb-history details.leb-h-nb{border:none;padding:0 0 0 4px;margin:2px 0;font-size:12px}.leb-history details.leb-h-nb ul{margin:2px 0;padding-left:16px}.leb-history .window-content{overflow-y:auto;padding:6px 10px}.leb-history .leb-h-top{display:flex;gap:6px;align-items:center;margin-bottom:6px}.leb-history .leb-h-top span{flex:1;opacity:.8}.leb-history h3{margin:10px 0 4px;border-bottom:1px solid #0004}.leb-history details{border:1px solid #0003;border-radius:4px;padding:3px 7px;margin:4px 0}.leb-history details.leb-h-cur{border-color:#4caf50}.leb-history summary{cursor:pointer}.leb-history .leb-h-plan{margin:4px 0}.leb-history ol,.leb-history ul{margin:2px 0 4px 18px;padding:0}.leb-history .leb-h-why{opacity:.75;font-style:italic}.leb-history .leb-h-res{opacity:.95}.leb-history .leb-h-by{opacity:.65;font-size:.9em}.leb-history .leb-h-warn,.leb-history .leb-h-stall,.leb-history .leb-h-end{color:#e07050}.leb-history .leb-h-stall{color:#e0a030}.leb-history .leb-h-press{opacity:.7;list-style:"⏵ "}.leb-history .leb-h-note{color:#c08040}.leb-history .leb-h-gm{opacity:.65;margin:3px 0}.leb-history .leb-h-card{margin-left:4px;cursor:pointer}.leb-history hr.leb-h-sep{margin:6px 0;border-color:#0003}.chat-message.leb-h-flash{outline:2px solid #e0a030}`;
 
@@ -17,7 +19,7 @@ const STYLE = `.leb-history .leb-h-grey{opacity:.6;font-style:italic}.leb-histor
 export function rounds(combat) {
   const scene = combat.scene, names = Object.fromEntries((scene?.tokens.contents ?? []).map(t => [t.id, t.name]));
   const fight = { round: combat.round, turn: combat.turn, current: combat.combatant?.id ?? null, order: combat.turns.map(c => ({ id: c.id, tokenId: c.tokenId, name: c.token?.name ?? c.name, npc: !!c.actor?.isOfType?.("npc") && c.actor.alliance !== "party" })) };
-  return historyOf(combat.getFlag(ID, "turns") ?? {}, fight, names, look(names), bandLogWords(combat));
+  return historyOf(combat.getFlag(ID, "turns") ?? {}, fight, names, look(names), bandLogWords(combat), Object.fromEntries(combat.scene?.tokens.map(t => { try { return [t.id, pronounOf(t, combat)]; } catch (e) { console.warn(`${ID} | pronoun`, e); return [t.id, undefined]; } }) ?? []));
 }
 /** Numbers read off chat cards: a roll's total, the DC or AC it was against (GM only), and damage types; a save on Toolbelt's row. Null when the card is gone. */
 function look(names) {
@@ -107,7 +109,7 @@ export class HistoryApp extends foundry.applications.api.ApplicationV2 {
   }
   _replaceHTML(html, content) {
     const atEnd = content.scrollHeight - content.scrollTop - content.clientHeight < 40, top = content.scrollTop;
-    content.innerHTML = html; content.scrollTop = atEnd ? content.scrollHeight : top;   /* newest at the bottom: follow it while the GM is there */
+    content.innerHTML = pro(html); content.scrollTop = atEnd ? content.scrollHeight : top;   /* newest at the bottom: follow it while the GM is there */
   }
   _onRender() {
     const root = this.element, c = this.combat;

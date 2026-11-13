@@ -2,6 +2,7 @@
    it, in full detail (totals against AC or DC, degrees, damage, HP), with the GM's own presses, refusals, re-plans and stalls. Built afresh from the
    Combat flag every time, so nothing extra is kept while the fight runs; numbers on chat cards are read through `look`, and the record keeps what a
    card can't say (HP before and after). GM only: never sent to the thinker. Pure: no Foundry globals. */
+import { IT, pro } from "./pronoun.mjs";
 import { CHECK_OUTCOMES, OUTCOMES, climbResult, describeChanges, describeStep, isMove } from "./turn.mjs";
 
 const DEGREES = { strike: OUTCOMES, check: CHECK_OUTCOMES };
@@ -10,10 +11,10 @@ const sq = s => s ? `${s[0]}, ${s[1]}` : "?";
 const ROUTE = { chat: "Angel (chat)", api: "Angel (API)", gm: "a GM" };
 
 /** Names for the GM: E and M labels in any text become the creatures' names. */
-export function namer(labels = {}, names = {}) {
+export function namer(labels = {}, names = {}, forms = {}) {   /* forms: { tokenId: that creature's own pronoun } (pronoun.mjs), "it" for any not given */
   const byLabel = Object.fromEntries(Object.entries(labels).map(([t, l]) => [l, t]));
   const nameOf = l => names[byLabel[l]] ?? null;
-  return { nameOf, named: s => String(s ?? "").replace(/\b[EM]\d{1,3}\b/g, l => nameOf(l) ?? l), tokenOf: l => byLabel[l] ?? null };
+  return { nameOf, named: s => String(s ?? "").replace(/\b[EM]\d{1,3}\b/g, l => nameOf(l) ?? l), tokenOf: l => byLabel[l] ?? null, formsOf: id => forms?.[id] ?? IT };
 }
 
 /** HP before and after, with "Down" at 0. */
@@ -24,10 +25,10 @@ const join = parts => parts.filter(Boolean).join("; ");
 
 /** What came of one step, in full detail: { text, cards } (cards: chat message ids to link). look.card(id) gives a card's { total, dc, label }, look.save(id,
     tokenId) a save on a spell's card { total, dc, degree }; either may be null when the card is gone, and the line still says what the record knows. */
-export function stepResult(step, rec = {}, look = {}, n = namer(), done = false) {
+export function stepResult(step, rec = {}, look = {}, n = namer(), done = false, forms = IT) {   /* forms: the acting creature's own pronoun */
   const card = id => (id && look.card?.(id)) || null, cards = [], tag = id => { if (id) cards.push(id); };
   const target = step.target ? n.nameOf(step.target) ?? step.targetName ?? step.target : null, tid = step.target ? n.tokenOf(step.target) : null;
-  const flat = rec.flat?.blind ? "struck at the square it believed its target was in (a pointed-out square it misread): nothing was there, and to it that reads as a hidden creature's flat check failing" : rec.flat ? `flat check ${rec.flat.total} vs DC ${rec.flat.dc}: ${rec.flat.ok ? "passed" : "failed, the action is spent"}` : rec.flatStarted ? "flat check rolled, result not recorded" : "";
+  const flat = rec.flat?.blind ? "struck at the square {they} believed {their} target was in (a pointed-out square {they} misread): nothing was there, and to {them} that reads as a hidden creature's flat check failing" : rec.flat ? `flat check ${rec.flat.total} vs DC ${rec.flat.dc}: ${rec.flat.ok ? "passed" : "failed, the action is spent"}` : rec.flatStarted ? "flat check rolled, result not recorded" : "";
   const damage = () => { if (!rec.damage) return ""; tag(rec.damage.message); const c = card(rec.damage.message); return `damage ${c?.total ?? "?"}${c?.label ? ` ${c.label}` : ""}${rec.applied ? (Array.isArray(rec.hp) ? `, applied: ${hpWords(target ?? "target", rec.hp)}` : ", applied") : rec.applying ? ", applying (not confirmed)" : ", not applied (apply it from the card)"}`; };
   let text = "";
   if (step.do === "strike") {
@@ -42,22 +43,22 @@ export function stepResult(step, rec = {}, look = {}, n = namer(), done = false)
     if (step.do === "sneak") { tag(rec.card?.message); text = join([text, rec.applied === "applied" ? "Visioner applied the secret result" : rec.applied === "none" ? "Visioner changed nothing" : rec.gm ? "left to you on its card" : ""]); }
   } else if (step.do === "stand" || step.do === "drop-prone") text = rec.changed || rec.stood ? (step.do === "stand" ? "stood up" : "dropped prone") : rec.started ? "started, not confirmed" : "";
   else if (step.do === "take-cover") text = rec.covered ? "took cover" : rec.gm ? "left to you" : "";
-  else if (step.do === "climb") { tag(rec.climb?.message); const c = card(rec.climb?.message); text = join([rec.climb ? `Athletics ${c?.total ?? "?"} vs DC ${rec.climb.dc}: ${CHECK_OUTCOMES[rec.climb.degree] ?? "unknown"}` : step.climbSpeed ? "its climb Speed, no check" : "", rec.moved || rec.fell || rec.climb ? climbResult(step, rec).replace(rec.climb ? " (a critical failure)" : "", "") : rec.started ? "climb started, not finished" : ""]); }
-  else if (step.do === "release") { tag(rec.posted?.message); text = join([flat, rec.dropped ? `dropped its ${step.itemName ?? "item"} on its square` : rec.started ? "started, not confirmed" : ""]); }
+  else if (step.do === "climb") { tag(rec.climb?.message); const c = card(rec.climb?.message); text = join([rec.climb ? `Athletics ${c?.total ?? "?"} vs DC ${rec.climb.dc}: ${CHECK_OUTCOMES[rec.climb.degree] ?? "unknown"}` : step.climbSpeed ? "{their} climb Speed, no check" : "", rec.moved || rec.fell || rec.climb ? climbResult(step, rec, forms).replace(rec.climb ? " (a critical failure)" : "", "") : rec.started ? "climb started, not finished" : ""]); }
+  else if (step.do === "release") { tag(rec.posted?.message); text = join([flat, rec.dropped ? `dropped {their} ${step.itemName ?? "item"} on {their} square` : rec.started ? "started, not confirmed" : ""]); }
   else if (step.do === "order") { tag(rec.message); const who = id => look.name?.(id) ?? "a creature", missed = Object.entries(rec.missed ?? {});   /* 0.28.0: who heard the leader's order, who didn't and why */
     text = rec.given ? join([(rec.heard ?? []).length ? `heard by ${rec.heard.map(who).join(", ")}` : "nobody heard it", missed.length ? `not by ${missed.map(([id, why]) => `${who(id)} (${why})`).join(", ")}` : ""]) : rec.skipped ? `not given: ${rec.skipped}` : ""; }
   else if (step.do === "say") { tag(rec.message);   /* 0.29.0: a sentence to the party, or a yield */
-    text = rec.said ? join([rec.langName ? `said in ${rec.langName}` : step.intent === "yield" ? "no words: it showed it" : "", rec.yielded ? "it stands down: Accepted or Fight on is the GM's" : ""]) : rec.skipped ? `not said: ${rec.skipped}` : ""; }
+    text = rec.said ? join([rec.langName ? `said in ${rec.langName}` : step.intent === "yield" ? "no words: {they} showed it" : "", rec.yielded ? "{they} {stands|stand} down: Accepted or Fight on is the GM's" : ""]) : rec.skipped ? `not said: ${rec.skipped}` : ""; }
   else if (step.do === "command-animal") { tag(rec.check?.message); const c = rec.check;   /* 0.30.0: the handler's Nature check and what it means for the animal */
     text = rec.skipped ? `not given: ${rec.skipped}` : join([flat, c ? `Nature ${c.total} vs Will DC ${c.dc}: ${CHECK_OUTCOMES[c.degree] ?? "unknown"}` : rec.started ? "check started, no result recorded" : "", c ? (c.degree >= 2 ? `${target ?? "the animal"} must do it on its next turn` : c.degree === 1 ? `${target ?? "the animal"} does nothing on its next turn` : `${target ?? "the animal"} does something else on its next turn: the GM's choice`) : ""]); }
   else if (step.do === "point-out") { tag(rec.posted?.message); const who = id => look.name?.(id) ?? "a creature", p = rec.pointed;   /* 0.30.0: what each ally got from it; a wrong square is the GM's to know */
-    text = rec.skipped ? `not pointed out: ${rec.skipped}` : join([flat, p ? (p.list ?? []).filter(x => x.how !== "knows").map(x => x.how === "understood" ? `${who(x.id)} understood (hidden at ${sq(x.square)})` : x.how === "roll" ? `${who(x.id)} Perception ${x.total} vs Stealth DC ${x.dc}: ${x.ok ? `success (hidden at ${sq(x.square)})` : `failure (believes ${sq(x.square)}, wrong: it is at ${sq(p.real)})`}` : `${who(x.id)} couldn't see it point`).join("; ") || "none of its allies had lost it" : rec.started ? "started, not confirmed" : ""]); }
+    text = rec.skipped ? `not pointed out: ${rec.skipped}` : join([flat, p ? (p.list ?? []).filter(x => x.how !== "knows").map(x => x.how === "understood" ? `${who(x.id)} understood (hidden at ${sq(x.square)})` : x.how === "roll" ? `${who(x.id)} Perception ${x.total} vs Stealth DC ${x.dc}: ${x.ok ? `success (hidden at ${sq(x.square)})` : `failure (believes ${sq(x.square)}, wrong: it is at ${sq(p.real)})`}` : `${who(x.id)} couldn't see {them} point`).join("; ") || "none of {their} allies had lost it" : rec.started ? "started, not confirmed" : ""]); }
   else if (step.do === "interact") { tag(rec.posted?.message); text = join([flat, rec.posted ? "its card posted for you to apply" : rec.started ? "card started, not confirmed" : ""]); }
-  else if (step.do === "delay") text = rec.moved ? `turn ended; back in the order right after ${n.nameOf(step.after) ?? step.after}` : rec.ended ? "turn ended; its place in the order may not have moved (check the tracker)" : "";
+  else if (step.do === "delay") text = rec.moved ? `turn ended; back in the order right after ${n.nameOf(step.after) ?? step.after}` : rec.ended ? "turn ended; {their} place in the order may not have moved (check the tracker)" : "";
   else if (step.do === "hide" || step.do === "seek") { tag(rec.card?.message); const c = card(rec.card?.message); text = join([c?.total != null ? `secret roll ${c.total}` : "", rec.applied === "applied" ? "Visioner applied the result" : rec.applied === "none" ? "Visioner changed nothing" : rec.gm ? "left to you on its card" : ""]); }
   else if (step.do === "ability") {
     tag(rec.posted?.message); if (rec.check) tag(rec.check.message);
-    const c = card(rec.check?.message), eff = rec.effects ? join([rec.effects.target?.length ? `${target ?? "target"}: ${rec.effects.target.join(", ")}` : "", rec.effects.self?.length ? `itself: ${rec.effects.self.join(", ")}` : "", rec.effects.gm ? "the rest is yours" : ""]) : "";
+    const c = card(rec.check?.message), eff = rec.effects ? join([rec.effects.target?.length ? `${target ?? "target"}: ${rec.effects.target.join(", ")}` : "", rec.effects.self?.length ? `{themself}: ${rec.effects.self.join(", ")}` : "", rec.effects.gm ? "the rest is yours" : ""]) : "";
     text = join([flat, rec.check ? `${vs(c, "DC")}${c?.total != null ? ": " : ""}${CHECK_OUTCOMES[rec.check.degree] ?? "unknown"}` : "", eff, damage(), rec.posted ? (step.mode === "hold" ? "kept hold" : "its card posted for you to apply") : ""]);
   } else if (step.do === "spell") {
     tag(rec.cast?.message);
@@ -72,11 +73,12 @@ export function stepResult(step, rec = {}, look = {}, n = namer(), done = false)
     if (step.mode === "card" || rec.noRows) parts.push("the rest is yours from its card");
     text = join(parts);
   }
-  return { text: text || (step.do === "none" ? "did nothing" : Object.keys(rec).length || done ? "done" : "not reached"), cards: [...new Set(cards)] };
+  return { text: pro(text || (step.do === "none" ? "did nothing" : Object.keys(rec).length || done ? "done" : "not reached"), forms), cards: [...new Set(cards)] };
 }
 
 /** One request (a plan, or a re-plan of the same turn) as lines. */
 function partOf(id, r, look, n) {
+  const f = n.formsOf?.(r.tokenId) ?? IT;   /* the turn's creature in its own pronoun (0.30.1) */
   /* a refused plan stays in r.plan until the next one lands: while the turn waits for that, it isn't the plan */
   const asking = r.state === "requested" || r.state === "submitted" && !r.steps, plan = r.plan && typeof r.plan === "object" && !asking ? r.plan : null, steps = r.steps ?? [], pos = r.pos ?? 0, lines = [];
   const presses = Object.entries(r.presses ?? {}).map(([at, p]) => ({ at: Number(at), ...p })).sort((a, b) => a.at - b.at);
@@ -90,21 +92,21 @@ function partOf(id, r, look, n) {
   steps.forEach((s, i) => {
     for (const p of presses.filter(p => (p.pos ?? 0) === i)) lines.push(pressLine(p));
     const rec = r.log?.[i]; if (i >= pos && !(rec && Object.keys(rec).length)) return;
-    const res = stepResult(s, rec ?? {}, look, n, i < pos);
-    lines.push({ kind: "step", n: i + 1, text: n.named(describeStep(s)), why: plan?.steps?.[i]?.why ? n.named(plan.steps[i].why) : null, result: n.named(res.text), cards: res.cards });
+    const res = stepResult(s, rec ?? {}, look, n, i < pos, f);
+    lines.push({ kind: "step", n: i + 1, text: n.named(describeStep(s, f)), why: plan?.steps?.[i]?.why ? n.named(plan.steps[i].why) : null, result: n.named(res.text), cards: res.cards });
   });
   for (const p of presses.filter(p => (p.pos ?? 0) >= steps.length)) lines.push(pressLine(p));
   if (r.stall) lines.push({ kind: "stall", text: `Stalled ${Math.round((r.stall.waited ?? 0) / 1000)} s (${r.stall.state}).` });
   if (r.escaped) lines.push({ kind: "end", text: `Escaped: ${r.escaped.name ?? "it"} got away${r.escaped.xp != null ? ` (${r.escaped.xp} XP not earned)` : ""}.` });
-  else if (r.extended) lines.push({ kind: "note", text: `You extended the map to the ${r.extended}; the monster kept its turn.` });
+  else if (r.extended) lines.push({ kind: "note", text: pro(`You extended the map to the ${r.extended}; the monster kept {their} turn.`, f) });
   else if (r.state === "fled") lines.push({ kind: "note", text: "At the map's edge, waiting for you." });
   if (r.note && !r.escaped) lines.push({ kind: "note", text: n.named(r.note) });
-  if (r.why && !r.parent && !r.replanned) lines.push({ kind: "end", text: `The turn ended: ${n.named(describeChanges(r.why, n.nameOf))}` });
+  if (r.why && !r.parent && !r.replanned) lines.push({ kind: "end", text: `The turn ended: ${n.named(describeChanges(r.why, n.nameOf, undefined, f))}` });
   const end = r.state === "manual" ? "You played the rest yourself." : r.gaveUp ? `Angel gave up: ${n.named(r.verdict ?? "")}` : r.replanned ? "Asked again (below)." : /^Couldn't do/.test(r.verdict ?? "") ? `${n.named(r.verdict)} You played the turn.` : null;
   if (end) lines.push({ kind: "end", text: end });
   return { id, at: r.at ?? 0, by: r.by ? `${ROUTE[r.by.by] ?? "a GM"}${r.by.model ? `, ${r.by.model}` : ""}` : null, reason: plan?.reason ? n.named(plan.reason) : null,
-    asked: r.why && r.parent ? n.named(describeChanges(r.why, n.nameOf)) : null, plan: steps.map((s, i) => ({ text: n.named(describeStep(s)), why: plan?.steps?.[i]?.why ? n.named(plan.steps[i].why) : null })),
-    lines, state: r.state, waiting: asking && !r.gaveUp,
+    asked: r.why && r.parent ? n.named(describeChanges(r.why, n.nameOf, undefined, f)) : null, plan: steps.map((s, i) => ({ text: n.named(describeStep(s, f)), why: plan?.steps?.[i]?.why ? n.named(plan.steps[i].why) : null })),
+    lines, state: r.state, waiting: asking && !r.gaveUp, their: pro("{Their}", f),
     /* what it remembered when this plan was asked for (0.25.0): the notebook as it was sent, read from the request's own packet */
     remembered: r.packet?.notebook ? [...(r.packet.notebook.remembers ?? []), ...(r.packet.notebook.alliesDid ?? []).map(x => `Ally: ${x}`), ...(r.packet.notebook.side ? [r.packet.notebook.side] : [])].map(x => n.named(x)) : [] };
 }
@@ -113,8 +115,8 @@ function partOf(id, r, look, n) {
     an order the GM gave and every fall of a leader get a line of their own in their round (an order from a plan is a step of that plan).
     t: the Combat's turns flag. fight: { round, turn (index), order: [{ id, name, npc }] } in initiative order (npc: a monster, not one on the party's side); names: tokenId → name.
     Monsters with no request in a round that has passed them were played by the GM (one line each), so the rounds read in order. */
-export function historyOf(t = {}, fight = {}, names = {}, look = {}, bandLog = []) {
-  const n = namer(t.labels ?? {}, names), reqs = Object.entries(t.requests ?? {}).filter(([, r]) => r && Number.isFinite(r.round));
+export function historyOf(t = {}, fight = {}, names = {}, look = {}, bandLog = [], forms = {}) {   /* forms: tokenId → its own pronoun (0.30.1) */
+  const n = namer(t.labels ?? {}, names, forms), reqs = Object.entries(t.requests ?? {}).filter(([, r]) => r && Number.isFinite(r.round));
   const order = fight.order ?? [], at = id => { const i = order.findIndex(c => c.id === id); return i < 0 ? 999 : i; };
   const rounds = new Map();
   for (const [id, r] of reqs) {
@@ -152,7 +154,7 @@ function partHTML(p, esc, { links }) {
   const head = `<p class="leb-h-plan">${p.asked ? `<span class="leb-h-warn">Asked again: ${esc(p.asked)}</span><br>` : ""}${p.reason ? `<b>Plan:</b> ${esc(p.reason)}` : p.waiting ? "<em>Waiting for a plan.</em>" : ""}${p.by ? ` <span class="leb-h-by">(${esc(p.by)}${p.at ? `, ${clock(p.at)}` : ""})</span>` : ""}</p>`;
   const plan = p.plan.length ? `<ol class="leb-h-steps">${p.plan.map(s => `<li>${esc(s.text)}${s.why ? ` <span class="leb-h-why">— ${esc(s.why)}</span>` : ""}</li>`).join("")}</ol>` : "";
   const lines = p.lines.map(l => l.kind === "step" ? `<li class="leb-h-act"><b>${l.n}.</b> ${esc(l.text)}${l.why ? ` <span class="leb-h-why">— ${esc(l.why)}</span>` : ""}<br><span class="leb-h-res">→ ${esc(l.result)}</span>${link(l.cards)}</li>`
-    : l.kind === "refused" ? `<li class="leb-h-warn">${esc(l.text)}${l.plan ? `<br><span class="leb-h-by">Its plan: ${esc(l.plan.reason || "")} ${esc(l.plan.steps.join("; "))}</span>` : ""}</li>`
+    : l.kind === "refused" ? `<li class="leb-h-warn">${esc(l.text)}${l.plan ? `<br><span class="leb-h-by">${esc(p.their ?? "Its")} plan: ${esc(l.plan.reason || "")} ${esc(l.plan.steps.join("; "))}</span>` : ""}</li>`
     : `<li class="leb-h-${l.kind}">${esc(l.text)}</li>`).join("");
   const nb = p.remembered?.length ? (links ? `<details class="leb-h-nb"><summary>Remembered (${p.remembered.length})</summary><ul>${p.remembered.map(x => `<li>${esc(x)}</li>`).join("")}</ul></details>` : `<p><b>Remembered:</b> ${p.remembered.map(esc).join(" ")}</p>`) : "";
   return `${head}${nb}${plan}${lines ? `<ul class="leb-h-lines">${lines}</ul>` : ""}`;

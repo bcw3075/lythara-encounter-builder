@@ -1,6 +1,7 @@
 /* Player reactions during a monster's turn (0.20.0): which reactions the module knows, which gate each one fits, where along a move the gates fall,
    and what a reaction that raises AC does to an attack already rolled. Pure: no Foundry globals, so the unit tests run it in Node. */
 import { distanceBetween } from "./move.mjs";
+import { IT, pro } from "./pronoun.mjs";
 
 /* The gates a monster's action passes through (Rhea's design, 2026-11-05; built 0.20.0): move: it leaves a square during a move action (asked before
    it leaves); stay: a move action that leaves no square (Stand, Drop Prone, a Climb), asked at the end of that action; manipulate and ranged: asked
@@ -233,8 +234,11 @@ export const GUILT = {
   enfeebled: { name: "Enfeebled 2", words: "Enfeebled 2: -2 to its Strength-based attack rolls, its Strength-based damage and Athletics (Grapple, Trip, Shove). Best against a creature that fights with weapons, claws or teeth." },
   stupefied: { name: "Stupefied 2", words: "Stupefied 2: -2 to its spell attacks, spell DCs, Will saves and Intelligence-, Wisdom- and Charisma-based skills, and each spell it casts is lost unless it rolls 7 or higher on a flat check. Best against a spellcaster." }
 };
-export const guiltLines = who => [`${who} refused your Glimpse of Redemption. Weight of Guilt: make it Enfeebled 2 or Stupefied 2? Both last until the end of its next turn.`, GUILT.enfeebled.words, GUILT.stupefied.words, "No answer in time is Enfeebled 2."];
-export const guiltWords = who => guiltLines(who).join(" ");
+/* the same two lines with pronoun markers (pronoun.mjs), so the window writes about the enemy as the rest of the module does (0.30.1) */
+const GUILT_OF = { enfeebled: "Enfeebled 2: -2 to {their} Strength-based attack rolls, {their} Strength-based damage and Athletics (Grapple, Trip, Shove). Best against a creature that fights with weapons, claws or teeth.",
+  stupefied: "Stupefied 2: -2 to {their} spell attacks, spell DCs, Will saves and Intelligence-, Wisdom- and Charisma-based skills, and each spell {they} {casts|cast} is lost unless {they} {rolls|roll} 7 or higher on a flat check. Best against a spellcaster." };
+export const guiltLines = (who, forms = IT) => [`${who} refused your Glimpse of Redemption. Weight of Guilt: make {them} Enfeebled 2 or Stupefied 2? Both last until the end of {their} next turn.`, GUILT_OF.enfeebled, GUILT_OF.stupefied, "No answer in time is Enfeebled 2."].map(t => pro(t, forms));
+export const guiltWords = (who, forms = IT) => guiltLines(who, forms).join(" ");
 /** Why a character with a fitting reaction wasn't asked, for the GM's card. list: [{ name, reaction, why }] */
 export function notAskedWords(list = []) {
   const W = { used: "reaction already used", delaying: "Delaying" };

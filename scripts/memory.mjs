@@ -3,6 +3,8 @@
    adds her own). A line holds labels and fixed words only: never a name, a number off someone else's sheet, or free text from a card.
    fight.mjs decides who perceived what at the moment it happened and calls `witnessLines`; `render` turns a notebook into what its Mind may use. */
 
+import { IT, pro } from "./pronoun.mjs";
+
 export const NOTEBOOK_SCHEMA = 1;
 /** Stored lines a notebook may hold; lines sent as "remembers"; allies' deeds sent; a GM's line at most this long. */
 export const STORE_MAX = 40, SEND_MAX = 10, DEEDS_MAX = 6, GM_LINE_MAX = 120, DEED_MAX = 80;
@@ -88,7 +90,7 @@ const sorted = book => Object.entries(book ?? {}).filter(([, l]) => l && typeof 
     that aren't "this round"). Out: { remembers: [{ text, keys, kind, by }], allies: [{ text, keys }], unused: [{ text, keys, kind }], crossed: [..] }.
     `remembers` is what its Mind can use, most important first, capped; `unused` is what it perceived and makes nothing of (the fold-out greys it).
     Tallies, not a log: several hits by one creature are one line. Nothing here reads anything but the lines. */
-export function render(book, { rung = 3, since = 0 } = {}) {
+export function render(book, { rung = 3, since = 0, forms = IT } = {}) {   /* forms: the creature's own pronoun (pronoun.mjs); "it" when none is given */
   const all = sorted(book), live = all.filter(([, l]) => !l.x), crossed = all.filter(([, l]) => l.x).map(([key, l]) => ({ text: wordsOf(l), keys: [key], kind: l.k, by: l.by ?? "module" }));
   const groups = [], group = (kind, id, key, l) => { let g = groups.find(x => x.kind === kind && x.id === id); if (!g) { g = { kind, id, keys: [], lines: [] }; groups.push(g); } g.keys.push(key); g.lines.push(l); };
   let lastHurt = null; const hurters = new Set();
@@ -108,14 +110,14 @@ export function render(book, { rung = 3, since = 0 } = {}) {
       case "gm": return l.text;
       case "hurt": { const worst = Math.max(...g.lines.map(x => x.s ?? 1)), bad = g.lines.filter(x => (x.s ?? 1) === 3).length;
         const who = l.p ? `Persistent ${l.p} damage` : g.id === "?" ? "Something" : l.a;
-        const how = n === 1 ? (worst === 3 ? "hurt it badly" : worst === 2 ? "hurt it" : "scratched it") : `hurt it ${times(n)}${bad ? `, badly ${times(bad)}` : ""}`;
-        return `${who} ${how}${hurters.size > 1 && l.a === lastHurt && !l.p && g.id !== "?" ? " and was the last to hurt it" : ""}.`; }
-      case "gap": return `It missed part of round ${l.r}.`;
-      case "miss": return n === 1 ? `It missed ${l.t}.` : `It keeps missing ${l.t}.`;
-      case "saved": return n === 1 ? `${l.t} shrugged off its ${l.i ?? "magic"}.` : `${l.t} keeps shrugging off its ${l.i ?? "magic"}.`;
-      case "nothing": return n === 1 ? `Its attack did nothing to ${l.t}.` : `Its attacks keep doing nothing to ${l.t}.`;
+        const how = n === 1 ? (worst === 3 ? "hurt {them} badly" : worst === 2 ? "hurt {them}" : "scratched {them}") : `hurt {them} ${times(n)}${bad ? `, badly ${times(bad)}` : ""}`;
+        return `${who} ${how}${hurters.size > 1 && l.a === lastHurt && !l.p && g.id !== "?" ? " and was the last to hurt {them}" : ""}.`; }
+      case "gap": return `{They} missed part of round ${l.r}.`;
+      case "miss": return n === 1 ? `{They} missed ${l.t}.` : `{They} {keeps|keep} missing ${l.t}.`;
+      case "saved": return n === 1 ? `${l.t} shrugged off {their} ${l.i ?? "magic"}.` : `${l.t} keeps shrugging off {their} ${l.i ?? "magic"}.`;
+      case "nothing": return n === 1 ? `{Their} attack did nothing to ${l.t}.` : `{Their} attacks keep doing nothing to ${l.t}.`;
       case "heal": return n === 1 ? `${l.a} healed ${l.t && l.t !== l.a ? l.t : l.t ? "itself" : "itself or someone beside it"}.` : `${l.a} keeps healing its side.`;   /* "M5 healed M5." read badly (0.28.0) */
-      case "cast": return `${l.a} cast ${l.n ? `the spell it knows as ${l.n.replace(/-/g, " ")}` : `a spell: ${l.w}`}${n > 1 ? ` (${times(n)})` : ""}.`;
+      case "cast": return `${l.a} cast ${l.n ? `the spell {they} {knows|know} as ${l.n.replace(/-/g, " ")}` : `a spell: ${l.w}`}${n > 1 ? ` (${times(n)})` : ""}.`;
       case "reactive": return `${l.a} strikes at those who move away from it or lower their guard beside it.`;
       case "block": return `${l.a} blocks blows with a shield.`;
       case "weak": return `${cap(l.d)} hurt ${l.t} far more than it should.`;
@@ -124,7 +126,7 @@ export function render(book, { rung = 3, since = 0 } = {}) {
       default: return ""; } };
   /* most useful first: her lines, who hurt it, what failed, healers and casters, the finer things, gaps; the newest of each kind first */
   const order = ["gm", "hurt", "miss", "saved", "nothing", "heal", "cast", "reactive", "block", "weak", "resist", "immune", "gap"];
-  const ranked = groups.map(g => ({ kind: g.kind, keys: g.keys, text: g.kind === "gm" ? text(g) : cap(text(g)), by: g.kind === "gm" ? "gm" : "module", sure: !g.lines.some(l => l.sure === 0), last: g.keys.at(-1) })).filter(g => g.text)
+  const ranked = groups.map(g => ({ kind: g.kind, keys: g.keys, text: g.kind === "gm" ? text(g) : pro(cap(text(g)), forms), by: g.kind === "gm" ? "gm" : "module", sure: !g.lines.some(l => l.sure === 0), last: g.keys.at(-1) })).filter(g => g.text)
     .sort((x, y) => order.indexOf(x.kind) - order.indexOf(y.kind) || (x.last < y.last ? 1 : -1));
   const usable = ranked.filter(g => canUse(g.kind, rung)), remembers = usable.slice(0, SEND_MAX), unused = [...ranked.filter(g => !canUse(g.kind, rung)), ...usable.slice(SEND_MAX)];
   /* allies' deeds since its last turn: the latest of each ally, oldest ally first */
@@ -136,17 +138,17 @@ export function render(book, { rung = 3, since = 0 } = {}) {
 function wordsOf(l) { const r = render({ a: { ...l, x: undefined } }, { rung: 4 }); return r.remembers[0]?.text ?? r.allies[0]?.text ?? (l.k === "deed" ? `${l.a}: ${l.w}.` : ""); }
 
 /** Its side's tally, so "gives up when half are down" can be judged (design review 15). Counts only. */
-export function sideWords({ started = 0, standing = 0, down = 0, fled = 0, yielded = 0 } = {}) {
+export function sideWords({ started = 0, standing = 0, down = 0, fled = 0, yielded = 0 } = {}, forms = IT) {
   if (started <= 1 && !down && !fled && !yielded) return null;
-  return `Its side, counting itself: ${started} at the start, ${standing} standing${down ? `, ${down} down` : ""}${fled ? `, ${fled} fled` : ""}${yielded ? `, ${yielded} yielded` : ""}.`;
+  return pro(`{Their} side, counting {themself}: ${started} at the start, ${standing} standing${down ? `, ${down} down` : ""}${fled ? `, ${fled} fled` : ""}${yielded ? `, ${yielded} yielded` : ""}.`, forms);
 }
 
 /** The packet's `notebook` (schema 3, kept in 4): only what its Mind may use; blank parts left out; null when there is nothing. */
-export function forPacket(book, { rung = 3, since = 0, side = null, shares = true } = {}) {
+export function forPacket(book, { rung = 3, since = 0, side = null, shares = true, forms = IT } = {}) {
   if (rung <= 0) return null;   /* mindless: nothing; it goes on as its mind says */
   /* shares: false for a creature with no Discipline (0.26.0, Rhea's R3-1): it keeps what happened to itself, and is told nothing of what the
      others did or how its side stands */
-  const r = render(book, { rung, since }), tally = side && shares ? sideWords(side) : null;
+  const r = render(book, { rung, since, forms }), tally = side && shares ? sideWords(side, forms) : null;
   const out = { ...(r.remembers.length ? { remembers: r.remembers.map(x => x.sure ? x.text : `${x.text} (unsure)`) } : {}), ...(shares && r.allies.length ? { alliesDid: r.allies.map(x => x.text) } : {}), ...(tally ? { side: tally } : {}) };
   return Object.keys(out).length ? out : null;
 }

@@ -3,6 +3,8 @@
    and the last plan it heard, "If the leader falls" fires when it led, it rejoins when a temporary change flips back, its ticks stay as they
    were, and the module stops playing a creature a player owns. Pure: no Foundry globals. docs/features/sides.md. */
 
+import { IT, pro } from "./pronoun.mjs";
+
 /** A creature's side as the books keep it: "party", "opposition" or "none" (PF2e's `alliance`, null for a creature on nobody's side). */
 export const sideWord = alliance => alliance === "party" || alliance === "opposition" ? alliance : "none";
 
@@ -24,12 +26,14 @@ export function sideChange(was, now, round = 0) {
 }
 const SIDE = { party: "the party's", opposition: "the monsters'", none: "nobody's" };
 /** The band log's line for a side event (History), in names. e: { k: "side" | "sideBack" | "owned" | "unowned", tok, from, to, bandName }. */
-export function sideLogWords(e, { nameOf = id => id, bandName = "" } = {}) {
-  const who = nameOf(e.tok);
+export function sideLogWords(e, { nameOf = id => id, bandName = "", formsOf = () => IT } = {}) {
+  const who = nameOf(e.tok); return pro(sideLogIt(e, who, bandName), formsOf(e.tok));   /* the creature's own pronoun (pronoun.mjs) */
+}
+function sideLogIt(e, who, bandName) {
   if (e.k === "side") return `${who} changed sides (now ${SIDE[e.to] ?? "another side's"})${bandName ? `; left the band ${bandName}` : ""}.`;
-  if (e.k === "sideBack") return `${who} is back on ${SIDE[e.to] ?? "its old"} side${bandName ? ` and rejoins the band ${bandName} with the last plan it heard (orders given meanwhile are lost to it)` : ""}.`;
-  if (e.k === "owned") return `${who} was given to a player; the module no longer plays it.`;
-  if (e.k === "unowned") return `${who} is no longer a player's; the module can play it again.`;
+  if (e.k === "sideBack") return `${who} is back on ${SIDE[e.to] ?? "{their} old"} side${bandName ? ` and rejoins the band ${bandName} with the last plan {they} heard (orders given meanwhile are lost to {them})` : ""}.`;
+  if (e.k === "owned") return `${who} was given to a player; the module no longer plays {them}.`;
+  if (e.k === "unowned") return `${who} is no longer a player's; the module can play {them} again.`;
   return "";
 }
 /** The tag on its row of Monster Turns. entry: the books' entry; round: the fight's round. */
@@ -39,18 +43,18 @@ export function sideTag(entry) {
   return null;
 }
 /** The card's words for a creature that changed sides (her sample). */
-export function sideCardWords(entry, { bandName = "" } = {}) {
+export function sideCardWords(entry, { bandName = "", forms = IT } = {}) {
   if (entry?.changed == null) return null;
-  return bandName ? [`It has left the band ${bandName}: it gets no more orders and stops following the band's plan. It keeps its notebook and the last plan it heard. Everyone treats it as on its new side from now on.`, `If the change wears off, it rejoins ${bandName} with the last plan it heard (orders given meanwhile are lost to it).`]
-    : [`Everyone treats it as on its new side from now on. It keeps its notebook.`, `If the change wears off, it is back on its old side.`];
+  return (bandName ? [`{They} {has|have} left the band ${bandName}: {they} {gets|get} no more orders and {stops|stop} following the band's plan. {They} {keeps|keep} {their} notebook and the last plan {they} heard. Everyone treats {them} as on {their} new side from now on.`, `If the change wears off, {they} {rejoins|rejoin} ${bandName} with the last plan {they} heard (orders given meanwhile are lost to {them}).`]
+    : [`Everyone treats {them} as on {their} new side from now on. {They} {keeps|keep} {their} notebook.`, `If the change wears off, {they} {is|are} back on {their} old side.`]).map(t => pro(t, forms));
 }
 /** What a turncoat's own packet says of where it came from (schema 7): the side it fought for, its old band and the last it heard there, as
     something it knows and no longer follows. heard: lines in labels (the plan's objective, standing orders), already gated by the caller. */
-export function changedForPacket(entry, { bandName = "", heard = [] } = {}) {
-  if (entry?.changed == null) return null;
+export function changedForPacket(entry, { bandName = "", heard = [], forms = IT } = {}) {
+  if (entry?.changed == null) return null; const say = t => pro(t, forms);
   /* the band's name is the GM's own text and isn't sent (it has passed no name gate): "in a band" is enough */
-  return { since: entry.changed, was: `Until round ${entry.changed} it fought for the other side${bandName ? ", in a band" : ""}. It has changed sides: its old side are its enemies now and the creatures it fought are its allies.`,
-    ...(heard.length ? { lastHeard: heard.slice(0, 4), note: "What it last heard from its old band, as something it knows about them. It no longer follows any of it." } : {}) };
+  return { since: entry.changed, was: say(`Until round ${entry.changed} {they} fought for the other side${bandName ? ", in a band" : ""}. {They} {has|have} changed sides: {their} old side are {their} enemies now and the creatures {they} fought are {their} allies.`),
+    ...(heard.length ? { lastHeard: heard.slice(0, 4), note: say("What {they} last heard from {their} old band, as something {they} {knows|know} about them. {They} no longer {follows|follow} any of it.") } : {}) };
 }
 /** The side lines the fight's log keeps. */
 export const SIDE_LOG = ["side", "sideBack", "owned", "unowned"];

@@ -1,6 +1,7 @@
 /* Moving a monster: the distance between two creatures, and the route and cost of a Stride, a Step or a Crawl. Pure: no Foundry globals. A creature's square is its
    top-left square, [x, y] with y down, and its size is how many squares a side (1, 2 for Large, ...). Foundry's own measurement has the last word on
    what a route costs (fight.mjs measures every route this finds); this file finds the route, because Foundry has no pathfinding of its own. */
+import { IT, pro } from "./pronoun.mjs";
 export const FT = 5;
 const SQUARE_DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
 
@@ -277,19 +278,21 @@ export function burrowVertical(from, to, across) {
 }
 
 /** A route's failure in words, for the thinker and the card. Squares stay squares, which is what the thinker plans with. */
-export function routeWords(r, to, speed, kind = "stride") {
+export const routeWords = (r, to, speed, kind = "stride", forms = IT) => pro(routeWordsIt(r, to, speed, kind), forms);
+/** The same with its pronoun markers still in (pronoun.mjs), for `checkPlan`, which turns every reason at once. */
+export function routeWordsIt(r, to, speed, kind = "stride") {
   const sq = `[${to[0]}, ${to[1]}]`, word = { stride: "Stride", step: "Step", crawl: "Crawl", sneak: "Sneak", flee: "Flee", fly: "Fly", swim: "Swim", climb: "Climb", burrow: "Burrow" }[kind] ?? "Stride";
   switch (r.why) {
-    case "same": return `it is already at ${sq}.`;
+    case "same": return `{they} {is|are} already at ${sq}.`;
     case "off": return `${sq} is off the map.`;
-    case "blocked": return `it can't stand at ${sq}: something solid is there.`;
-    case "terrain": return kind === "burrow" ? `${sq}, or ground on the way there, is rock or deep water, and a Burrow goes only through soil.` : `${sq} is deep water: it would have to Swim (a "swim" step), which a ${word} isn't.`;
+    case "blocked": return `{they} can't stand at ${sq}: something solid is there.`;
+    case "terrain": return kind === "burrow" ? `${sq}, or ground on the way there, is rock or deep water, and a Burrow goes only through soil.` : `${sq} is deep water: {they} would have to Swim (a "swim" step), which a ${word} isn't.`;
     case "occupied": return `another creature is at ${sq}.`;
-    case "notNext": return `[${to[0]}, ${to[1]}] isn't next to it: a ${word} moves one square (5 ft).`;
+    case "notNext": return `[${to[0]}, ${to[1]}] isn't next to {them}: a ${word} moves one square (5 ft).`;
     case "difficult": return kind === "crawl" ? `[${to[0]}, ${to[1]}] is difficult terrain, which would take 10 ft, and a Crawl moves only 5 ft.` : `[${to[0]}, ${to[1]}] is difficult terrain, and a Step can't go into difficult terrain.`;
-    case "wall": return `a wall is between it and [${to[0]}, ${to[1]}].`;
-    case "far": { const what = kind === "fly" ? "fly Speed" : kind === "swim" ? "swimming distance" : kind === "burrow" ? "burrow Speed" : "Speed"; if (kind === "swim" && r.cost == null) return `${sq} is farther than one Swim can go.`; return r.cost == null ? `${sq} is far beyond its ${what} of ${speed} ft.` : `getting to ${sq} takes ${r.cost} ft, more than its ${what} of ${speed} ft.`; }
-    default: return `there's no way to ${sq} from where it is.`;
+    case "wall": return `a wall is between {them} and [${to[0]}, ${to[1]}].`;
+    case "far": { const what = kind === "fly" ? "fly Speed" : kind === "swim" ? "swimming distance" : kind === "burrow" ? "burrow Speed" : "Speed"; if (kind === "swim" && r.cost == null) return `${sq} is farther than one Swim can go.`; return r.cost == null ? `${sq} is far beyond {their} ${what} of ${speed} ft.` : `getting to ${sq} takes ${r.cost} ft, more than {their} ${what} of ${speed} ft.`; }
+    default: return `there's no way to ${sq} from where {they} {is|are}.`;
   }
 }
 /** Which way a move goes, in words, for the card. */

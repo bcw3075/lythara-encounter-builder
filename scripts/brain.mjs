@@ -3,6 +3,7 @@
    fight.mjs keeps the events on the Combat flag and the listener in a world setting. See claude/encounter-builder-plan.md, steps 3 and 5. */
 import { COSTS, describeChanges } from "./turn.mjs";
 import { PACKET_SCHEMA } from "./perceive.mjs";
+import { formsFromWords } from "./pronoun.mjs";
 import { PROMPT_VERSION, promptText } from "./prompt.mjs";
 
 export const PLAN_SCHEMA = 1;
@@ -170,7 +171,7 @@ export function eventOut(ev, req) {
   if (ev.kind === "stall") return { seq: ev.seq, kind: "stall", combatId: ev.combatId, requestId: ev.requestId, round: req.round, monster: req.packet?.you?.label ?? null, state: req.state,
     stall: { kind: req.stall?.kind ?? null, waitedSeconds: Math.round((req.stall?.waited ?? 0) / 1000), words: stallWords(req.stall) }, step: (req.pos ?? 0) + 1, steps: req.steps?.length ?? 0, verdict: req.verdict ?? null };   /* never the GM's note: it carries names and what the monster can't know */
   return { seq: ev.seq, kind: ev.kind, combatId: ev.combatId, requestId: ev.requestId, round: req.round, monster: req.packet?.you?.label ?? null, triesLeft: MAX_TRIES - (req.tries ?? 0),
-    ...(ev.kind === "retry" ? { reason: req.verdict, yourPlan: req.plan ?? null } : ev.kind === "replan" ? { reason: describeChanges(req.why), done: req.done ?? [] } : {}), packet: req.packet };
+    ...(ev.kind === "retry" ? { reason: req.verdict, yourPlan: req.plan ?? null } : ev.kind === "replan" ? { reason: describeChanges(req.why, undefined, undefined, formsFromWords(req.packet?.mind?.pronoun)), done: req.done ?? [] } : {}), packet: req.packet };
 }
 
 /* ---------- who is listening ---------- */

@@ -9,6 +9,7 @@ import { cutWords } from "./minds.mjs";
 import { SPEECH_LOG, speechLogWords } from "./speech.mjs";
 import { COMMAND_LOG, commandLogWords } from "./command.mjs";
 import { SIDE_LOG, sideLogWords } from "./sides.mjs";
+import { IT, pro } from "./pronoun.mjs";
 
 export const ORDER_PARTS = ["objective", "job", "fallBack", "yield"];   /* "yield" (0.29.0, R3-7): the leader tells its band to give themselves up */
 export const ORDER_CAPS = { say: 160, text: 120, jobs: 4, toldOf: 6, send: 900 };
@@ -51,13 +52,14 @@ export const fallBackWords = f => f?.to === "off" ? "off the map" : f?.to === "s
 
 /** May this creature give an order now? Only its band's leader, able to act and to speak, above ground, with someone to follow it, once a round
     for the band (design review 7: a re-plan or a turn that comes back after a Delay is the same round). Out: { ok } or { ok: false, why }. */
-export function canOrder({ leads = false, followers = 0, cantAct = null, langs = [], below = false, round = 0, last = null } = {}) {
-  if (!leads) return { ok: false, why: "it doesn't lead a band" };
-  if (!followers) return { ok: false, why: "nobody in its band is left to follow an order" };
-  if (cantAct) return { ok: false, why: "it can't act, so it can't speak" };
-  if (!(langs ?? []).length) return { ok: false, why: "it speaks no language" };
-  if (below) return { ok: false, why: "it is under the ground, where nobody hears it" };
-  if (last != null && last === round) return { ok: false, why: "its band has had this round's order (one a round)" };
+export function canOrder({ leads = false, followers = 0, cantAct = null, langs = [], below = false, round = 0, last = null, forms = IT } = {}) {
+  const no = why => ({ ok: false, why: pro(why, forms) });   /* forms: the leader's own pronoun (pronoun.mjs) */
+  if (!leads) return no("{they} {doesn't|don't} lead a band");
+  if (!followers) return no("nobody in {their} band is left to follow an order");
+  if (cantAct) return no("{they} can't act, so {they} can't speak");
+  if (!(langs ?? []).length) return no("{they} {speaks|speak} no language");
+  if (below) return no("{they} {is|are} under the ground, where nobody hears {them}");
+  if (last != null && last === round) return no("{their} band has had this round's order (one a round)");
   return { ok: true };
 }
 /** The language an order is spoken in: the one of the leader's that the most of its followers understand, the earliest on its sheet among equals. */
@@ -154,28 +156,28 @@ export function fallOutcome({ pick = null, state = null, members = [], leaderId 
 export const NEVER_GIVES_UP = "Never, now: its leader was struck down and it fights on to the end.";
 
 /* ---------- the band log, in words (the History, the cards) ---------- */
-const FELL = { down: "is down", dead: "is dead", fled: "has fled the fight", gone: "is gone", yielded: "has given itself up", turned: "has changed sides" };
+const FELL = { down: "is down", dead: "is dead", fled: "has fled the fight", gone: "is gone", yielded: "has given {themself} up", turned: "has changed sides" };
 /** One entry of the band log for the GM. nameOf(tokenId) → a name; named(text) turns labels into names; langName(slug) → "Goblin".
     Entries: { k: "order", band, r, by, from, o, words (as the leader meant it, in labels), say, lang, heard: [ids], missed: { id: why }, msg }
     and { k: "fell", band, r, was, state, pick, leader, loosen, objective, never }. */
-export function logWords(e, { nameOf = id => id, named = s => s, langName = l => l, bandName = "" } = {}) {
+export function logWords(e, { nameOf = id => id, named = s => s, langName = l => l, bandName = "", formsOf = () => IT } = {}) {   /* formsOf(tokenId): that creature's own pronoun */
   const list = xs => xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`, band = bandName ? ` (${bandName})` : "";
   if (e?.k === "order") {
     const heard = (e.heard ?? []).map(nameOf), missed = Object.entries(e.missed ?? {}).map(([id, why]) => `${nameOf(id)} (${why})`);
     return `${nameOf(e.from)}${band} ordered: ${named(e.words ?? "")}${e.say ? `. Said${e.lang ? ` in ${langName(e.lang)}` : ""}: “${e.say}”` : e.lang ? ` (in ${langName(e.lang)})` : ""}. ${heard.length ? `Heard by ${list(heard)}.` : "Nobody heard it."}${missed.length ? ` Not by ${list(missed)}.` : ""}${e.by === "gm" ? " Given by the GM." : ""}`;
   }
   if (e?.k === "fell") {
-    const who = `${nameOf(e.was)}${band}, the leader, ${FELL[e.state] ?? "is down"}.`;
+    const who = pro(`${nameOf(e.was)}${band}, the leader, ${FELL[e.state] ?? "is down"}.`, formsOf(e.was));
     if (e.pick === "next") return `${who} ${e.leader ? `${nameOf(e.leader)} leads now.` : "Nobody is left to lead."}`;
     if (e.pick === "apart") return `${who} The band falls apart: its plan is gone${(e.loosen ?? []).length ? `, and ${list(e.loosen.map(nameOf))} ${e.loosen.length === 1 ? "is" : "are"} Loose from now on` : ""}.`;
-    if (e.pick === "harder") return e.objective ? `${who} The band fights harder: ${named(e.objective)}, and nobody gives up.` : `${who} Nobody struck it down, so the plan stands.`;
+    if (e.pick === "harder") return e.objective ? `${who} The band fights harder: ${named(e.objective)}, and nobody gives up.` : `${who} ${pro("Nobody struck {them} down, so the plan stands.", formsOf(e.was))}`;
     if (e.pick === "runs") return `${who} Each of its band acts as if its own “Gives up” had been reached.`;
     if (e.pick === "stands") return `${who} The plan stands, and nobody changes it.`;
     return `${who} The band has no pick for this: each is told its leader fell.`;
   }
-  if (SPEECH_LOG.includes(e?.k)) return speechLogWords(e, { nameOf });   /* yielding (0.29.0): not a band's line, but the same log */
-  if (COMMAND_LOG.includes(e?.k)) return commandLogWords(e, { nameOf, named });   /* 0.30.0: a failed command the GM answered */
-  if (SIDE_LOG.includes(e?.k)) return sideLogWords(e, { nameOf, bandName });   /* 0.30.0: a creature changed sides, or a player got it */
+  if (SPEECH_LOG.includes(e?.k)) return speechLogWords(e, { nameOf, formsOf });   /* yielding (0.29.0): not a band's line, but the same log */
+  if (COMMAND_LOG.includes(e?.k)) return commandLogWords(e, { nameOf, named, formsOf });   /* 0.30.0: a failed command the GM answered */
+  if (SIDE_LOG.includes(e?.k)) return sideLogWords(e, { nameOf, bandName, formsOf });   /* 0.30.0: a creature changed sides, or a player got it */
   return "";
 }
 /** What a member's card says of this round's order: { heard: words } when it heard one this round, { missed: why } when its band had one it
@@ -186,4 +188,7 @@ export function roundLine(log = [], tokenId, round) {
   return tokenId in (e.missed ?? {}) ? { heard: false, why: e.missed[tokenId], entry: e } : null;
 }
 /** How firmly an order holds for a hearer, for its card (the prompt says the same once to the thinker). */
-export const HOLDS = { loose: "Loose: it follows the order while it suits it", trained: "Trained: the order wins until its own “Gives up” is reached", drilled: "Drilled: the order wins even at its own cost" };
+const HOLDS_OF = { loose: "Loose: {they} {follows|follow} the order while it suits {them}", trained: "Trained: the order wins until {their} own “Gives up” is reached", drilled: "Drilled: the order wins even at {their} own cost" };
+export const HOLDS = Object.fromEntries(Object.entries(HOLDS_OF).map(([k, v]) => [k, pro(v)]));
+/** The same in the hearer's own pronoun (0.30.1). */
+export const holdWords = (discipline, forms = IT) => pro(HOLDS_OF[discipline] ?? "", forms);

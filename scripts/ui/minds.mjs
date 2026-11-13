@@ -6,7 +6,8 @@ import { ID, findCreatures } from "../builder.mjs";
 import { CAPS, LAYER_WORDS, LIBRARY_LINES, LINES, LINE_LABEL, PICKS, SUGGEST, assemble, cleanLine, libraryChanges, lineWarnings, lineWords, peopleKey } from "../minds.mjs";
 import { BAND_CAPS, FALL_BACK, NATURE, NATURE_LABEL, NATURE_PICKS, NATURE_SUGGEST, NATURE_LAYER_WORDS, PLANNED, bandId, cleanPart, natureWords } from "../bands.mjs";
 import { bandViews, joinBand, removeBand, setBand } from "../bandlib.mjs";
-import { dropOwn, giveOwn, kindFacts, libraryEntries, libraryExport, libraryGet, libraryImport, libraryPut, libraryRemove, mindRows, partyPeople, rowProfile, setLines } from "../library.mjs";
+import { dropOwn, giveOwn, kindFacts, libraryEntries, libraryExport, libraryGet, libraryImport, libraryPut, libraryRemove, mindRows, partyPeople, rowActor, rowProfile, setLines } from "../library.mjs";
+import { formsOf, fromGender, pro } from "../pronoun.mjs";
 
 const STYLE = `.leb-minds .window-content{overflow:hidden!important;padding:0;display:flex;flex-direction:column}
 .leb-minds .lm-body{flex:1;display:flex;min-height:0}.leb-minds .lm-side{width:230px;overflow-y:auto;padding:8px;border-right:1px solid var(--color-border,#8886)}
@@ -18,6 +19,8 @@ const STYLE = `.leb-minds .window-content{overflow:hidden!important;padding:0;di
 .leb-minds .lm-row>label{font-weight:600;padding-top:6px}.leb-minds .lm-row textarea{width:100%;min-height:44px;resize:vertical;font-family:inherit}.leb-minds .lm-row textarea.lm-notes{min-height:84px}
 .leb-minds .lm-row select,.leb-minds .lm-row input[type=text]{width:100%}.leb-minds .lm-pick{display:grid;grid-template-columns:190px 1fr;gap:6px}
 .leb-minds .lm-chips{margin-top:4px;display:flex;flex-wrap:wrap;gap:4px}.leb-minds .lm-chip{font-size:12px;padding:1px 8px;border:1px solid #8886;border-radius:11px;cursor:pointer;opacity:.85}.leb-minds .lm-chip:hover{background:#8882}
+.leb-minds .lm-pron{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.leb-minds .lm-pp{padding:2px 12px;border:1px solid #8886;border-radius:14px;cursor:pointer}.leb-minds .lm-pp:hover{background:#8882}
+.leb-minds .lm-pp.on{background:#7a68b8;border-color:#7a68b8;color:#fff}.leb-minds .lm-pron input[type=text]{flex:1;min-width:150px}.leb-minds .lm-hint{font-size:12px;opacity:.7;margin-top:4px}
 .leb-minds .lm-from{font-size:12px;padding-top:6px;opacity:.9}.leb-minds .lm-tag{font-style:normal;padding:1px 7px;border-radius:9px;margin-right:4px;color:#111;white-space:nowrap}
 .leb-minds .lm-tag.library{background:#cfe6b5}.leb-minds .lm-tag.brief{background:#d9d9d9}.leb-minds .lm-band h3{margin:14px 0 2px;font-size:13px;letter-spacing:.06em;text-transform:uppercase;opacity:.75;border:0}
 .leb-minds .lm-spot{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.leb-minds .lm-spot input[type=number]{width:64px}.leb-minds .lm-spot button{width:auto;flex:0 0 auto}.leb-minds .lm-spot select{width:auto}.leb-minds .lm-mem{margin:0;padding-left:18px}
@@ -68,9 +71,15 @@ export class MindsApp extends ApplicationV2 {
     const below = this.below = assemble(profile.layers.filter(l => l.from !== layer && (layer !== "own" || l.from === "statblock"))).lines, mine = this.mine = profile.layers.find(l => l.from === layer)?.lines ?? {};
     this.people = people; this.rowUuid = row.uuid ?? null;
     const single = layer === "own", entry = profile.kind ? libraryGet(profile.kind.key) : null, peopleName = entry?.people ? libraryGet(entry.people)?.name : null;
+    const sheet = await rowActor(scene, row), sheetPronoun = sheet?.isOfType?.("character") ? formsOf(fromGender(sheet.system?.details?.gender?.value)).they : null;
     const lineRow = k => {
       const cur = profile.assembled.lines[k], d = this.draft[k], val = d !== undefined ? (d ?? below[k] ?? {}) : (cur ?? {}), text = val.text ?? "", fromMine = d !== undefined ? d !== null : !!mine[k] && !mine[k].blank, blanked = d === undefined && !!mine[k]?.blank;
-      const field = PICKS[k]
+      /* the Pronoun line (0.30.1, the sample Rhea chose on 2026-11-13): pills, with her own words for "other…". A character's comes from its sheet. */
+      if (k === "pronoun" && sheetPronoun) return `<div class="lm-row"><label>${esc(LINE_LABEL[k])}</label><div><b>${esc(sheetPronoun)}</b><div class="lm-hint">From the Gender box on the character sheet. Change it there.</div></div><div class="lm-from">character sheet</div></div>`;
+      const f = formsOf(val.pick ? val : "they"), hint = k !== "pronoun" ? "" : `<div class="lm-hint">How cards, chat lines and the History write about ${single || row.party || row.count === 1 ? "this creature" : "these creatures"}${val.pick ? `: “${esc(pro("{they} {is|are} hurt", f))}”, “${esc(pro("{their} turn", f))}”` : ""}.</div>`;
+      const field = k === "pronoun"
+        ? `<div class="lm-pron"><input type="hidden" name="pronoun.pick" value="${esc(val.pick ?? "")}">${Object.entries(PICKS[k]).map(([id, p]) => `<span class="lm-pp${val.pick === id ? " on" : ""}" data-pron="${id}" title="${esc(p.words)}">${esc(p.label)}</span>`).join("")}<input type="text" name="pronoun.text" maxlength="${CAPS.pronoun}" value="${esc(val.pick === "other" ? text : "")}" placeholder="xe / xem / xyr"${val.pick === "other" ? "" : " hidden"}></div>${hint}`
+        : PICKS[k]
         ? `<div class="lm-pick"><select name="${k}.pick"><option value="">(not set)</option>${Object.entries(PICKS[k]).map(([id, p]) => `<option value="${id}"${val.pick === id ? " selected" : ""} title="${esc(p.words)}">${esc(p.label)}</option>`).join("")}</select><input type="text" name="${k}.text" maxlength="${CAPS.store}" value="${esc(text)}" placeholder="in your own words (optional)"></div>`
         : `<textarea name="${k}.text" class="${k === "notes" ? "lm-notes" : ""}" maxlength="${k === "notes" ? CAPS.storeNotes : CAPS.store}" placeholder="${blanked ? "left blank on purpose" : ""}">${esc(text)}</textarea>${(SUGGEST[k] ?? []).length ? `<div class="lm-chips">${SUGGEST[k].map(s => `<span class="lm-chip" data-chip="${k}">${esc(s)}</span>`).join("")}</div>` : ""}`;
       return `<div class="lm-row" data-line="${k}"><label>${esc(LINE_LABEL[k])}</label><div>${field}<div class="lm-warns">${warnHtml(text, people)}</div></div><div class="lm-from">${this.srcOf(k)}</div></div>`; };
@@ -86,6 +95,8 @@ export class MindsApp extends ApplicationV2 {
   /* a field's value goes into the draft at once, so a redraw loses nothing */
   take(k) {
     const root = this.element, text = root.querySelector(`[name="${k}.text"]`)?.value ?? "", pick = root.querySelector(`[name="${k}.pick"]`)?.value ?? "";
+    /* "other…" picked and her words not yet a pronoun: nothing to keep yet, and never a blank that would hide the kind's own (0.30.1 review 9) */
+    if (k === "pronoun" && pick === "other" && !cleanLine(k, { text, pick })) { delete this.draft[k]; return; }
     const now = cleanLine(k, { text, pick: pick || undefined }), cur = this.profile.assembled.lines[k], sameAs = l => !!l === !!now && (!now || ((l.pick ?? null) === (now.pick ?? null) && (l.text ?? "") === now.text));
     /* the same as what is saved is no change, even after typing something and typing it back: nothing she didn't change is ever written as hers */
     /* a line sent back to the layer below shows that layer's words: reading the field then must not turn them into this layer's own (seen live
@@ -118,6 +129,9 @@ export class MindsApp extends ApplicationV2 {
     if (root.querySelector(".lm-band")) return this.bindBand(root);
     root.querySelector('select[name="band"]')?.addEventListener("change", ev => { if (ev.target.value === "?") return; joinBand(this.scene, this.row.ref, ev.target.value).then(() => { this.message = ev.target.value ? "In that band now." : "In no band now."; this.render(); }).catch(e => { ui.notifications.error(e.message); this.render(); }); });
     root.querySelectorAll(".lm-row textarea,.lm-row input,.lm-row select:not([name=band])").forEach(el => { const k = el.name.split(".")[0]; for (const ev of ["input", "change"]) el.addEventListener(ev, () => this.touch(k)); });
+    /* a pronoun pill: the pick goes into the hidden field, "other…" shows the box for her own words; no redraw (as for any field) */
+    root.querySelectorAll("[data-pron]").forEach(el => el.addEventListener("click", () => { const box = el.closest(".lm-pron"), own = box.querySelector('[name="pronoun.text"]');
+      box.querySelector('[name="pronoun.pick"]').value = el.dataset.pron; box.querySelectorAll(".lm-pp").forEach(x => x.classList.toggle("on", x === el)); own.hidden = el.dataset.pron !== "other"; if (!own.hidden) own.focus(); this.touch("pronoun"); }));
     root.querySelectorAll("[data-chip]").forEach(el => el.addEventListener("click", () => { const k = el.dataset.chip, box = root.querySelector(`[name="${k}.text"]`); if (!box) return; box.value = box.value.trim() ? `${box.value.trim().replace(/[.;]$/, "")}; ${el.textContent}` : el.textContent[0].toUpperCase() + el.textContent.slice(1); this.touch(k); }));
     this.bindRevert(root);
   }
@@ -300,7 +314,7 @@ export class LibraryApp extends ApplicationV2 {
   async editCell(key, k) {
     const e = libraryGet(key); if (!e) return; const l = e.lines[k] ?? {}, picks = PICKS[k];
     const data = await input(`${e.name}: ${LINE_LABEL[k]}`, `${picks ? `<div class="form-group"><label>${esc(LINE_LABEL[k])}</label><select name="pick"><option value="">(not set)</option>${Object.entries(picks).map(([id, p]) => `<option value="${id}"${l.pick === id ? " selected" : ""}>${esc(p.label)}</option>`).join("")}</select></div>` : ""}
-      <textarea name="text" maxlength="${k === "notes" ? CAPS.storeNotes : CAPS.store}" placeholder="${picks ? "in your own words (optional)" : "your own words"}">${esc(l.blank ? "" : l.text ?? "")}</textarea>${(SUGGEST[k] ?? []).length ? `<p class="lm-old">For example: ${SUGGEST[k].map(esc).join("; ")}.</p>` : ""}
+      <textarea name="text" maxlength="${k === "notes" ? CAPS.storeNotes : CAPS.store}" placeholder="${k === "pronoun" ? "only for “other…”: your own words, as xe / xem / xyr" : picks ? "in your own words (optional)" : "your own words"}">${esc(l.blank ? "" : l.text ?? "")}</textarea>${(SUGGEST[k] ?? []).length ? `<p class="lm-old">For example: ${SUGGEST[k].map(esc).join("; ")}.</p>` : ""}
       ${e.type === "kind" ? `<label class="lm-line"><input type="checkbox" name="same"> Same as its people (take this kind's own line away)</label><label class="lm-line"><input type="checkbox" name="blank"${l.blank ? " checked" : ""}> Blank on purpose (don't use its people's line either)</label>` : `<label class="lm-line"><input type="checkbox" name="same"> Take this line away</label>`}`); if (!data) return;
     const line = data.same ? null : data.blank ? { blank: true } : cleanLine(k, { text: data.text, pick: data.pick || undefined });
     /* a party member's name in library text: asked, not refused, since a name can also be an everyday word; the packet's own gate still holds the line back from any monster that doesn't perceive them */

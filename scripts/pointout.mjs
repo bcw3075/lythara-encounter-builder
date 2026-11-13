@@ -4,6 +4,7 @@
    wrong (only the GM is told). Pure: no Foundry globals. Rhea's decisions (q-18, R3-17) and the design review's finding 15 are in
    docs/features/point-out.md. Rules: Point Out (Player Core, https://2e.aonprd.com/Actions.aspx?ID=97: the creature is hidden to its allies rather than undetected, only for allies who can see the pointer). */
 
+import { IT, pro } from "./pronoun.mjs";
 const LOST = ["undetected", "unnoticed"], SEES = ["observed", "concealed"];
 /** Has an observer lost a creature (it has no square for it)? */
 export const hasLost = state => LOST.includes(state);
@@ -18,13 +19,13 @@ export function withBelief(own, belief) {
 }
 /** Whether a creature can be pointed out by this one: it sees the creature itself (observed or concealed: "only by one that sees it"), and at
     least one of its allies has lost it. Out: { ok } or { ok: false, why }. */
-export function canPointOut({ state = null, lostBy = 0, cantAct = null, restrained = false, below = false } = {}) {
-  const no = why => ({ ok: false, why });
+export function canPointOut({ state = null, lostBy = 0, cantAct = null, restrained = false, below = false, forms = IT } = {}) {
+  const no = why => ({ ok: false, why: pro(why, forms) });   /* forms: the pointer's own pronoun (pronoun.mjs) */
   if (cantAct) return no(cantAct);
-  if (restrained) return no("it is restrained, so it can't Point Out (a manipulate action)");
-  if (below) return no("it is under the ground");
-  if (!SEES.includes(state)) return no("it doesn't see that creature itself (only a creature it sees can be pointed out)");
-  if (!(lostBy > 0)) return no("none of its allies has lost track of that creature");
+  if (restrained) return no("{they} {is|are} restrained, so {they} can't Point Out (a manipulate action)");
+  if (below) return no("{they} {is|are} under the ground");
+  if (!SEES.includes(state)) return no("{they} {doesn't|don't} see that creature {themself} (only a creature {they} {sees|see} can be pointed out)");
+  if (!(lostBy > 0)) return no("none of {their} allies has lost track of that creature");
   return { ok: true };
 }
 /** What one ally gets from the gesture. ally: { knows (its own senses already give it a square), seesPointer, hears, sharesLanguage, asleep }.
@@ -53,17 +54,18 @@ export function allyResult(id, how, { real, total = null, die = null, dc = null,
   const ok = deg >= 2;
   return ok || !wrongAt ? { id, how, total, dc, ok: true, square: [...real] } : { id, how, total, dc, ok: false, square: [...wrongAt], wrong: true };
 }
-/** The GM's box under the step (her sample): one line an ally, in names. list: allyResult's, with `name`; lang: the pointer's language in words. */
-export function pointLines(list = [], { target = "it", real = null, pointer = "it", lang = null } = {}) {
-  const at = s => `[${s[0]}, ${s[1]}]`;
-  return list.map(x => x.how === "understood" ? { name: x.name, text: `can see it point and understand it: ${target} is hidden to it at ${at(x.square)}.` }
-    : x.how === "roll" ? { name: x.name, text: `sees the gesture but can't ${lang ? `understand ${lang}` : "follow the words"}: Perception ${x.total} vs ${target}'s Stealth DC ${x.dc}, ${x.ok ? "success" : "failure"}: it ${x.ok ? "has" : "believes"} ${target} ${x.ok ? "hidden " : ""}at ${at(x.square)}.`, ...(x.wrong && real ? { gm: `GM only: wrong, ${target} is at ${at(real)}` } : {}) }
+/** The GM's box under the step (her sample): one line an ally, in names. list: allyResult's, with `name` and `pro` (that ally's own pronoun);
+    lang: the pointer's language in words; forms: the pointer's own pronoun. */
+export function pointLines(list = [], { target = "it", real = null, pointer = "it", lang = null, forms = IT } = {}) {
+  const at = s => `[${s[0]}, ${s[1]}]`, say = (x, text) => pro(text, forms, x.pro ?? IT);   /* {them}: the pointer; {they2}: this ally */
+  return list.map(x => x.how === "understood" ? { name: x.name, text: say(x, `can see {them} point and understand {them}: ${target} is hidden to {them2} at ${at(x.square)}.`) }
+    : x.how === "roll" ? { name: x.name, text: say(x, `sees the gesture but can't ${lang ? `understand ${lang}` : "follow the words"}: Perception ${x.total} vs ${target}'s Stealth DC ${x.dc}, ${x.ok ? "success" : "failure"}: {they2} ${x.ok ? "{has|have|2}" : "{believes|believe|2}"} ${target} ${x.ok ? "hidden " : ""}at ${at(x.square)}.`), ...(x.wrong && real ? { gm: `GM only: wrong, ${target} is at ${at(real)}` } : {}) }
     : x.how === "knows" ? { name: x.name, text: `already knows where ${target} is.` }
     : { name: x.name, text: `can't see ${pointer}: learns nothing.` });
 }
 /** Before the step runs: what each ally would get, in the same words without results. */
-export function previewLines(list = [], { target = "it", pointer = "it", lang = null } = {}) {
-  return list.map(x => ({ name: x.name, text: x.how === "understood" ? `can see it point and understand it: ${target} will be hidden to it at its square.` : x.how === "roll" ? `sees the gesture but can't ${lang ? `understand ${lang}` : "follow the words"}: a Perception check against ${target}'s Stealth DC; on a failure it believes a wrong square.` : x.how === "knows" ? `already knows where ${target} is.` : `can't see ${pointer}: learns nothing.` }));
+export function previewLines(list = [], { target = "it", pointer = "it", lang = null, forms = IT } = {}) {
+  return list.map(x => ({ name: x.name, text: x.how === "understood" ? pro(`can see {them} point and understand {them}: ${target} will be hidden to {them2} at its square.`, forms, x.pro ?? IT) : x.how === "roll" ? pro(`sees the gesture but can't ${lang ? `understand ${lang}` : "follow the words"}: a Perception check against ${target}'s Stealth DC; on a failure {they2} {believes|believe|2} a wrong square.`, forms, x.pro ?? IT) : x.how === "knows" ? `already knows where ${target} is.` : `can't see ${pointer}: learns nothing.` }));
 }
 /** The step's result for the thinker: how many allies it reached, never whether a believed square is right. */
 export function pointResult(rec = {}) {

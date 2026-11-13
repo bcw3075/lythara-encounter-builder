@@ -5,6 +5,7 @@
 import { ID } from "./builder.mjs";
 import { cleanBrief } from "./brief.mjs";
 import { applyNature } from "./bands.mjs";
+import { IT, formsOf, fromGender, guessPronoun } from "./pronoun.mjs";
 import { MIND_SCHEMA, LINES, applyLines, assemble, baseName, baseLevel, cleanEntry, cleanLines, exportData, forPacket, fromStatBlock, importPlan, kindKey, namesFor, rowLines } from "./minds.mjs";
 
 const LIBRARY_NAME = "Minds Library (Encounter Builder)";
@@ -139,6 +140,15 @@ export function partyPeople(scene, labelOf = () => null) {
   const others = new Map(); for (const a of [...game.actors.filter(x => x.isOfType?.("character")), ...(game.actors.party?.members ?? [])]) if (a && !onScene.has(a.id)) others.set(a.id, a);
   for (const a of others.values()) out.push({ names: names(a, a.name), label: null });
   return out;
+}
+/** The words to write about a creature with (0.30.1, R-2; Rhea, 2026-11-12 and 13): a character by its sheet's Gender box; anything else by the
+    Pronoun line of its mind profile, which the stat block fills when nobody wrote one ("it" for an animal or a mindless creature, "they" for
+    the rest). A party-side creature with no profile of its own gets the stat block's pick too. Out: forms for pronoun.mjs `pro`. */
+export function pronounOf(tok, combat = null) {
+  const actor = tok?.actor; if (!actor) return IT;
+  if (actor.isOfType?.("character")) return formsOf(fromGender(actor.system?.details?.gender?.value));
+  const line = assemble(mindLayers(tok.parent ?? null, tok, combat)).lines.pronoun;
+  return formsOf(line ?? guessPronoun({ ...statFacts(actor), mind: fromStatBlock(statFacts(actor)).mind.pick }));
 }
 /** A monster's profile as things stand: { assembled, mind, held } (`mind` is what its packet carries, null when nothing is left to say). */
 export function mindOf(scene, tok, combat = null, labelOf = () => null) {

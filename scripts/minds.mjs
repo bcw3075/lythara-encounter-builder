@@ -3,12 +3,14 @@
    Rhea's decisions (2026-11-10) and the design review's findings are in docs/features/minds.md. */
 import { noteForThinker } from "./turn.mjs";
 import { cleanNature } from "./bands.mjs";
+import { PRONOUNS, formsOf, guessPronoun, otherForms } from "./pronoun.mjs";
 
 /* 2 since 0.26.0: "Works with others" became "Discipline" (five steps), and a library entry for a kind of group holds a band's nature. Older data is read as it was. */
 export const MIND_SCHEMA = 2;
 /** The profile's lines, in the order they are shown and sent. */
-export const LINES = ["mind", "goesFor", "fightsBy", "givesUp", "discipline", "knows", "notes"];
-export const LINE_LABEL = { mind: "Mind", goesFor: "Goes for", fightsBy: "Fights by", givesUp: "Gives up", discipline: "Discipline", knows: "Knows about its enemies", notes: "Notes" };
+/* "pronoun" since 0.30.1 (R-2): how the module and Angel write about the creature. It leads, as on the Monster Minds page. */
+export const LINES = ["pronoun", "mind", "goesFor", "fightsBy", "givesUp", "discipline", "knows", "notes"];
+export const LINE_LABEL = { pronoun: "Pronoun", mind: "Mind", goesFor: "Goes for", fightsBy: "Fights by", givesUp: "Gives up", discipline: "Discipline", knows: "Knows about its enemies", notes: "Notes" };
 /** Only these two keep a fixed pick underneath, because the module acts on them (Rhea's decision 2): how clever a plan may be, and who shares a group plan.
     The words are the prompt's (one place: prompt.mjs prints them), never repeated in a packet. */
 export const MINDS = {
@@ -32,7 +34,7 @@ const OLD_WORKS = { alone: "none", pack: "pack", follows: "loose", leads: "loose
 const fromOld = v => v && typeof v === "object" ? (v.blank === true ? v : { ...v, pick: OLD_WORKS[v.pick] ?? undefined }) : typeof v === "string" ? v : null;
 /** A layer's lines with an old "worksWith" read as "discipline" when there is no discipline line. */
 const modern = lines => lines && typeof lines === "object" && "worksWith" in lines && !("discipline" in lines) ? { ...lines, discipline: lines.worksWith === null ? null : fromOld(lines.worksWith) } : lines;
-export const PICKS = { mind: MINDS, discipline: DISCIPLINES };
+export const PICKS = { pronoun: PRONOUNS, mind: MINDS, discipline: DISCIPLINES };
 /** Suggestions only (Rhea: "I hope those were just examples"): every free line takes her own words. */
 export const SUGGEST = {
   goesFor: ["the nearest", "the wounded", "whoever hurt it last", "casters and healers", "the biggest threat", "its goal"],
@@ -43,7 +45,7 @@ export const SUGGEST = {
 };
 /** Hard caps (design review 13). What a layer stores is what a packet carries, so nothing is cut behind the GM's back (0.24.0 review 8): 240
     characters a line, 600 for Notes. Blank lines are never sent. */
-export const CAPS = { store: 240, storeNotes: 600, send: 240, sendNotes: 600, name: 80 };
+export const CAPS = { store: 240, storeNotes: 600, send: 240, sendNotes: 600, name: 80, pronoun: 60 };
 /** "Knows about its enemies" belongs to one encounter, one monster or one fight: never the library (design review 10). */
 export const LIBRARY_LINES = LINES.filter(l => l !== "knows");
 export const BY = ["gm", "angel", "module"];
@@ -56,10 +58,15 @@ const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
     the layers below from filling it (explicit blank against inherit, design review 9). `by` says whose words they are. */
 export function cleanLine(key, v, by = null) {
   if (!LINES.includes(key) || v == null) return null;
-  const o = typeof v === "string" ? { text: v } : v; if (typeof o !== "object") return null;
+  /* words with no pick for the Pronoun line are a pick ("she") or her own words ("xe / xem / xyr"): a brief or a chat may write it as a plain string (0.30.1 review 5) */
+  let o = typeof v === "string" ? { text: v } : v; if (typeof o !== "object") return null;
+  if (key === "pronoun" && !o.pick && typeof o.text === "string" && o.blank !== true) { const w = o.text.trim().toLowerCase(); o = Object.hasOwn(PRONOUNS, w) && w !== "other" ? { ...o, pick: w, text: "" } : { ...o, pick: "other" }; }
   const who = BY.includes(o.by) ? o.by : BY.includes(by) ? by : "gm", at = Number.isFinite(o.at) ? o.at : null;
   if (o.blank === true) return { blank: true, by: who, ...(at ? { at } : {}) };
-  const text = cutWords(str(o.text, GATE_MAX), key === "notes" ? CAPS.storeNotes : CAPS.store), pick = PICKS[key] && Object.hasOwn(PICKS[key], o.pick) ? o.pick : null;
+  const pick = PICKS[key] && Object.hasOwn(PICKS[key], o.pick) ? o.pick : null;
+  /* the Pronoun line is a pick alone; "other" keeps her own words ("xe / xem / xyr") and says nothing until they read as a pronoun */
+  if (key === "pronoun") { const own = pick === "other" ? str(o.text, CAPS.pronoun) : ""; return !pick || (pick === "other" && !otherForms(own)) ? null : { pick, text: own, by: who, ...(at ? { at } : {}) }; }
+  const text = cutWords(str(o.text, GATE_MAX), key === "notes" ? CAPS.storeNotes : CAPS.store);
   if (!text && !pick) return null;
   return { ...(pick ? { pick } : {}), text, by: who, ...(at ? { at } : {}) };
 }
@@ -96,12 +103,13 @@ export function cleanEntry(e = {}) {
 /** The Mind and Discipline a stat block alone suggests, so that nothing plays blank. A guess, and marked as the module's: the Mindless trait;
     otherwise Intelligence (-4 or less animal, -3 or -2 simple, -1 to +2 cunning, +3 or more a trained tactician); a mindless creature has no
     discipline, an animal is Pack (Rhea, R3-11), a trained tactician is Trained and anything else that thinks is Loose. Drilled is never guessed.
+    The pronoun (Rhea, 2026-11-13): "it" for an animal or a mindless creature, "they" for anything that thinks, until she or a brief says otherwise.
     facts: { traits, int } */
 export function fromStatBlock({ traits = [], int = null } = {}) {
   const t = (traits ?? []).map(x => String(x).toLowerCase()), n = Number(int);
   const mind = t.includes("mindless") ? "mindless" : !Number.isFinite(n) || int === null ? "simple" : n <= -4 ? "animal" : n <= -2 ? "simple" : n <= 2 ? "cunning" : "tactician";
   const discipline = mind === "mindless" ? "none" : mind === "animal" ? "pack" : mind === "tactician" ? "trained" : "loose";
-  return { mind: { pick: mind, text: "", by: "module" }, discipline: { pick: discipline, text: "", by: "module" } };
+  return { pronoun: { pick: guessPronoun({ traits: t, mind }), text: "", by: "module" }, mind: { pick: mind, text: "", by: "module" }, discipline: { pick: discipline, text: "", by: "module" } };
 }
 /** The layers a profile is read from, most specific first (Rhea's decisions 6 and 8, design review 7): what was agreed in this fight; the monster's
     own; this encounter's for its kind; its kind in the library; its people in the library; the stat block. */
@@ -122,7 +130,8 @@ export function assemble(layers = []) {
 }
 /** A line in words, for the packet and the windows: a pick's label, then her words. */
 export function lineWords(key, l) {
-  if (!l) return ""; const label = l.pick ? PICKS[key]?.[l.pick]?.label ?? "" : "", text = String(l.text ?? "").trim();
+  if (!l) return ""; if (key === "pronoun") return l.pick === "other" ? String(l.text ?? "").trim() : PRONOUNS[l.pick]?.label ?? "";
+  const label = l.pick ? PICKS[key]?.[l.pick]?.label ?? "" : "", text = String(l.text ?? "").trim();
   return label && text ? `${label}. ${text}` : label || text;
 }
 const GATE_MAX = 8000;
@@ -145,6 +154,8 @@ export function namesFor(name, min = 3) {
 export function forPacket(assembled, people = []) {
   const out = {}, pick = {}, held = [];
   for (const k of LINES) { const l = assembled?.lines?.[k]; if (!l) continue;
+    /* the pronoun goes as its three words ("she/her/her"): no free text, so no gate, and no pick id (the prompt has nothing to look up) */
+    if (k === "pronoun") { const f = formsOf(l); out[k] = `${f.they}/${f.them}/${f.their}`; continue; }
     /* the gate reads the whole text and the cap comes after, at a word's end: a name cut in half by the cap would pass as no name (0.24.0 review 1) */
     const max = k === "notes" ? CAPS.sendNotes : CAPS.send, g = noteForThinker(String(l.text ?? ""), people, GATE_MAX); g.text = cutWords(g.text, max);
     if (g.unknown.length || g.ambiguous.length) { held.push({ key: k, unknown: g.unknown, ambiguous: g.ambiguous }); if (!l.pick) continue; }

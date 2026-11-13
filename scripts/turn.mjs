@@ -6,6 +6,7 @@ import { cleanOrder, orderWords } from "./orders.mjs";
 import { cleanSay } from "./speech.mjs";
 import { DEAF_FLAT, cleanCommand, commandWords } from "./command.mjs";
 import { pointResult } from "./pointout.mjs";
+import { IT, pro } from "./pronoun.mjs";
 /** What each step kind costs. An ability's cost is its own (0 for a free action); 1 here is only the fallback. */
 export const COSTS = { strike: 1, stride: 1, fly: 1, swim: 1, climb: 1, burrow: 1, release: 0, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, flee: 1, interact: 1, delay: 0, order: 0, say: 0, "command-animal": 1, "point-out": 1, none: 0 };
 /* Interact and Delay (0.12.0). Interact (https://2e.aonprd.com/Actions.aspx?ID=2296): 1 action, manipulate; the module can't know what a monster does
@@ -104,28 +105,32 @@ export const listWords = (xs = []) => xs.length < 2 ? xs.join("") : `${xs.slice(
     Earth Glide (0.17.0): glides (it burrows through rock and earth: soilAt then means "it can dig there", rock included) and surfaceAt(square) (its
     footprint there is open floor it can come up onto, not inside rock, a wall, a trunk or deep water). */
 export function checkPlan(plan, ctx) {
+  /* every reason is written about the monster with markers (pronoun.mjs) and comes out in its own pronoun: ctx.pro, "it" when none is given */
+  const r = checkPlanIt(plan, ctx); return typeof r?.reason === "string" ? { ...r, reason: pro(r.reason, ctx?.pro ?? IT) } : r;
+}
+function checkPlanIt(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
-  if (ctx.yielded) return { ok: false, reason: "It has yielded and stands down: it takes no actions until the GM answers its yield." };   /* 0.29.0, design review 3 */
+  if (ctx.yielded) return { ok: false, reason: "{They} {has|have} yielded and {stands|stand} down: {they} {takes|take} no actions until the GM answers {their} yield." };   /* 0.29.0, design review 3 */
   let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, herePos = ctx.me?.pos ?? here, hereElev = Number(ctx.me?.elev) || 0, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, surfaced = false, fled = false, ordered = false, said = false, gaveUp = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {}, shots = {};
   const commanded = new Set(), pointed = new Set();   /* 0.30.0: one command an animal and one Point Out a creature in a plan */
   /* up a tree it climbed (it holds on there: no Stride, Step and the like until it climbs down), and what it holds in its hands */
   let tree = hereElev > 0 && ctx.onTree ? ctx.onTree : null, below = !!ctx.below; if (below) hereElev = 0;   /* its token sits below 0; once up it stands at 0 */ const holding = new Map((ctx.holding ?? []).map(h => [h.id, h.name])), released = new Set();
-  const upTree = word => `it is ${Math.round(hereElev)} ft up the tree at [${tree.at[0]}, ${tree.at[1]}], so it can't ${word} there: a Climb (a "climb" step) with "height": 0 gets it down${ctx.flySpeed > 0 ? `, or it can Fly off` : ""}.`;
+  const upTree = word => `{they} {is|are} ${Math.round(hereElev)} ft up the tree at [${tree.at[0]}, ${tree.at[1]}], so {they} can't ${word} there: a Climb (a "climb" step) with "height": 0 gets {them} down${ctx.flySpeed > 0 ? `, or {they} can Fly off` : ""}.`;
   /* distances from where each creature really stands (pos, fractional off the grid), as PF2e and the packet measure them; after a move, from the square it moved to */
   const distanceTo = (t, reach) => { const p = t.pos ?? t.square; return herePos && p ? distanceBetween({ x: herePos[0], y: herePos[1], size: ctx.me.span ?? ctx.me.size ?? 1, elev: hereElev, depth: ctx.me.depth }, { x: p[0], y: p[1], size: t.pos ? t.span ?? t.size ?? 1 : t.size ?? 1, elev: t.elev, depth: t.depth }, { reach }) : t.distance; };
   for (const [n, step] of plan.steps.entries()) {
     const at = `Step ${n + 1}`;
     if (!(step.do in COSTS)) return { ok: false, reason: `${at}: I can't do "${step.do}" yet.` };
-    if (sought) return { ok: false, reason: `${at}: a Seek has to be the plan's last step. You are asked again after it, with what it found.` };
-    if (surfaced) return { ok: false, reason: `${at}: coming up out of the ground has to be the plan's last step: below ground it perceives little, so you are asked again at the surface with what it perceives there.` };
+    if (sought) return { ok: false, reason: `${at}: a Seek has to be the plan's last step. You are asked again after it, with what {they} found.` };
+    if (surfaced) return { ok: false, reason: `${at}: coming up out of the ground has to be the plan's last step: below ground {they} {perceives|perceive} little, so you are asked again at the surface with what {they} {perceives|perceive} there.` };
     if (fled) return { ok: false, reason: `${at}: a flee has to be the plan's last step: at the edge the GM decides, and you are asked again if the map is extended.` };
-    if (gaveUp) return { ok: false, reason: `${at}: a yield has to be the plan's last step: it stands down, and nothing after it would happen.` };
+    if (gaveUp) return { ok: false, reason: `${at}: a yield has to be the plan's last step: {they} {stands|stand} down, and nothing after it would happen.` };
     /* burrowed (0.16.0): earth stands between it and everything (no line of effect, Rules ID 2382), so it can only Burrow (on, or up), Delay or do nothing */
-    if (below && !["burrow", "delay", "none"].includes(step.do)) return { ok: false, reason: `${at}: it is burrowed under the ground, where it can't reach, see or affect anything above. A Burrow with "up": true brings it to the surface first (1 action).` };
+    if (below && !["burrow", "delay", "none"].includes(step.do)) return { ok: false, reason: `${at}: {they} {is|are} burrowed under the ground, where {they} can't reach, see or affect anything above. A Burrow with "up": true brings {them} to the surface first (1 action).` };
     if (step.do === "spell") {
       if (ctx.cantAct) return { ok: false, reason: `${at}: ${ctx.cantAct}` };
       const sp = (ctx.spells ?? []).find(s => s.id === step.item);
-      if (!sp) return { ok: false, reason: `${at}: it has no spell called "${step.item}" it can cast now${(ctx.abilities ?? []).some(a => a.id === step.item) ? ` (${step.item} is an ability: use an "ability" step)` : ""}.` };
+      if (!sp) return { ok: false, reason: `${at}: {they} {has|have} no spell called "${step.item}" {they} can cast now${(ctx.abilities ?? []).some(a => a.id === step.item) ? ` (${step.item} is an ability: use an "ability" step)` : ""}.` };
       const r = checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here, elev: hereElev });
       if (!r.ok) return r;
       if (r.step.actions > left) return { ok: false, reason: `${at}: no actions left${r.step.actions > 1 ? ` (${sp.name} takes ${r.step.actions})` : ""}.` };
@@ -138,9 +143,9 @@ export function checkPlan(plan, ctx) {
     }
     const ab = step.do === "ability" ? (ctx.abilities ?? []).find(a => a.id === step.item) : null;
     if (step.do === "ability") {
-      if (!ab) return { ok: false, reason: `${at}: it has no ability called "${step.item}"${ctx.strikes?.some(s => s.id === step.item) ? ` (${step.item} is a Strike: use a "strike" step)` : ""}.` };
+      if (!ab) return { ok: false, reason: `${at}: {they} {has|have} no ability called "${step.item}"${ctx.strikes?.some(s => s.id === step.item) ? ` (${step.item} is a Strike: use a "strike" step)` : ""}.` };
       if (ab.kind === "passive") return { ok: false, reason: `${at}: ${ab.name} is passive: it is always on, not something to do.` };
-      if (ab.kind === "reaction") return { ok: false, reason: `${at}: ${ab.name} is a reaction, used when its trigger happens, not planned on its own turn.` };
+      if (ab.kind === "reaction") return { ok: false, reason: `${at}: ${ab.name} is a reaction, used when its trigger happens, not planned on {their} own turn.` };
     }
     if (ab) {
       if (ctx.cantAct) return { ok: false, reason: `${at}: ${ctx.cantAct}` };
@@ -162,29 +167,29 @@ export function checkPlan(plan, ctx) {
     if (ctx.cantAct) return { ok: false, reason: `${at}: ${ctx.cantAct}` };
     /* an order to its band (0.28.0, Rhea's R3-3): speech, so it costs no action; one a round; data only (a label or a place: design review 8) */
     if (step.do === "order") {
-      const oc = ctx.orders ?? { ok: false, why: "it doesn't lead a band" };
+      const oc = ctx.orders ?? { ok: false, why: "{they} {doesn't|don't} lead a band" };
       if (ordered) return { ok: false, reason: `${at}: one order a round: this plan already has one.` };
-      if (!oc.ok) return { ok: false, reason: `${at}: it can't give an order now: ${oc.why}.` };
+      if (!oc.ok) return { ok: false, reason: `${at}: {they} can't give an order now: ${oc.why}.` };
       /* its last action may end the turn before it speaks (a re-plan with no actions left ends it: design review 7) */
-      if (n > 0 && left <= 0) return { ok: false, reason: `${at}: give the order before its last action, not after: once its actions are spent the turn can end before it speaks.` };
+      if (n > 0 && left <= 0) return { ok: false, reason: `${at}: give the order before {their} last action, not after: once {their} actions are spent the turn can end before {they} {speaks|speak}.` };
       const c = cleanOrder({ part: step.part, target: step.target, at: step.at, job: step.job, say: step.say }); if (!c.ok) return { ok: false, reason: `${at}: ${c.reason}` };
       const o = c.order, kinds = oc.jobs ?? [];
-      if (o.job && !kinds.some(j => j.id === o.job)) return { ok: false, reason: `${at}: its band has no kind "${o.job}": ${kinds.length ? `the kinds are ${listWords(kinds.map(j => `"${j.id}" (${j.name})`))}` : "there are no kinds to give a job to"}.` };
+      if (o.job && !kinds.some(j => j.id === o.job)) return { ok: false, reason: `${at}: {their} band has no kind "${o.job}": ${kinds.length ? `the kinds are ${listWords(kinds.map(j => `"${j.id}" (${j.name})`))}` : "there are no kinds to give a job to"}.` };
       const mine = o.target && (ctx.allyLabels?.includes?.(o.target) || !!ctx.allies?.[o.target]);
-      if (o.target && !mine && !ctx.targets?.[o.target]) return { ok: false, reason: `${at}: it can only send its band at a creature it perceives itself, and it doesn't perceive "${o.target}".` };
+      if (o.target && !mine && !ctx.targets?.[o.target]) return { ok: false, reason: `${at}: {they} can only send {their} band at a creature {they} {perceives|perceive} {themself}, and {they} {doesn't|don't} perceive "${o.target}".` };
       steps.push({ do: "order", order: o, words: orderWords(o, { ally: !!mine, jobName: kinds.find(j => j.id === o.job)?.name ?? "", fallBack: oc.fallBack ?? "" }) }); ordered = true; continue;
     }
     /* a sentence to the party (0.29.0, Rhea's R3-7): speech, so it costs no action; one a round; a yield ends the plan, and a creature with no
        language can still yield by what it does */
     if (step.do === "say") {
-      const sc = ctx.speech ?? { say: { ok: false, why: "it can't speak to them here" }, yield: { ok: false, why: "it can't yield here" } };
+      const sc = ctx.speech ?? { say: { ok: false, why: "{they} can't speak to them here" }, yield: { ok: false, why: "{they} can't yield here" } };
       if (said) return { ok: false, reason: `${at}: one sentence a round: this plan already has one.` };
       const c = cleanSay({ intent: step.intent, say: step.say }); if (!c.ok) return { ok: false, reason: `${at}: ${c.reason}` };
       const isYield = c.say.intent === "yield";
-      if (isYield && !sc.yield?.ok) return { ok: false, reason: `${at}: it can't yield now: ${sc.yield?.why}.` };
-      if (!isYield && !sc.say?.ok) return { ok: false, reason: `${at}: it can't speak to them now: ${sc.say?.why}.` };
+      if (isYield && !sc.yield?.ok) return { ok: false, reason: `${at}: {they} can't yield now: ${sc.yield?.why}.` };
+      if (!isYield && !sc.say?.ok) return { ok: false, reason: `${at}: {they} can't speak to them now: ${sc.say?.why}.` };
       /* its last action may end the turn before it speaks (a re-plan with no actions left ends it), as for an order */
-      if (n > 0 && left <= 0) return { ok: false, reason: `${at}: ${isYield ? "yield" : "say it"} before its last action, not after: once its actions are spent the turn can end before it speaks.` };
+      if (n > 0 && left <= 0) return { ok: false, reason: `${at}: ${isYield ? "yield" : "say it"} before {their} last action, not after: once {their} actions are spent the turn can end before {they} {speaks|speak}.` };
       const words = sc.say?.ok ? c.say.words : "";   /* one that can't speak now yields without words */
       steps.push({ do: "say", intent: c.say.intent, ...(words ? { say: words } : {}) }); said = true; gaveUp = isYield; continue;
     }
@@ -193,53 +198,53 @@ export function checkPlan(plan, ctx) {
        handler perceives, a square, or "stay") */
     if (step.do === "command-animal") {
       const cc = ctx.command ?? { animals: {} };
-      if (typeof step.target !== "string") return { ok: false, reason: `${at}: a "command-animal" step needs "target": the label of the animal it commands (one of its "allies").` };
+      if (typeof step.target !== "string") return { ok: false, reason: `${at}: a "command-animal" step needs "target": the label of the animal {they} {commands|command} (one of {their} "allies").` };
       const a = cc.animals?.[step.target] ?? null;
-      if (!a) return { ok: false, reason: ctx.targets?.[step.target] ? `${at}: it can't command ${step.target}: it is hostile or unfriendly to it (Command an Animal fails at once on such an animal).` : `${at}: it doesn't know of "${step.target}" as one of its allies.` };
-      if (!a.ok) return { ok: false, reason: `${at}: it can't command ${step.target}: ${a.why}.` };
+      if (!a) return { ok: false, reason: ctx.targets?.[step.target] ? `${at}: {they} can't command ${step.target}: ${step.target} is hostile or unfriendly to {them} (Command an Animal fails at once on such an animal).` : `${at}: {they} {doesn't|don't} know of "${step.target}" as one of {their} allies.` };
+      if (!a.ok) return { ok: false, reason: `${at}: {they} can't command ${step.target}: ${a.why}.` };
       if (commanded.has(step.target)) return { ok: false, reason: `${at}: ${step.target} already gets a command in this plan (one instruction for its next turn).` };
       const c = cleanCommand({ instruction: step.instruction, foe: step.foe, to: step.to }); if (!c.ok) return { ok: false, reason: `${at}: ${c.reason}` };
       if (c.command.foe) {
-        if (ctx.allies?.[c.command.foe] || ctx.allyLabels?.includes?.(c.command.foe)) return { ok: false, reason: `${at}: "${c.command.foe}" is on its side: an animal is set on a creature its handler fights.` };
-        if (!ctx.targets?.[c.command.foe]) return { ok: false, reason: `${at}: it can only set an animal on a creature it perceives itself, and it doesn't perceive "${c.command.foe}".` };
+        if (ctx.allies?.[c.command.foe] || ctx.allyLabels?.includes?.(c.command.foe)) return { ok: false, reason: `${at}: "${c.command.foe}" is on {their} side: an animal is set on a creature {their} handler fights.` };
+        if (!ctx.targets?.[c.command.foe]) return { ok: false, reason: `${at}: {they} can only set an animal on a creature {they} {perceives|perceive} {themself}, and {they} {doesn't|don't} perceive "${c.command.foe}".` };
       }
       commanded.add(step.target);
-      steps.push({ do: "command-animal", target: step.target, targetName: a.name ?? step.target, ...c.command, words: commandWords(c.command), ...(cc.deafened ? { flat: DEAF_FLAT } : {}) }); last = { do: "command-animal" }; continue;
+      steps.push({ do: "command-animal", target: step.target, targetName: a.name ?? step.target, ...c.command, words: commandWords(c.command, a.pro ?? IT), ...(cc.deafened ? { flat: DEAF_FLAT } : {}) }); last = { do: "command-animal" }; continue;
     }
     /* Point Out (0.30.0, q-18): one action, auditory, manipulate and visual; a creature it sees that at least one of its allies has lost */
     if (step.do === "point-out") {
-      if (ctx.cantAttack) return { ok: false, reason: `${at}: it is restrained, so it can't Point Out (a manipulate action).` };
-      if (typeof step.target !== "string") return { ok: false, reason: `${at}: a "point-out" step needs "target": the label of the creature it points out.` };
-      if (ctx.allies?.[step.target] || ctx.allyLabels?.includes?.(step.target)) return { ok: false, reason: `${at}: "${step.target}" is on its side: it points out a creature its allies have lost track of.` };
-      if (!ctx.targets?.[step.target]) return { ok: false, reason: `${at}: it doesn't know of "${step.target}".` };
-      const p = ctx.pointOut?.[step.target] ?? { ok: false, why: "it can't point that creature out here" };
-      if (!p.ok) return { ok: false, reason: `${at}: it can't Point Out ${step.target}: ${p.why}.` };
+      if (ctx.cantAttack) return { ok: false, reason: `${at}: {they} {is|are} restrained, so {they} can't Point Out (a manipulate action).` };
+      if (typeof step.target !== "string") return { ok: false, reason: `${at}: a "point-out" step needs "target": the label of the creature {they} {points|point} out.` };
+      if (ctx.allies?.[step.target] || ctx.allyLabels?.includes?.(step.target)) return { ok: false, reason: `${at}: "${step.target}" is on {their} side: {they} {points|point} out a creature {their} allies have lost track of.` };
+      if (!ctx.targets?.[step.target]) return { ok: false, reason: `${at}: {they} {doesn't|don't} know of "${step.target}".` };
+      const p = ctx.pointOut?.[step.target] ?? { ok: false, why: "{they} can't point that creature out here" };
+      if (!p.ok) return { ok: false, reason: `${at}: {they} can't Point Out ${step.target}: ${p.why}.` };
       if (pointed.has(step.target)) return { ok: false, reason: `${at}: this plan already points ${step.target} out.` };
       pointed.add(step.target);
       steps.push({ do: "point-out", target: step.target, targetName: ctx.targets[step.target].name ?? step.target, ...(ctx.grabbed ? { flat: GRABBED_FLAT } : {}) }); last = { do: "point-out" }; continue;
     }
     if (step.do === "delay") {
       if (n > 0 || plan.steps.length > 1) return { ok: false, reason: `${at}: a delay has to be the plan's only step: it is a free action taken as the turn begins, and the rest of the turn doesn't happen yet.` };
-      if (!ctx.fresh) return { ok: false, reason: `${at}: it has already acted this turn, so it can't Delay now (Delay is taken as the turn begins).` };
-      if (typeof step.after !== "string") return { ok: false, reason: `${at}: a delay needs "after": the label of the creature whose turn it waits for (a creature in "perceived" or "allies" that acts later this round).` };
+      if (!ctx.fresh) return { ok: false, reason: `${at}: {they} {has|have} already acted this turn, so {they} can't Delay now (Delay is taken as the turn begins).` };
+      if (typeof step.after !== "string") return { ok: false, reason: `${at}: a delay needs "after": the label of the creature whose turn {they} {waits|wait} for (a creature in "perceived" or "allies" that acts later this round).` };
       const o = ctx.order ?? {};
-      if (!(step.after in o)) return { ok: false, reason: `${at}: it doesn't know of "${step.after}" as a creature in this fight.` };
-      if (o[step.after] === "self") return { ok: false, reason: `${at}: it can't delay until after its own turn.` };
-      if (o[step.after] !== "later") return { ok: false, reason: `${at}: ${step.after} has already acted this round. Delaying until after a turn that has passed would lose this turn's actions (the rules put it back at its own place), so name a creature whose turn is still to come this round, or act now.` };
+      if (!(step.after in o)) return { ok: false, reason: `${at}: {they} {doesn't|don't} know of "${step.after}" as a creature in this fight.` };
+      if (o[step.after] === "self") return { ok: false, reason: `${at}: {they} can't delay until after {their} own turn.` };
+      if (o[step.after] !== "later") return { ok: false, reason: `${at}: ${step.after} has already acted this round. Delaying until after a turn that has passed would lose this turn's actions (the rules put {them} back at {their} own place), so name a creature whose turn is still to come this round, or act now.` };
       steps.push({ do: "delay", after: step.after }); last = { do: "delay" }; continue;
     }
     if (step.do === "interact") {
       /* Rules: Interact (Player Core, https://2e.aonprd.com/Actions.aspx?ID=2296): 1 action, manipulate. Restrained bars it; Grabbed asks a DC 5 flat check. */
-      if (ctx.cantAttack) return { ok: false, reason: `${at}: it is restrained, so it can't Interact (a manipulate action).` };
+      if (ctx.cantAttack) return { ok: false, reason: `${at}: {they} {is|are} restrained, so {they} can't Interact (a manipulate action).` };
       const what = typeof step.what === "string" ? step.what.trim() : "";
-      if (!what) return { ok: false, reason: `${at}: an interact needs "what": a few words saying what it does with its hands (draw a weapon, open a door, pick something up), for the GM to apply.` };
+      if (!what) return { ok: false, reason: `${at}: an interact needs "what": a few words saying what {they} {does|do} with {their} hands (draw a weapon, open a door, pick something up), for the GM to apply.` };
       steps.push({ do: "interact", what: what.slice(0, INTERACT_MAX), ...(ctx.grabbed ? { flat: GRABBED_FLAT } : {}) }); last = { do: "interact" }; continue;
     }
     if (step.do in POSTURES) {
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
-      if (step.do === "stand" && !prone) return { ok: false, reason: `${at}: it isn't prone, so it has nothing to Stand up from.` };
-      if (step.do === "drop-prone" && prone) return { ok: false, reason: `${at}: it is already prone.` };
-      if (step.do === "drop-prone" && hereElev > 0) return { ok: false, reason: `${at}: it is ${Math.round(hereElev)} ft up, and a creature knocked or dropping prone in the air falls instead.` };
+      if (step.do === "stand" && !prone) return { ok: false, reason: `${at}: {they} {isn't|aren't} prone, so {they} {has|have} nothing to Stand up from.` };
+      if (step.do === "drop-prone" && prone) return { ok: false, reason: `${at}: {they} {is|are} already prone.` };
+      if (step.do === "drop-prone" && hereElev > 0) return { ok: false, reason: `${at}: {they} {is|are} ${Math.round(hereElev)} ft up, and a creature knocked or dropping prone in the air falls instead.` };
       /* a Take Cover taken while prone gives its greater cover against ranged attacks only while prone, so Standing ends it (Visioner removes its effect) */
       if (step.do === "stand" && tookProne) took = tookProne = false;
       steps.push({ do: step.do }); prone = POSTURES[step.do]; last = { do: step.do }; continue;
@@ -247,10 +252,10 @@ export function checkPlan(plan, ctx) {
     if (step.do === "take-cover") {
       /* Rules: Take Cover (Player Core, https://2e.aonprd.com/Actions.aspx?ID=2307): standard cover, near a feature that allows it, or prone. It lasts until the
          creature moves from its space or makes an attack, so a Stride or a Strike earlier in the plan ends one already taken. */
-      if (took) return { ok: false, reason: `${at}: it is already Taking Cover.` };
+      if (took) return { ok: false, reason: `${at}: {they} {is|are} already Taking Cover.` };
       const from = moved ? null : Object.entries(ctx.coverFrom ?? {}).find(([, l]) => l === "standard" || l === "greater")?.[0] ?? null;
       const why = prone ? "prone" : here && ctx.nearCover?.(here, ctx.me?.size ?? 1) ? "near" : from ? "cover" : null;
-      if (!why) return { ok: false, reason: `${at}: Take Cover needs it to be prone, next to a wall or a trunk thick enough to hide behind, or behind standard cover from a creature it sees${moved ? ` (after a move in the same plan only a wall or trunk next to its new square counts, because cover from a square it isn't on yet can't be read)` : ""}.` };
+      if (!why) return { ok: false, reason: `${at}: Take Cover needs {them} to be prone, next to a wall or a trunk thick enough to hide behind, or behind standard cover from a creature {they} {sees|see}${moved ? ` (after a move in the same plan only a wall or trunk next to {their} new square counts, because cover from a square {they} {isn't|aren't} on yet can't be read)` : ""}.` };
       steps.push({ do: "take-cover", why, ...(why === "cover" ? { from } : {}) }); took = true; tookProne = why === "prone"; last = { do: "take-cover" }; continue;
     }
     if (step.do === "hide") {
@@ -261,11 +266,11 @@ export function checkPlan(plan, ctx) {
       const light = herePos && ctx.lightAt ? ctx.lightAt(herePos) : "bright", size = ctx.me?.size ?? 1;
       const from = moved ? [] : Object.entries(ctx.coverFrom ?? {}).filter(([, l]) => l === "standard" || l === "greater").map(([k]) => k);
       const why = from.length ? "cover" : took ? "taking-cover" : ctx.concealed ? "concealed" : light !== "bright" ? light : moved && here && ctx.nearCover?.(here, size) ? "near" : null;
-      if (!why) return { ok: false, reason: `${at}: Hide needs cover or concealment: standard cover from a creature it sees, Taking Cover, being concealed, or dim light or darkness where it stands (it's bright there)${moved ? `; after a move in the same plan only a wall or trunk next to its new square, or the light there, counts` : ""}.` };
+      if (!why) return { ok: false, reason: `${at}: Hide needs cover or concealment: standard cover from a creature {they} {sees|see}, Taking Cover, being concealed, or dim light or darkness where {they} {stands|stand} (it's bright there)${moved ? `; after a move in the same plan only a wall or trunk next to {their} new square, or the light there, counts` : ""}.` };
       steps.push({ do: "hide", why, ...(why === "cover" ? { from } : {}) }); last = { do: "hide" }; continue;
     }
     if (step.do === "seek") {
-      if (!here) return { ok: false, reason: `${at}: I can't tell where it stands.` };
+      if (!here) return { ok: false, reason: `${at}: I can't tell where {they} {stands|stand}.` };
       if ((step.at == null) === (step.toward == null)) return { ok: false, reason: `${at}: a Seek needs either "at": [x, y], a grid corner for a ${SEEK.burst}-foot burst within ${SEEK.range} ft, or "toward": [x, y], a square for a ${SEEK.cone}-foot cone from the monster.` };
       const key = step.at != null ? "at" : "toward", pt = step[key];
       if (!Array.isArray(pt) || pt.length !== 2 || !pt.every(Number.isInteger)) return { ok: false, reason: `${at}: "${key}" must be [x, y], two whole numbers.` };
@@ -276,7 +281,7 @@ export function checkPlan(plan, ctx) {
         if (d > SEEK.range) return { ok: false, reason: `${at}: the corner [${pt[0]}, ${pt[1]}] is ${d} ft away, and a Seek's ${SEEK.burst}-foot burst goes within ${SEEK.range} ft.` };
         aim = { type: "burst", corner: [...pt], size: SEEK.burst };
       } else {
-        if (pt[0] >= here[0] && pt[0] < here[0] + n && pt[1] >= here[1] && pt[1] < here[1] + n) return { ok: false, reason: `${at}: a Seek's cone points away from the monster, so name a square outside its own space.` };
+        if (pt[0] >= here[0] && pt[0] < here[0] + n && pt[1] >= here[1] && pt[1] < here[1] + n) return { ok: false, reason: `${at}: a Seek's cone points away from the monster, so name a square outside {their} own space.` };
         aim = { type: "cone", toward: [...pt], size: SEEK.cone };
       }
       steps.push({ do: "seek", aim }); sought = true; last = { do: "seek" }; continue;
@@ -284,10 +289,10 @@ export function checkPlan(plan, ctx) {
     if (step.do === "release") {
       /* Release (Player Core, https://2e.aonprd.com/Actions.aspx?ID=2300): a free action, manipulate, that drops something held. Restrained bars manipulate
          actions; Grabbed asks a DC 5 flat check, as for Interact. A Climb needs both hands free (Rhea, 2026-11-08: by the rule). */
-      if (ctx.cantAttack) return { ok: false, reason: `${at}: it is restrained, so it can't Release (a manipulate action).` };
+      if (ctx.cantAttack) return { ok: false, reason: `${at}: {they} {is|are} restrained, so {they} can't Release (a manipulate action).` };
       const want = typeof step.item === "string" ? step.item.trim().toLowerCase() : "";
       const hit = [...holding].find(([id, name]) => id.toLowerCase() === want || String(name).toLowerCase() === want);
-      if (!hit) return { ok: false, reason: `${at}: a release needs "item": the name of something it holds (${holding.size ? `it holds ${listWords([...holding.values()])}` : "it holds nothing"}).` };
+      if (!hit) return { ok: false, reason: `${at}: a release needs "item": the name of something {they} {holds|hold} (${holding.size ? `{they} {holds|hold} ${listWords([...holding.values()])}` : "{they} {holds|hold} nothing"}).` };
       holding.delete(hit[0]); released.add(hit[0]);
       steps.push({ do: "release", item: hit[0], itemName: hit[1], ...(ctx.grabbed ? { flat: GRABBED_FLAT } : {}) }); last = { do: "release" }; continue;
     }
@@ -297,25 +302,25 @@ export function checkPlan(plan, ctx) {
          off-guard; without one, an Athletics check (CLIMB_DC) for up to 5 ft (more with a fast land Speed), which may make no progress or, on a critical
          failure, drop it; it is off-guard while up there. Both hands must be free. */
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
-      if (prone) return { ok: false, reason: `${at}: it is prone, so it has to Stand first (a "stand" step, 1 action) before it can Climb.` };
-      if (!here) return { ok: false, reason: `${at}: I can't tell where it stands.` };
-      if (!(hereElev > 0) && ctx.waterAt?.(here)) return { ok: false, reason: `${at}: it is in deep water at [${here[0]}, ${here[1]}], so it moves by Swim.` };
-      if (holding.size) return { ok: false, reason: `${at}: a Climb needs both hands free, and it holds ${listWords([...holding.values()])}. A "release" step (a free action) drops what it holds on its square first.` };
+      if (prone) return { ok: false, reason: `${at}: {they} {is|are} prone, so {they} {has|have} to Stand first (a "stand" step, 1 action) before {they} can Climb.` };
+      if (!here) return { ok: false, reason: `${at}: I can't tell where {they} {stands|stand}.` };
+      if (!(hereElev > 0) && ctx.waterAt?.(here)) return { ok: false, reason: `${at}: {they} {is|are} in deep water at [${here[0]}, ${here[1]}], so {they} {moves|move} by Swim.` };
+      if (holding.size) return { ok: false, reason: `${at}: a Climb needs both hands free, and {they} {holds|hold} ${listWords([...holding.values()])}. A "release" step (a free action) drops what {they} {holds|hold} on {their} square first.` };
       let on = tree;
       if (!on) {
-        if (hereElev > 0) return { ok: false, reason: ctx.flySpeed > 0 ? `${at}: it is ${Math.round(hereElev)} ft up in the air, so it moves by Fly (a "fly" step); a Fly with "height": 0 lands it, and it can climb a tree from the ground.` : `${at}: it is ${Math.round(hereElev)} ft up on something that isn't a tree it climbed, so there is nothing to Climb there.` };
-        if (!ctx.treesAt) return { ok: false, reason: `${at}: I can't work out moves here, so I can't tell which trees are beside it.` };
+        if (hereElev > 0) return { ok: false, reason: ctx.flySpeed > 0 ? `${at}: {they} {is|are} ${Math.round(hereElev)} ft up in the air, so {they} {moves|move} by Fly (a "fly" step); a Fly with "height": 0 lands {them}, and {they} can climb a tree from the ground.` : `${at}: {they} {is|are} ${Math.round(hereElev)} ft up on something that isn't a tree {they} climbed, so there is nothing to Climb there.` };
+        if (!ctx.treesAt) return { ok: false, reason: `${at}: I can't work out moves here, so I can't tell which trees are beside {them}.` };
         const near = ctx.treesAt(here);
         if (Array.isArray(step.tree)) on = near.find(t => same(t.at, step.tree)) ?? null;
         else on = near[0] ?? null;
-        if (!on) return { ok: false, reason: Array.isArray(step.tree) ? `${at}: the tree at [${step.tree[0]}, ${step.tree[1]}] isn't beside it at [${here[0]}, ${here[1]}]${near.length ? ` (it could climb ${listWords(near.map(t => `the one at [${t.at[0]}, ${t.at[1]}]`))})` : ""}.` : `${at}: there is no tree beside it at [${here[0]}, ${here[1]}] to Climb ("you.climb.trees" lists the trees near it: Stride next to one first).` };
-      } else if (Array.isArray(step.tree) && !same(step.tree, on.at)) return { ok: false, reason: `${at}: it is up the tree at [${on.at[0]}, ${on.at[1]}], so it can only Climb that one until it is down.` };
+        if (!on) return { ok: false, reason: Array.isArray(step.tree) ? `${at}: the tree at [${step.tree[0]}, ${step.tree[1]}] isn't beside {them} at [${here[0]}, ${here[1]}]${near.length ? ` ({they} could climb ${listWords(near.map(t => `the one at [${t.at[0]}, ${t.at[1]}]`))})` : ""}.` : `${at}: there is no tree beside {them} at [${here[0]}, ${here[1]}] to Climb ("you.climb.trees" lists the trees near {them}: Stride next to one first).` };
+      } else if (Array.isArray(step.tree) && !same(step.tree, on.at)) return { ok: false, reason: `${at}: {they} {is|are} up the tree at [${on.at[0]}, ${on.at[1]}], so {they} can only Climb that one until {they} {is|are} down.` };
       const height = step.height;
-      if (!Number.isInteger(height) || height < 0 || height % FT) return { ok: false, reason: `${at}: a Climb needs "height": how high it ends up the tree, in feet above the ground: 0 or more, in steps of ${FT}.` };
-      if (height === hereElev) return { ok: false, reason: `${at}: it is already ${height} ft up; a Climb goes up or down.` };
-      if (height > on.top) return { ok: false, reason: `${at}: the tree at [${on.at[0]}, ${on.at[1]}] is about ${on.top} ft tall, so it can Climb to ${on.top} ft at most.` };
+      if (!Number.isInteger(height) || height < 0 || height % FT) return { ok: false, reason: `${at}: a Climb needs "height": how high {they} {ends|end} up the tree, in feet above the ground: 0 or more, in steps of ${FT}.` };
+      if (height === hereElev) return { ok: false, reason: `${at}: {they} {is|are} already ${height} ft up; a Climb goes up or down.` };
+      if (height > on.top) return { ok: false, reason: `${at}: the tree at [${on.at[0]}, ${on.at[1]}] is about ${on.top} ft tall, so {they} can Climb to ${on.top} ft at most.` };
       const climber = ctx.climbSpeed > 0, limit = climber ? ctx.climbSpeed : climbDistance(ctx.speed ?? 0, 2), far = Math.abs(height - hereElev);
-      if (far > limit) return { ok: false, reason: climber ? `${at}: climbing from ${hereElev} to ${height} ft is ${far} ft, more than its climb Speed of ${ctx.climbSpeed} ft.` : `${at}: climbing from ${hereElev} to ${height} ft is ${far} ft, and with no climb Speed a Climb goes at most ${limit} ft (on a success; an Athletics check).` };
+      if (far > limit) return { ok: false, reason: climber ? `${at}: climbing from ${hereElev} to ${height} ft is ${far} ft, more than {their} climb Speed of ${ctx.climbSpeed} ft.` : `${at}: climbing from ${hereElev} to ${height} ft is ${far} ft, and with no climb Speed a Climb goes at most ${limit} ft (on a success; an Athletics check).` };
       steps.push({ do: "climb", tree: [...on.at], top: on.top, fromHeight: hereElev, height, ...(climber ? { climbSpeed: ctx.climbSpeed } : { dc: CLIMB_DC }) });
       hereElev = height; tree = height > 0 ? on : null; moved = true; took = tookProne = false; last = { do: "climb" }; continue;   /* leaving its space up or down ends Take Cover, as a Fly does */
     }
@@ -323,17 +328,17 @@ export function checkPlan(plan, ctx) {
       /* Fly (Rhea, 2026-11-08: a monster moves the way its speeds and the ground allow, by the rules; Rules ID 2344): its fly Speed, ground terrain and
          deep water no bar, height priced by heightCost. Flying to where it is, at the same height, is a hover (Fly 0 ft), which keeps it aloft. */
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
-      if (prone) return { ok: false, reason: `${at}: it is prone, so it has to Stand first (a "stand" step, 1 action) before it can Fly.` };
-      if (!(ctx.flySpeed > 0)) return { ok: false, reason: `${at}: it has no fly Speed.` };
+      if (prone) return { ok: false, reason: `${at}: {they} {is|are} prone, so {they} {has|have} to Stand first (a "stand" step, 1 action) before {they} can Fly.` };
+      if (!(ctx.flySpeed > 0)) return { ok: false, reason: `${at}: {they} {has|have} no fly Speed.` };
       const to = step.to ?? here, height = step.height ?? hereElev;
-      if (!Array.isArray(to)) return { ok: false, reason: `${at}: a Fly needs "to", the square to end on (its own square to hover or change height there).` };
+      if (!Array.isArray(to)) return { ok: false, reason: `${at}: a Fly needs "to", the square to end on ({their} own square to hover or change height there).` };
       /* the height it has is always fine, even one the GM set off the 5-ft steps (7 ft): a hover there keeps it up */
-      if (height !== hereElev && (!Number.isInteger(height) || height < 0 || height % FT)) return { ok: false, reason: `${at}: "height" is how high it ends, in feet above the ground: 0 or more, in steps of ${FT}.` };
+      if (height !== hereElev && (!Number.isInteger(height) || height < 0 || height % FT)) return { ok: false, reason: `${at}: "height" is how high {they} {ends|end}, in feet above the ground: 0 or more, in steps of ${FT}.` };
       if (!here || !ctx.route) return { ok: false, reason: `${at}: I can't work out moves here.` };
       let route = [[...here]], cost = 0;
       if (!same(here, to)) { const way = ctx.route(here, to, routes, { kind: "fly" }); if (!way.ok) return { ok: false, reason: `${at}: ${way.reason}` }; route = way.route; cost = way.cost; }
       const up = heightCost(route.length - 1, height - hereElev), total = cost + up;
-      if (total > ctx.flySpeed) return { ok: false, reason: `${at}: flying to [${to[0]}, ${to[1]}] at ${height} ft up takes ${total} ft (${cost} ft across${up ? `, ${up} ft for the height` : ""}), more than its fly Speed of ${ctx.flySpeed} ft. Rising costs double; dropping straight down costs half.` };
+      if (total > ctx.flySpeed) return { ok: false, reason: `${at}: flying to [${to[0]}, ${to[1]}] at ${height} ft up takes ${total} ft (${cost} ft across${up ? `, ${up} ft for the height` : ""}), more than {their} fly Speed of ${ctx.flySpeed} ft. Rising costs double; dropping straight down costs half.` };
       steps.push({ do: "fly", from: [...here], to: [...to], fromHeight: hereElev, height, route, cost: total }); if (route.length > 1) routes.push(route);
       const shifted = route.length > 1 || height !== hereElev; here = [...to]; herePos = here; hereElev = height; if (shifted) tree = null; moved = moved || shifted; if (shifted) took = tookProne = false; last = { do: "fly" }; continue;   /* Take Cover ends on leaving its space, up or down too, not on a hover */
     }
@@ -345,14 +350,14 @@ export function checkPlan(plan, ctx) {
          sinking at the end of the turn. */
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
       if (tree) return { ok: false, reason: `${at}: ${upTree("Swim")}` };
-      if (hereElev > 0 && ctx.flySpeed > 0) return { ok: false, reason: `${at}: it is ${Math.round(hereElev)} ft up in the air, so it moves by Fly (a "fly" step); a Fly with "height": 0 lands it.` };
-      if (prone) return { ok: false, reason: `${at}: it is prone, so it has to Stand first (a "stand" step, 1 action) before it can Swim.` };
+      if (hereElev > 0 && ctx.flySpeed > 0) return { ok: false, reason: `${at}: {they} {is|are} ${Math.round(hereElev)} ft up in the air, so {they} {moves|move} by Fly (a "fly" step); a Fly with "height": 0 lands {them}.` };
+      if (prone) return { ok: false, reason: `${at}: {they} {is|are} prone, so {they} {has|have} to Stand first (a "stand" step, 1 action) before {they} can Swim.` };
       if (!here || !ctx.route || !ctx.waterAt || !ctx.waterIn) return { ok: false, reason: `${at}: I can't work out moves here.` };
-      const to = step.to ?? here; if (!Array.isArray(to)) return { ok: false, reason: `${at}: a Swim needs "to", the square to end on (its own square to tread water).` };
+      const to = step.to ?? here; if (!Array.isArray(to)) return { ok: false, reason: `${at}: a Swim needs "to", the square to end on ({their} own square to tread water).` };
       /* waterIn: any deep water under its footprint there (a Large creature half on the bank is in the water); waterAt: all of it */
       const endW = ctx.waterAt(to);
       let route = [[...here]], cost = 0;
-      if (same(here, to)) { if (!ctx.waterIn(here)) return { ok: false, reason: `${at}: it isn't in deep water at [${here[0]}, ${here[1]}], so there is nothing to swim in.` }; }
+      if (same(here, to)) { if (!ctx.waterIn(here)) return { ok: false, reason: `${at}: {they} {isn't|aren't} in deep water at [${here[0]}, ${here[1]}], so there is nothing to swim in.` }; }
       else {
         const way = ctx.route(here, to, routes, { kind: "swim" }); if (!way.ok) return { ok: false, reason: `${at}: ${way.reason}` };
         route = way.route; cost = way.cost;
@@ -360,7 +365,7 @@ export function checkPlan(plan, ctx) {
       }
       const flowing = route.some(sq => ctx.waterIn(sq) === "flowing"), swimmer = ctx.swimSpeed > 0;
       const limit = swimmer ? ctx.swimSpeed : swimDistance(ctx.speed ?? 0, flowing ? 2 : 3);
-      if (cost > limit) return { ok: false, reason: swimmer ? `${at}: swimming to [${to[0]}, ${to[1]}] takes ${cost} ft, more than its swim Speed of ${ctx.swimSpeed} ft.` : `${at}: swimming to [${to[0]}, ${to[1]}] takes ${cost} ft, and with no swim Speed a Swim goes at most ${limit} ft in ${flowing ? "flowing water (on a success; an Athletics check)" : "calm water (an automatic critical success)"}.` };
+      if (cost > limit) return { ok: false, reason: swimmer ? `${at}: swimming to [${to[0]}, ${to[1]}] takes ${cost} ft, more than {their} swim Speed of ${ctx.swimSpeed} ft.` : `${at}: swimming to [${to[0]}, ${to[1]}] takes ${cost} ft, and with no swim Speed a Swim goes at most ${limit} ft in ${flowing ? "flowing water (on a success; an Athletics check)" : "calm water (an automatic critical success)"}.` };
       steps.push({ do: "swim", from: [...here], to: [...to], route, cost, water: flowing ? "flowing" : "calm", ...(swimmer ? { swimSpeed: ctx.swimSpeed } : {}), ...(!swimmer && flowing ? { dc: SWIM_DC } : {}), ...(endW ? {} : { out: true }) });
       if (route.length > 1) { routes.push(route); moved = true; took = tookProne = false; }
       here = [...to]; herePos = here; last = { do: "swim" }; continue;
@@ -370,24 +375,24 @@ export function checkPlan(plan, ctx) {
          never rock (Rhea, 2026-11-08: crag and solid features are rock; on maps the module can't read, Angel judges the soil). One depth, 5 ft down:
          going down or coming up adds 5 ft (Angel's reading), and it leaves no tunnel. "up": true ends at the surface on a square free of creatures. */
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
-      if (!(ctx.burrowSpeed > 0)) return { ok: false, reason: `${at}: it has no burrow Speed.` };
+      if (!(ctx.burrowSpeed > 0)) return { ok: false, reason: `${at}: {they} {has|have} no burrow Speed.` };
       if (tree) return { ok: false, reason: `${at}: ${upTree("Burrow")}` };
-      if (hereElev > 0) return { ok: false, reason: `${at}: it is ${Math.round(hereElev)} ft up${ctx.flySpeed > 0 ? `, so it has to land first (a "fly" step with "height": 0)` : ""}; it can only burrow from the ground.` };
-      if (prone) return { ok: false, reason: `${at}: it is prone, so it has to Stand first (a "stand" step, 1 action) before it can Burrow.` };
+      if (hereElev > 0) return { ok: false, reason: `${at}: {they} {is|are} ${Math.round(hereElev)} ft up${ctx.flySpeed > 0 ? `, so {they} {has|have} to land first (a "fly" step with "height": 0)` : ""}; {they} can only burrow from the ground.` };
+      if (prone) return { ok: false, reason: `${at}: {they} {is|are} prone, so {they} {has|have} to Stand first (a "stand" step, 1 action) before {they} can Burrow.` };
       if (!here || !ctx.route || !ctx.soilAt) return { ok: false, reason: `${at}: I can't work out moves here.` };
-      if (!below && ctx.waterAt?.(here)) return { ok: false, reason: `${at}: it is in deep water at [${here[0]}, ${here[1]}]; it can only burrow into ${ctx.glides ? "earth or rock" : "soil"}.` };
+      if (!below && ctx.waterAt?.(here)) return { ok: false, reason: `${at}: {they} {is|are} in deep water at [${here[0]}, ${here[1]}]; {they} can only burrow into ${ctx.glides ? "earth or rock" : "soil"}.` };
       if (step.up != null && typeof step.up !== "boolean") return { ok: false, reason: `${at}: "up" is true (come up to the surface at the end) or left out (stay below).` };
       const to = step.to ?? here, up = step.up === true, endBelow = !up, across = !same(here, to);
-      if (!Array.isArray(to)) return { ok: false, reason: `${at}: a Burrow needs "to", the square to end on (its own square to go down or come up there).` };
-      if (!across && below === endBelow) return { ok: false, reason: below ? `${at}: it is already below ground at [${here[0]}, ${here[1]}]: give "to" another square, or "up": true to come up.` : `${at}: a Burrow on its own square goes down, so leave out "up" (or name another square).` };
-      if (!below && !ctx.soilAt(here)) return { ok: false, reason: ctx.glides ? `${at}: it can't burrow down at [${here[0]}, ${here[1]}]: something it can't glide through is there.` : `${at}: the ground at [${here[0]}, ${here[1]}] is rock (or not soil it can dig through), so it can't burrow down there.` };
+      if (!Array.isArray(to)) return { ok: false, reason: `${at}: a Burrow needs "to", the square to end on ({their} own square to go down or come up there).` };
+      if (!across && below === endBelow) return { ok: false, reason: below ? `${at}: {they} {is|are} already below ground at [${here[0]}, ${here[1]}]: give "to" another square, or "up": true to come up.` : `${at}: a Burrow on {their} own square goes down, so leave out "up" (or name another square).` };
+      if (!below && !ctx.soilAt(here)) return { ok: false, reason: ctx.glides ? `${at}: {they} can't burrow down at [${here[0]}, ${here[1]}]: something {they} can't glide through is there.` : `${at}: the ground at [${here[0]}, ${here[1]}] is rock (or not soil {they} can dig through), so {they} can't burrow down there.` };
       /* coming up: only onto open floor (a glider can be below rock or a stone wall, but can't come up inside it) */
-      if (up && ctx.surfaceAt && !ctx.surfaceAt(to)) return { ok: false, reason: `${at}: it can't come up at [${to[0]}, ${to[1]}]: that is solid rock, a wall or deep water, not open floor.` };
+      if (up && ctx.surfaceAt && !ctx.surfaceAt(to)) return { ok: false, reason: `${at}: {they} can't come up at [${to[0]}, ${to[1]}]: that is solid rock, a wall or deep water, not open floor.` };
       let route = [[...here]], cost = 0;
       if (across) { const way = ctx.route(here, to, routes, { kind: "burrow", surface: up }); if (!way.ok) return { ok: false, reason: `${at}: ${way.reason}` }; route = way.route; cost = way.cost; }
-      else if (up && ctx.occupiedAt?.(to)) return { ok: false, reason: `${at}: another creature is at [${to[0]}, ${to[1]}], so it can't come up there.` };
+      else if (up && ctx.occupiedAt?.(to)) return { ok: false, reason: `${at}: another creature is at [${to[0]}, ${to[1]}], so {they} can't come up there.` };
       const total = cost + burrowVertical(below, endBelow, across);
-      if (total > ctx.burrowSpeed) return { ok: false, reason: `${at}: burrowing to [${to[0]}, ${to[1]}]${up ? " and coming up" : ""} takes ${total} ft (${cost} ft across${total > cost ? `, ${total - cost} ft going down or up` : ""}), more than its burrow Speed of ${ctx.burrowSpeed} ft.` };
+      if (total > ctx.burrowSpeed) return { ok: false, reason: `${at}: burrowing to [${to[0]}, ${to[1]}]${up ? " and coming up" : ""} takes ${total} ft (${cost} ft across${total > cost ? `, ${total - cost} ft going down or up` : ""}), more than {their} burrow Speed of ${ctx.burrowSpeed} ft.` };
       steps.push({ do: "burrow", from: [...here], to: [...to], route, cost: total, fromBelow: below, below: endBelow });
       if (route.length > 1) routes.push(route);
       if (below && !endBelow) surfaced = true;   /* asked again at the surface, uncounted, with what it perceives there (0.16.0 review) */
@@ -397,40 +402,40 @@ export function checkPlan(plan, ctx) {
       const word = WORD[step.do], small = ONE_SQUARE.includes(step.do);
       if (ctx.cantMove) return { ok: false, reason: `${at}: ${ctx.cantMove}` };
       if (tree) return { ok: false, reason: `${at}: ${upTree(word)}` };
-      if (hereElev > 0 && ctx.flySpeed > 0) return { ok: false, reason: `${at}: it is ${Math.round(hereElev)} ft up in the air, so it moves by Fly (a "fly" step); a Fly with "height": 0 lands it.` };
-      if (!(hereElev > 0) && ctx.waterAt?.(here)) return { ok: false, reason: `${at}: it is in deep water at [${here[0]}, ${here[1]}], so it moves by Swim (a "swim" step), which can end on the bank; it can't ${word} there.` };
-      if (step.do === "crawl" && !prone) return { ok: false, reason: `${at}: it isn't prone; Crawl is how a prone creature moves, so Stride or Step instead.` };
-      if (step.do !== "crawl" && prone) return { ok: false, reason: `${at}: it is prone, so it has to Stand first (a "stand" step, 1 action) before it can ${word}, or Crawl 5 ft.` };
-      if (!(ctx.speed > 0)) return { ok: false, reason: `${at}: it has no land Speed.` };
+      if (hereElev > 0 && ctx.flySpeed > 0) return { ok: false, reason: `${at}: {they} {is|are} ${Math.round(hereElev)} ft up in the air, so {they} {moves|move} by Fly (a "fly" step); a Fly with "height": 0 lands {them}.` };
+      if (!(hereElev > 0) && ctx.waterAt?.(here)) return { ok: false, reason: `${at}: {they} {is|are} in deep water at [${here[0]}, ${here[1]}], so {they} {moves|move} by Swim (a "swim" step), which can end on the bank; {they} can't ${word} there.` };
+      if (step.do === "crawl" && !prone) return { ok: false, reason: `${at}: {they} {isn't|aren't} prone; Crawl is how a prone creature moves, so Stride or Step instead.` };
+      if (step.do !== "crawl" && prone) return { ok: false, reason: `${at}: {they} {is|are} prone, so {they} {has|have} to Stand first (a "stand" step, 1 action) before {they} can ${word}, or Crawl 5 ft.` };
+      if (!(ctx.speed > 0)) return { ok: false, reason: `${at}: {they} {has|have} no land Speed.` };
       const limit = step.do === "sneak" ? sneakSpeed(ctx.speed) : ctx.speed;
       if (!(limit > 0)) return { ok: false, reason: `${at}: a Sneak moves at half Speed, and half of ${ctx.speed} ft is less than a square.` };
-      if (small && ctx.speed < 2 * STEP_FT) return { ok: false, reason: `${at}: a ${word} needs a Speed of at least ${2 * STEP_FT} ft, and its Speed is ${ctx.speed} ft.` };
+      if (small && ctx.speed < 2 * STEP_FT) return { ok: false, reason: `${at}: a ${word} needs a Speed of at least ${2 * STEP_FT} ft, and {their} Speed is ${ctx.speed} ft.` };
       /* the party's side never flees in a plan (0.18.0): said first, so the refusal names the real reason, not the distance */
-      if (step.do === "flee" && ctx.party) return { ok: false, reason: `${at}: it fights on the party's side, and leaving the fight off the map is for the GM to decide, not a plan step.` };
+      if (step.do === "flee" && ctx.party) return { ok: false, reason: `${at}: {they} {fights|fight} on the party's side, and leaving the fight off the map is for the GM to decide, not a plan step.` };
       if (!Array.isArray(step.to)) return { ok: false, reason: `${at}: a ${word} needs "to", the square to end on.` };
       if (!here || !ctx.route) return { ok: false, reason: `${at}: I can't work out moves here.` };
-      if (same(here, step.to)) return { ok: false, reason: `${at}: it is already at [${step.to[0]}, ${step.to[1]}].` };
+      if (same(here, step.to)) return { ok: false, reason: `${at}: {they} {is|are} already at [${step.to[0]}, ${step.to[1]}].` };
       const way = ctx.route(here, step.to, routes, { step: small, kind: step.do });
       if (!way.ok) return { ok: false, reason: `${at}: ${way.reason}` };
       if (small && way.cost > STEP_FT) return { ok: false, reason: `${at}: ${step.do === "crawl" ? "crawling" : "stepping"} to [${step.to[0]}, ${step.to[1]}] counts as ${way.cost} ft, and a ${word} moves only ${STEP_FT} ft${way.route?.length === 2 && way.route[0][0] !== way.route[1][0] && way.route[0][1] !== way.route[1][1] ? " (every second diagonal in a turn counts 10 ft)" : ""}.` };
-      if (way.cost > limit) return { ok: false, reason: step.do === "sneak" ? `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, and a Sneak moves at most half its Speed (${limit} ft).` : `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, more than its Speed of ${ctx.speed} ft.` };
+      if (way.cost > limit) return { ok: false, reason: step.do === "sneak" ? `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, and a Sneak moves at most half {their} Speed (${limit} ft).` : `${at}: getting to [${step.to[0]}, ${step.to[1]}] takes ${way.cost} ft, more than {their} Speed of ${ctx.speed} ft.` };
       let sides = null;
       if (step.do === "flee") {
-        if (!ctx.edgeAt) return { ok: false, reason: `${at}: I can't tell where this map ends, so it can't flee off it here.` };
+        if (!ctx.edgeAt) return { ok: false, reason: `${at}: I can't tell where this map ends, so {they} can't flee off it here.` };
         sides = ctx.edgeAt(step.to, ctx.me?.size ?? 1);
-        if (!sides.length) return { ok: false, reason: `${at}: a flee has to end on the outermost ring of squares, at the map's edge; [${step.to[0]}, ${step.to[1]}] isn't on it. Stride toward the edge instead and flee once it is within reach.` };
+        if (!sides.length) return { ok: false, reason: `${at}: a flee has to end on the outermost ring of squares, at the map's edge; [${step.to[0]}, ${step.to[1]}] isn't on it. Stride toward the edge instead and flee once {they} {is|are} within reach.` };
       }
       steps.push({ do: step.do, from: [...here], to: [...step.to], route: way.route, cost: way.cost, ...(sides ? { sides } : {}) }); routes.push(way.route);
       if (step.do === "flee") fled = true;
       here = [...step.to]; herePos = here; moved = true; took = tookProne = false; last = { do: step.do }; continue;
     }
     if (ctx.cantAttack) return { ok: false, reason: `${at}: ${ctx.cantAttack}` };
-    const s = ctx.strikes.find(x => x.id === step.item); if (!s) return { ok: false, reason: `${at}: it has no attack called "${step.item}".` };
-    if (s.dropped || (s.weapon && released.has(s.weapon))) return { ok: false, reason: `${at}: its ${s.name} is on the ground${s.dropped ? "" : " (released earlier in this plan)"}, so it can't Strike with it.` };
-    const t = ctx.targets[step.target]; if (!t) return { ok: false, reason: ctx.allies?.[step.target] || ctx.allyLabels?.includes?.(step.target) ? `${at}: "${step.target}" is on its side: a Strike needs a creature it fights.` : `${at}: it doesn't know of "${step.target}".` };   /* an ally's label said "doesn't know of" until 0.19.0 */
+    const s = ctx.strikes.find(x => x.id === step.item); if (!s) return { ok: false, reason: `${at}: {they} {has|have} no attack called "${step.item}".` };
+    if (s.dropped || (s.weapon && released.has(s.weapon))) return { ok: false, reason: `${at}: {their} ${s.name} is on the ground${s.dropped ? "" : " (released earlier in this plan)"}, so {they} can't Strike with it.` };
+    const t = ctx.targets[step.target]; if (!t) return { ok: false, reason: ctx.allies?.[step.target] || ctx.allyLabels?.includes?.(step.target) ? `${at}: "${step.target}" is on {their} side: a Strike needs a creature {they} {fights|fight}.` : `${at}: {they} {doesn't|don't} know of "${step.target}".` };   /* an ally's label said "doesn't know of" until 0.19.0 */
     const where = steps.some(x => MOVES.includes(x.do)) ? ` from [${here[0]}, ${here[1]}]` : "";
     /* ammunition: shotsLeft is what the shot's own checks will let through (fight.mjs's ammoOf), counted through the plan */
-    if (s.shotsLeft != null) { const k = s.stack ?? s.id, n = (shots[k] ?? 0) + 1; if (n > s.shotsLeft) return { ok: false, reason: `${at}: it has ${s.shotsLeft ? `only ${s.shotsLeft} shot${s.shotsLeft === 1 ? "" : "s"}` : "no shots"} left with ${s.name} (${s.ammo ?? "ammunition"}).` }; shots[k] = n; }
+    if (s.shotsLeft != null) { const k = s.stack ?? s.id, n = (shots[k] ?? 0) + 1; if (n > s.shotsLeft) return { ok: false, reason: `${at}: {they} {has|have} ${s.shotsLeft ? `only ${s.shotsLeft} shot${s.shotsLeft === 1 ? "" : "s"}` : "no shots"} left with ${s.name} (${s.ammo ?? "ammunition"}).` }; shots[k] = n; }
     if (s.ranged) { const d = distanceTo(t, null); if (s.maxRange && d > s.maxRange) return { ok: false, reason: `${at}: ${t.name} is ${d} ft away${where}, out of range of ${s.name} (${s.maxRange} ft).` }; }
     else { const d = distanceTo(t, s.reach); if (d > s.reach) return { ok: false, reason: `${at}: ${t.name} is ${d} ft away${where}, out of reach of ${s.name} (${s.reach} ft).` }; }
     steps.push({ do: "strike", item: s.id, itemName: s.name, target: step.target, targetName: t.name ?? step.target, variant: Math.min(attacks, 2), flat: t.flat ?? 0 });
@@ -445,7 +450,7 @@ export function checkPlan(plan, ctx) {
 function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here, elev = 0 }) {
   const no = reason => ({ ok: false, reason: `${at}: ${reason}` }), traits = sp.traits ?? [];
   if (ctx.cantAttack && traits.includes("attack")) return no(ctx.cantAttack);
-  if (ctx.cantAttack && traits.includes("manipulate")) return no(`it is restrained, so it can't cast ${sp.name} (it has the manipulate trait).`);
+  if (ctx.cantAttack && traits.includes("manipulate")) return no(`{they} {is|are} restrained, so {they} can't cast ${sp.name} (it has the manipulate trait).`);
   if (sp.minActions == null || sp.maxActions == null) return no(`${sp.name} isn't cast as part of a turn (it's a reaction, or takes longer than a turn).`);
   let actions = sp.minActions;
   if (sp.minActions !== sp.maxActions) {
@@ -457,13 +462,13 @@ function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here, elev 
   const leftIn = r => r.pool == null ? Infinity : r.pool in pools ? pools[r.pool] : r.left, enough = r => leftIn(r) >= (r.cost ?? 1);   /* a focus spell can cost more than 1 point */
   const ranks = sp.ranks ?? [], open = ranks.filter(enough), list = ranks.map(r => r.rank).join(", ");
   const at_ = step.rank != null ? ranks.find(r => r.rank === step.rank) : open[0] ?? ranks[0];
-  if (step.rank != null && !at_) return no(`it can't cast ${sp.name} at rank ${step.rank} (it can at ${list || "no rank"}).`);
+  if (step.rank != null && !at_) return no(`{they} can't cast ${sp.name} at rank ${step.rank} ({they} can at ${list || "no rank"}).`);
   if (!at_ || !enough(at_)) return no(`${sp.name} has no ${step.rank != null ? `rank ${step.rank} ` : ""}uses or slots left${at_?.pool === "focus" ? ` (it costs ${at_.cost} focus point${at_.cost === 1 ? "" : "s"})` : ""}.`);
   /* the target: a creature it perceives, or one of its allies or itself */
   let t = null, tLabel = null;
   if (step.target) {
     if (!sp.targets && !sp.area) return no(`${sp.name} doesn't target a creature, so leave "target" out.`);
-    t = ctx.targets?.[step.target] ?? ctx.allies?.[step.target] ?? null; if (!t) return no(`it doesn't know of "${step.target}".`);
+    t = ctx.targets?.[step.target] ?? ctx.allies?.[step.target] ?? null; if (!t) return no(`{they} {doesn't|don't} know of "${step.target}".`);
     tLabel = step.target;
   } else if (sp.targets && !sp.area) return no(`${sp.name} needs a target: give "target", a label.`);
   if (t && (sp.range != null || sp.touch) && !sp.area && !sp.variants) {
@@ -478,10 +483,10 @@ function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here, elev 
     if (!r.ok) return no(`${sp.name}: ${r.reason}`);
     if (r.aim.type === "burst") {   /* a corner of a square within range: the nearest of the four squares round it; touch by its reach; no range: a corner of its own space */
       const c = r.aim.corner, n = ctx.me?.size ?? 1, range = sp.touch ? Math.max(5, ctx.reach ?? 5) : sp.range;
-      if (range == null) { if (!(c[0] >= here[0] && c[0] <= here[0] + n && c[1] >= here[1] && c[1] <= here[1] + n)) return no(`${sp.name} has no range, so its burst starts at a corner of the monster's own space.`); }
+      if (range == null) { if (!(c[0] >= here[0] && c[0] <= here[0] + n && c[1] >= here[1] && c[1] <= here[1] + n)) return no(`${sp.name} has no range, so {their} burst starts at a corner of the monster's own space.`); }
       else { const d = Math.min(...[[c[0] - 1, c[1] - 1], [c[0], c[1] - 1], [c[0] - 1, c[1]], [c[0], c[1]]].map(q => distanceTo({ square: q, size: 1 }, null))); if (d > range) return no(`the corner [${c[0]}, ${c[1]}] is ${d} ft away, beyond ${sp.name}'s range (${range} ft).`); }
     }
-    if (r.allies.length && !step.deliberate) return no(`${sp.name} there would also catch ${listWords(r.allies.map(l => l === r.self ? "itself" : l))}. Aim it elsewhere, or add "deliberate": true if it means to.`);
+    if (r.allies.length && !step.deliberate) return no(`${sp.name} there would also catch ${listWords(r.allies.map(l => l === r.self ? "itself" : l))}. Aim it elsewhere, or add "deliberate": true if {they} {means|mean} to.`);
     area = { type: r.aim.type, size: r.aim.size, aim: r.aim, catches: r.known, hits: r.ids, ...(step.deliberate ? { deliberate: true } : {}) };
   } else if (t && sp.area && sp.range != null) { const d = distanceTo(t, null); if (d > sp.range) return no(`${t.name ?? tLabel} is ${d} ft away, beyond ${sp.name}'s range (${sp.range} ft).`); }
   /* run for real only at one creature it perceives, and never a spell whose range, targets or damage change with its actions (Heal, Harm: PF2e's
@@ -548,10 +553,11 @@ export const forThinker = (steps = []) => steps.map(s => s?.area?.hits ? { ...s,
 /** Who an area hurts and by how much: { tokenId: multiplier } for each caught creature whose save lets damage through. */
 export const areaHurt = (rec = {}) => Object.fromEntries((rec.rows ?? []).filter(id => SAVE_MULT[rec.saves?.[id]] > 0).map(id => [id, SAVE_MULT[rec.saves[id]]]));
 /** Where an area was aimed, in words. */
-export function aimText(area) {
+export const aimText = (area, forms = IT) => pro(aimTextIt(area), forms);
+function aimTextIt(area) {
   const a = area?.aim; if (!a) return "";
   if (a.type === "burst") return ` bursting from the corner [${a.corner[0]}, ${a.corner[1]}]`;
-  if (a.type === "emanation") return " around itself";
+  if (a.type === "emanation") return " around {themself}";
   return a.toward ? ` toward square ${a.toward[0]}, ${a.toward[1]}` : "";
 }
 /** The damage multiplier a spell step applies: double on a spell attack's critical hit; by degree for a basic save. */
@@ -588,22 +594,22 @@ function checkAbility(step, ab, { ctx, last, at, attacks, distanceTo }) {
   const traits = ab.traits ?? [];
   if (!ab.followUp) {
     if (ctx.cantAttack && traits.includes("attack")) return no(ctx.cantAttack);
-    if (ctx.cantAttack && traits.includes("manipulate")) return no(`it is restrained, so it can't use ${ab.name} (a manipulate action).`);
+    if (ctx.cantAttack && traits.includes("manipulate")) return no(`{they} {is|are} restrained, so {they} can't use ${ab.name} (a manipulate action).`);
     if (ctx.cantMove && traits.includes("move")) return no(ctx.cantMove);
     /* the target: a creature it perceives, or one of its allies or itself (0.30.0, B-5: the prompt says "a label", and an ability that helps its side,
        such as a rallying display, was refused as "it doesn't know of M2"); an ability with the attack trait is never aimed at its own side */
     const isAttack = traits.includes("attack");
     let t = null; if (step.target) { t = ctx.targets[step.target] ?? null;
-      if (!t) { const mine = ctx.allies?.[step.target] ?? null; if (!mine) return no(`it doesn't know of "${step.target}".`);
-        if (isAttack) return no(`"${step.target}" is on its side: ${ab.name} is an attack, and needs a creature it fights.`); t = mine; } }
+      if (!t) { const mine = ctx.allies?.[step.target] ?? null; if (!mine) return no(`{they} {doesn't|don't} know of "${step.target}".`);
+        if (isAttack) return no(`"${step.target}" is on {their} side: ${ab.name} is an attack, and needs a creature {they} {fights|fight}.`); t = mine; } }
     return { ok: true, step: { do: "ability", item: ab.id, itemName: ab.name, mode: "card", ...(t ? { target: step.target, targetName: t.name ?? step.target, flat: t.flat ?? 0 } : {}), ...(isAttack ? { attack: true, mapCounts: true, variant: Math.min(attacks, 2) } : {}) } };
   }
   if (ctx.cantAttack) return no(ctx.cantAttack);
   const word = CHECK_WORD[ab.followUp], after = last?.do === "strike" && (last.effects ?? []).includes(ab.effect);
   const target = step.target ?? (after ? last.target : null);
-  const straight = `${ab.name} has to come straight after a Strike that lists ${ab.name} and hits (its last action must be that Strike)${ab.followUp === "grapple" ? ", or keep hold of a creature it already has grabbed or restrained (give that creature as the target)" : ""}.`;
+  const straight = `${ab.name} has to come straight after a Strike that lists ${ab.name} and hits ({their} last action must be that Strike)${ab.followUp === "grapple" ? ", or keep hold of a creature {they} already {has|have} grabbed or restrained (give that creature as the target)" : ""}.`;
   if (!target) return no(straight);
-  const t = ctx.targets[target]; if (!t) return no(`it doesn't know of "${target}".`);
+  const t = ctx.targets[target]; if (!t) return no(`{they} {doesn't|don't} know of "${target}".`);
   const follow = after && last.target === target && last.hit !== false;
   if (!follow) {
     /* Grab's other use: keep hold of a creature it has grabbed or restrained, with no check (it lasts to the end of its next turn). `held` is true only for a
@@ -613,13 +619,13 @@ function checkAbility(step, ab, { ctx, last, at, attacks, distanceTo }) {
       const d = distanceTo(t, reach); if (d > reach) return no(`${t.name ?? target} is ${d} ft away, out of reach to keep hold of.`);
       return { ok: true, step: { do: "ability", item: ab.id, itemName: ab.name, mode: "hold", target, targetName: t.name ?? target } };
     }
-    if (after && last.target === target && last.hit === false) return no(`its Strike at ${t.name ?? target} didn't hit, so it can't use ${ab.name}.`);
-    if (after && last.target !== target) return no(`${ab.name} goes at the creature its Strike just hit (${last.target}), not ${target}.`);
+    if (after && last.target === target && last.hit === false) return no(`{their} Strike at ${t.name ?? target} didn't hit, so {they} can't use ${ab.name}.`);
+    if (after && last.target !== target) return no(`${ab.name} goes at the creature {their} Strike just hit (${last.target}), not ${target}.`);
     return no(straight);
   }
-  if (last.ranged) return no(`${ab.name} needs the creature within reach, and its last Strike was ranged.`);
+  if (last.ranged) return no(`${ab.name} needs the creature within reach, and {their} last Strike was ranged.`);
   const d = distanceTo(t, last.reach ?? 5); if (d > (last.reach ?? 5)) return no(`${t.name ?? target} is ${d} ft away, out of reach for ${ab.name}.`);
-  if (sizeRank(t.cat) >= 0 && sizeRank(ctx.me?.cat) >= 0 && sizeRank(t.cat) > sizeRank(ctx.me.cat) + 1) return no(t.flat >= 11 ? `it can't ${word} ${t.name ?? target}.` : `${t.name ?? target} is more than one size larger than it, too big to ${word}.`);   /* a hidden creature's size isn't the monster's to know */
+  if (sizeRank(t.cat) >= 0 && sizeRank(ctx.me?.cat) >= 0 && sizeRank(t.cat) > sizeRank(ctx.me.cat) + 1) return no(t.flat >= 11 ? `{they} can't ${word} ${t.name ?? target}.` : `${t.name ?? target} is more than one size larger than {them}, too big to ${word}.`);   /* a hidden creature's size isn't the monster's to know */
   return { ok: true, step: { do: "ability", item: ab.id, itemName: ab.name, mode: "check", check: ab.followUp, target, targetName: t.name ?? target, flat: t.flat ?? 0, attack: true, needsHit: last.hit == null } };
 }
 /** Its last action this turn before a plan, for an ability that needs it (Grab, Knockdown...): from the step just done with its record, or from the last
@@ -678,25 +684,29 @@ export function spentBy(steps = []) {
 export const OUTCOMES = ["critical miss", "miss", "hit", "critical hit"];
 export const CHECK_OUTCOMES = ["critical failure", "failure", "success", "critical success"];
 /** A finished step as the monster saw it, for the next plan: labels and ids only, and the result shown in chat. */
-export function doneStep(step, rec = {}) {
+export function doneStep(step, rec = {}, forms = IT) {
+  /* the words are the monster's own pronoun (forms: pronoun.mjs), for the thinker and the GM alike */
+  const d = doneStepIt(step, rec); return d && typeof d === "object" ? Object.fromEntries(Object.entries(d).map(([k, v]) => [k, k === "result" && typeof v === "string" ? pro(v, forms) : v])) : d;
+}
+function doneStepIt(step, rec = {}) {
   /* Hide and Sneak are secret rolls (Rhea, 2026-11-07, B): the thinker learns what it did, never whether it worked */
   if (step.do === "hide") return { do: "hide", result: rec.applied ? "hid (whether it worked is secret)" : rec.gm ? "card posted for the GM to apply" : "unknown" };
-  if (step.do === "seek") return { do: "seek", aim: step.aim, result: rec.applied ? "searched: what it perceives now shows what it found" : rec.gm ? "card posted for the GM to apply" : "unknown" };
-  if (step.do === "sneak") { const got = rec.moved?.to; return { do: "sneak", to: step.to, result: `${!got ? "unknown" : same(got, step.to) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]`}${rec.applied ? " (whether it stayed unseen is secret)" : rec.gm ? "; card posted for the GM to apply" : ""}` }; }
-  if (step.do === "swim") { const got = rec.moved?.to; return { do: "swim", to: step.to, result: rec.swim && rec.swim.degree < 2 ? `no progress (it failed its Athletics check to Swim${rec.swim.degree === 0 ? " badly" : ""})` : !got && !rec.swum ? "unknown" : !got || same(got, step.to) ? (same(step.from ?? step.to, step.to) ? "trod water" : "arrived") : `stopped at [${got[0]}, ${got[1]}]` }; }
+  if (step.do === "seek") return { do: "seek", aim: step.aim, result: rec.applied ? "searched: what {they} {perceives|perceive} now shows what {they} found" : rec.gm ? "card posted for the GM to apply" : "unknown" };
+  if (step.do === "sneak") { const got = rec.moved?.to; return { do: "sneak", to: step.to, result: `${!got ? "unknown" : same(got, step.to) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]`}${rec.applied ? " (whether {they} stayed unseen is secret)" : rec.gm ? "; card posted for the GM to apply" : ""}` }; }
+  if (step.do === "swim") { const got = rec.moved?.to; return { do: "swim", to: step.to, result: rec.swim && rec.swim.degree < 2 ? `no progress ({they} failed {their} Athletics check to Swim${rec.swim.degree === 0 ? " badly" : ""})` : !got && !rec.swum ? "unknown" : !got || same(got, step.to) ? (same(step.from ?? step.to, step.to) ? "trod water" : "arrived") : `stopped at [${got[0]}, ${got[1]}]` }; }
   if (step.do === "fly") { const got = rec.moved?.to, at = rec.moved?.elev; return { do: "fly", to: step.to, height: step.height, result: !got ? "unknown" : same(got, step.to) && (at == null || at === step.height) ? "arrived" : `stopped at [${got[0]}, ${got[1]}]${at != null ? `, ${at} ft up` : ""}` }; }
   if (step.do === "burrow") { const got = rec.moved?.to, b = rec.moved?.below; return { do: "burrow", to: step.to, ...(step.below ? {} : { up: true }), result: !got ? "unknown" : same(got, step.to) && (b == null || b === step.below) ? (step.below ? "arrived, below ground" : "arrived, at the surface") : `stopped at [${got[0]}, ${got[1]}]${b == null ? "" : b ? ", below ground" : ", at the surface"}` }; }
   if (isMove(step)) { const got = rec.moved?.to; return { do: step.do, to: step.to, result: !got ? "unknown" : same(got, step.to) ? (step.do === "flee" ? "reached the map's edge" : "arrived") : `stopped at [${got[0]}, ${got[1]}]` }; }
   if (step.do in POSTURES) return { do: step.do, result: rec.changed || rec.stood ? (step.do === "stand" ? "stood" : "dropped") : "unknown" };
   if (step.do === "take-cover") return { do: "take-cover", result: rec.covered ? "took cover" : "unknown" };
-  if (step.do === "climb") return { do: "climb", height: step.height, result: climbResult(step, rec) };
+  if (step.do === "climb") return { do: "climb", height: step.height, result: climbResultIt(step, rec) };
   if (step.do === "release") return { do: "release", item: step.itemName ?? step.item, result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.dropped ? "dropped it" : "unknown" };
-  if (step.do === "order") return { do: "order", order: step.words, result: rec.given ? `given${Array.isArray(rec.heard) ? `: ${rec.heard.length ? `${rec.heard.length} of its band heard it` : "nobody heard it"}` : ""}` : rec.skipped ? `not given (${rec.skipped})` : "unknown" };
-  if (step.do === "say") return { do: "say", intent: step.intent, result: rec.said ? (step.intent === "yield" ? "yielded: it stands down" : "said") : rec.skipped ? `not said (${rec.skipped})` : "unknown" };
+  if (step.do === "order") return { do: "order", order: step.words, result: rec.given ? `given${Array.isArray(rec.heard) ? `: ${rec.heard.length ? `${rec.heard.length} of {their} band heard it` : "nobody heard it"}` : ""}` : rec.skipped ? `not given (${rec.skipped})` : "unknown" };
+  if (step.do === "say") return { do: "say", intent: step.intent, result: rec.said ? (step.intent === "yield" ? "yielded: {they} {stands|stand} down" : "said") : rec.skipped ? `not said (${rec.skipped})` : "unknown" };
   if (step.do === "command-animal") { const c = rec.check; return { do: "command-animal", target: step.target, command: step.words, result: rec.skipped ? `not given (${rec.skipped})` : rec.flat && !rec.flat.ok ? "flat check failed (deafened): the command is lost" : c ? `${CHECK_OUTCOMES[c.degree] ?? "unknown"}: ${c.degree >= 2 ? "it will do as told on its next turn" : c.degree === 1 ? "it does nothing on its next turn" : "it does something else on its next turn"}` : "unknown" }; }
   if (step.do === "point-out") return { do: "point-out", target: step.target, result: rec.flat && !rec.flat.ok ? "flat check failed" : pointResult(rec) };
   if (step.do === "interact") return { do: "interact", what: step.what, result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.posted ? "card posted for the GM to apply" : "unknown" };
-  if (step.do === "delay") return { do: "delay", after: step.after, result: rec.moved ? "delayed: its turn comes back after that creature's" : rec.ended ? "turn ended; its place in the order may not have moved" : "unknown" };
+  if (step.do === "delay") return { do: "delay", after: step.after, result: rec.moved ? "delayed: {their} turn comes back after that creature's" : rec.ended ? "turn ended; {their} place in the order may not have moved" : "unknown" };
   if (step.do === "ability") return { do: "ability", item: step.item, ...(step.target ? { target: step.target } : {}), result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.check ? CHECK_OUTCOMES[rec.check.degree] ?? "unknown" : rec.posted ? (step.mode === "hold" ? "kept hold" : "card posted for the GM to apply") : "unknown" };
   if (step.do === "spell") return { do: "spell", item: step.item, rank: step.rank, ...(step.target ? { target: step.target } : {}), result: spellResult(step, rec) };
   if (step.do !== "strike") return { do: step.do };
@@ -708,7 +718,7 @@ function spellResult(step, rec = {}) {
   if (!rec.cast) return "unknown";
   if (rec.flat && !rec.flat.ok) return "flat check failed";
   if (step.mode === "card" || rec.noRows) return "card posted for the GM to apply";
-  if (step.mode === "area") return rec.results != null || (rec.rows && !rec.rows.length) ? (rec.results ? `saves: ${rec.results}` : "cast; no one it knows of was in the area") : "waiting for saves";
+  if (step.mode === "area") return rec.results != null || (rec.rows && !rec.rows.length) ? (rec.results ? `saves: ${rec.results}` : "cast; no one {they} {knows|know} of was in the area") : "waiting for saves";
   if (step.mode === "attack") return rec.attack ? OUTCOMES[rec.attack.degree] ?? "unknown" : "unknown";
   return rec.save ? `target's save: ${CHECK_OUTCOMES[rec.save.degree] ?? "unknown"}` : "waiting for the save";
 }
@@ -740,40 +750,43 @@ export function changesSince(was, now) {
   return out;
 }
 /** A change in plain words. Labels stay labels unless nameOf says otherwise, so the same words can go to the thinker; `self` is how the monster is named. */
-export function describeChange(c, nameOf = l => l, self = "It") {
+export function describeChange(c, nameOf = l => l, self = "It", forms = IT) {
   if (c.who === "plan") return String(c.reason ?? "").replace(/^Step \d+: /, "");
-  if (c.who === "gm" && c.what === "notebook") return "The GM changed what it remembers: read its notebook afresh.";   /* her notebook edit (0.25.0) */
-  if (c.what === "sawHeal" || c.what === "sawCast") { const w = String(nameOf(c.who) ?? c.who ?? "Someone"); return `${w[0].toUpperCase()}${w.slice(1)} ${c.what === "sawHeal" ? "healed one of its own side" : "cast a spell"}: its notebook has it.`; }   /* fight memory (0.25.0) */
+  if (c.who === "gm" && c.what === "notebook") return pro("The GM changed what {they} {remembers|remember}: read {their} notebook afresh.", forms);   /* her notebook edit (0.25.0) */
+  if (c.what === "sawHeal" || c.what === "sawCast") { const w = String(nameOf(c.who) ?? c.who ?? "Someone"); return pro(`${w[0].toUpperCase()}${w.slice(1)} ${c.what === "sawHeal" ? "healed one of its own side" : "cast a spell"}: {their} notebook has it.`, forms); }   /* fight memory (0.25.0) */
   if (c.who === "gm") return `The GM asks for the rest of this turn: "${c.text ?? ""}"`;   /* the Change button's note (0.19.0), already in labels */
-  const who = c.who === "me" ? self : nameOf(c.who) ?? c.who, its = c.who === "me" ? (self === "It" ? "Its" : `${self}'s`) : `${who}'s`;
+  /* the monster itself is written by its pronoun (0.30.1) unless the caller names it; another creature keeps "it", since its pronoun isn't known here */
+  const me = c.who === "me", it = me && self === "It", f = me ? forms : IT;
+  const who = me ? (it ? "{They}" : self) : nameOf(c.who) ?? c.who, its = me ? (it ? "{Their}" : `${self}'s`) : `${who}'s`, is = it ? "{is|are}" : "is", was = it ? "{was|were}" : "was";
+  const say = text => pro(text, f);
   switch (c.what) {
-    case "moved": return `${who} moved.`;
-    case "stopped": return `${who} was stopped at [${c.at?.[0]}, ${c.at?.[1]}], short of where it was going.`;
-    case "extended": return `The map was extended to the ${c.side ?? "edge"}: there is more ground that way now, and ${who === "It" ? "it keeps its turn" : `${who} keeps its turn`}.${c.side === "north" || c.side === "west" ? " Every square's number shifted by the new strip, so read positions afresh from this packet." : ""}`;
-    case "noClimb": return `${who} failed its Athletics check to Climb and made no progress${c.height ? ` (still ${c.height} ft up)` : " (still on the ground)"}.`;
-    case "sought": return `${who} finished Seeking: what it perceives now shows what it found.`;
-    case "surfaced": return `${who} came up out of the ground: what it perceives now is what it sees at the surface.`;
-    case "noShot": return `${who} couldn't shoot its ${c.item ?? "weapon"}${c.why ? ` (${c.why})` : ""}; ${c.spent ? "the action is spent (its flat check was rolled)" : "the action isn't spent"}.`;
-    case "hurt": return `${who} was hurt.`;
-    case "healed": return `${who} regained HP.`;
-    case "actions": return `${its} actions this turn are now ${c.now}.`;
-    case "conditions": return `${its} conditions are now ${c.now?.length ? c.now.join(", ") : "none"}.`;
-    case "gone": return `${who} is gone.`;
-    case "down": return `${who} is down.`;
-    case "up": return `${who} is back up.`;
-    case "state": return `${who} is now ${c.now}.`;
-    default: return `${who} changed.`;
+    case "moved": return say(`${who} moved.`);
+    case "stopped": return say(`${who} ${was} stopped at [${c.at?.[0]}, ${c.at?.[1]}], short of where {they} {was|were} going.`);
+    case "extended": return say(`The map was extended to the ${c.side ?? "edge"}: there is more ground that way now, and ${it ? "{they} {keeps|keep} {their} turn" : `${who} keeps {their} turn`}.${c.side === "north" || c.side === "west" ? " Every square's number shifted by the new strip, so read positions afresh from this packet." : ""}`);
+    case "noClimb": return say(`${who} failed {their} Athletics check to Climb and made no progress${c.height ? ` (still ${c.height} ft up)` : " (still on the ground)"}.`);
+    case "sought": return say(`${who} finished Seeking: what {they} {perceives|perceive} now shows what {they} found.`);
+    case "surfaced": return say(`${who} came up out of the ground: what {they} {perceives|perceive} now is what {they} {sees|see} at the surface.`);
+    case "noShot": return say(`${who} couldn't shoot {their} ${c.item ?? "weapon"}${c.why ? ` (${c.why})` : ""}; ${c.spent ? "the action is spent ({their} flat check was rolled)" : "the action isn't spent"}.`);
+    case "hurt": return say(`${who} ${was} hurt.`);
+    case "healed": return say(`${who} regained HP.`);
+    case "actions": return say(`${its} actions this turn are now ${c.now}.`);
+    case "conditions": return say(`${its} conditions are now ${c.now?.length ? c.now.join(", ") : "none"}.`);
+    case "gone": return say(`${who} ${is} gone.`);
+    case "down": return say(`${who} ${is} down.`);
+    case "up": return say(`${who} ${is} back up.`);
+    case "state": return say(`${who} ${is} now ${c.now}.`);
+    default: return say(`${who} changed.`);
   }
 }
-export const describeChanges = (list = [], nameOf, self) => list.map(c => describeChange(c, nameOf, self)).join(" ");
+export const describeChanges = (list = [], nameOf, self, forms) => list.map(c => describeChange(c, nameOf, self, forms)).join(" ");
 
 /* ---------- the Change button (Rhea, 2026-11-09: "Note and step edits") ---------- */
 export const NOTE_MAX = 300, CHANGEABLE = ["ready", "held", "stopped"];
 /** Why the GM can't change this turn's plan now, or null. r: a request. Only a plan that waits (ready, held, stopped), with steps left, and never with
     the next step begun (a reload or a stop part-way: what it did isn't known, so it can't be replaced). */
-export function changeProblem(r) {
+export function changeProblem(r, forms = IT) {
   if (!r) return "There's no turn to change.";
-  if (r.state === "running") return "It's carrying out a step: press Hold first.";
+  if (r.state === "running") return pro("{They} {is|are} carrying out a step: press Hold first.", forms);
   if (!CHANGEABLE.includes(r.state) || !Array.isArray(r.steps) || !r.steps.length) return "There's no plan to change yet.";
   const pos = r.pos ?? 0;
   if (pos >= r.steps.length) return "Nothing is left of the plan.";
@@ -840,22 +853,23 @@ export const nameWords = n => String(n ?? "").replace(/\([^)]*\)/g, " ").split(/
 function flyWords(s) {
   const across = s.from && !same(s.from, s.to), way = across ? headingOf(s.from, s.to) : "", h = s.height ?? 0, was = s.fromHeight ?? 0;
   const where = h ? `${h} ft up` : "on the ground";
-  if (!across && h === was) return `Hovers ${where} (Fly 0 ft, so it stays aloft).`;
+  if (!across && h === was) return `Hovers ${where} (Fly 0 ft, so {they} {stays|stay} aloft).`;
   if (!across) return h > was ? `Flies up to ${h} ft (${s.cost ?? "?"} ft of movement).` : h ? `Flies down to ${h} ft (${s.cost ?? "?"} ft of movement).` : `Flies down and lands (${s.cost ?? "?"} ft of movement).`;
   return `Flies ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}, ${h ? where : "landing there"}.`;
 }
 /** A resolved step in plain words, for the card. */
 /** A Climb in plain words: up or down which tree, and how. */
 function climbWords(s) {
-  const up = s.height > (s.fromHeight ?? 0), how = s.climbSpeed ? " (its climb Speed: no check)" : ` (an Athletics check, DC ${s.dc ?? CLIMB_DC}; on a failure it makes no progress, and on a critical failure it falls)`;
+  const up = s.height > (s.fromHeight ?? 0), how = s.climbSpeed ? " ({their} climb Speed: no check)" : ` (an Athletics check, DC ${s.dc ?? CLIMB_DC}; on a failure {they} {makes|make} no progress, and on a critical failure {they} {falls|fall})`;
   const where = s.height ? `to ${s.height} ft up` : "to the ground";
   return `Climbs ${up ? "up" : "down"} the tree at [${s.tree?.[0]}, ${s.tree?.[1]}] ${where}${how}.`;
 }
 /** How a Climb came out, for the next plan and the history. */
-export function climbResult(step, rec = {}) {
-  if (rec.falling && !rec.fell) return `a critical failure: it began to fall from ${rec.falling.from} ft (not confirmed)`;
+export const climbResult = (step, rec = {}, forms = IT) => pro(climbResultIt(step, rec), forms);
+function climbResultIt(step, rec = {}) {
+  if (rec.falling && !rec.fell) return `a critical failure: {they} began to fall from ${rec.falling.from} ft (not confirmed)`;
   if (rec.fell) return `fell ${rec.fell.from} ft${rec.fell.damage ? `, took ${rec.fell.damage} damage` : ""}${rec.fell.prone ? " and landed prone" : ""} (a critical failure)`;
-  if (rec.climb && rec.climb.degree < 2) return "no progress (it failed its Athletics check to Climb)";
+  if (rec.climb && rec.climb.degree < 2) return "no progress ({they} failed {their} Athletics check to Climb)";
   if (rec.moved) return rec.moved.elev === step.height ? (step.height ? `arrived, ${step.height} ft up` : "back on the ground") : `stopped ${rec.moved.elev ?? "?"} ft up`;
   return "unknown";
 }
@@ -882,15 +896,17 @@ export function stepLabels(steps = [], spent = 0, { reaction = false } = {}) {
     return cost === 1 ? `Action ${from}` : `Actions ${from}–${n}`;
   });
 }
-export function describeStep(s) {
+/* written with markers and given the monster's own pronoun on the way out (forms: pronoun.mjs `formsOf`; "it" when none is given) */
+export const describeStep = (s, forms = IT) => pro(describeStepIt(s), forms);
+function describeStepIt(s) {
   if (s.do === "none") return "Does nothing.";
   if (s.do === "fly") return flyWords(s);
-  if (s.do === "swim") { const across = s.from && !same(s.from, s.to), way = across ? headingOf(s.from, s.to) : "", how = s.swimSpeed ? "" : s.dc ? ` (flowing water: an Athletics check, DC ${s.dc}; on a failure it makes no progress)` : " (calm water: an automatic critical success)";
-    return across ? `Swims ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}${s.out ? ", climbing out onto the bank" : ""}${how}.` : `Treads water where it is (Swim 0 ft, so it doesn't sink)${how}.`; }
+  if (s.do === "swim") { const across = s.from && !same(s.from, s.to), way = across ? headingOf(s.from, s.to) : "", how = s.swimSpeed ? "" : s.dc ? ` (flowing water: an Athletics check, DC ${s.dc}; on a failure {they} {makes|make} no progress)` : " (calm water: an automatic critical success)";
+    return across ? `Swims ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}${s.out ? ", climbing out onto the bank" : ""}${how}.` : `Treads water where {they} {is|are} (Swim 0 ft, so {they} {doesn't|don't} sink)${how}.`; }
   if (s.do === "burrow") { const across = s.from && !same(s.from, s.to), way = across ? headingOf(s.from, s.to) : "";
-    return `Burrows ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}${across ? `, to square ${s.to[0]}, ${s.to[1]}` : ""}${s.fromBelow && !s.below ? ", coming up to the surface" : !s.fromBelow && s.below ? (across ? ", under the ground (hidden from everyone)" : ", down under the ground where it stands (hidden from everyone)") : s.below ? ", under the ground" : ", dipping under and coming up"}.`; }
-  if (isMove(s)) { const way = s.from ? headingOf(s.from, s.to) : ""; return `${WORD[s.do]}s ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}${s.do === "sneak" ? " (a secret Stealth check; Visioner applies the result)" : s.do === "flee" ? ` at the ${listWords(s.sides ?? [])} edge of the map: you decide whether it gets away or the map grows` : ""}.`; }
-  if (s.do === "hide") return `Hides (a secret Stealth check against each creature it has cover or concealment from; Visioner applies the result).`;
+    return `Burrows ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}${across ? `, to square ${s.to[0]}, ${s.to[1]}` : ""}${s.fromBelow && !s.below ? ", coming up to the surface" : !s.fromBelow && s.below ? (across ? ", under the ground (hidden from everyone)" : ", down under the ground where {they} {stands|stand} (hidden from everyone)") : s.below ? ", under the ground" : ", dipping under and coming up"}.`; }
+  if (isMove(s)) { const way = s.from ? headingOf(s.from, s.to) : ""; return `${WORD[s.do]}s ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}${s.do === "sneak" ? " (a secret Stealth check; Visioner applies the result)" : s.do === "flee" ? ` at the ${listWords(s.sides ?? [])} edge of the map: you decide whether {they} {gets|get} away or the map grows` : ""}.`; }
+  if (s.do === "hide") return `Hides (a secret Stealth check against each creature {they} {has|have} cover or concealment from; Visioner applies the result).`;
   if (s.do === "seek") return s.aim?.type === "burst" ? `Seeks in a ${s.aim.size}-foot burst from the corner [${s.aim.corner[0]}, ${s.aim.corner[1]}] (a secret Perception check; Visioner applies the result).` : `Seeks in a ${s.aim?.size ?? SEEK.cone}-foot cone toward square ${s.aim?.toward?.[0]}, ${s.aim?.toward?.[1]} (a secret Perception check; Visioner applies the result).`;
   if (s.do === "stand") return "Stands up.";
   if (s.do === "drop-prone") return "Drops prone.";
@@ -904,22 +920,22 @@ export function describeStep(s) {
     const head = `Casts ${s.itemName} (rank ${s.rank}${s.actions !== 2 ? `, ${s.actions} action${s.actions === 1 ? "" : "s"}` : ""})`, flat = s.flat ? `, after a DC ${s.flat} flat check` : "";
     if (s.mode === "attack") return `${head} at ${s.targetName}: a spell attack${s.variant ? `, attack ${s.variant + 1}` : ""}${flat}.`;
     if (s.area?.aim) {
-      const what = `a ${s.area.size}-foot ${s.area.type}${aimText(s.area)}${s.area.catches?.length ? `, catching ${listWords(s.area.catches)}` : ""}${s.area.deliberate ? " (its allies on purpose)" : ""}`;
+      const what = `a ${s.area.size}-foot ${s.area.type}${aimTextIt(s.area)}${s.area.catches?.length ? `, catching ${listWords(s.area.catches)}` : ""}${s.area.deliberate ? " ({their} allies on purpose)" : ""}`;
       if (s.mode === "area") return `${head}: ${what}. Each rolls a basic ${s.save[0].toUpperCase() + s.save.slice(1)} save and takes damage by degree.`;
       return `${head}: ${what}. The area is placed; its card goes to chat for you to apply.`;
     }
     if (s.mode === "save") return `${head} at ${s.targetName}: a ${s.basic ? "basic " : ""}${s.save[0].toUpperCase() + s.save.slice(1)} save${flat}${s.damaging && s.basic ? "" : ", then you apply its effects"}.`;
     return `${head}${s.targetName ? `${s.area ? " aimed at" : " at"} ${s.targetName}` : ""}${flat}: its card goes to chat for you to apply${s.area ? ` (place its ${s.area.size}-foot ${s.area.type})` : ""}${s.attack ? `, as attack ${(s.variant ?? 0) + 1}` : ""}.`;
   }
-  if (s.do === "take-cover") return s.why === "prone" ? "Takes Cover while prone." : s.why === "near" ? "Takes Cover by the wall or trunk next to it." : `Takes Cover behind its cover from ${s.from}.`;
+  if (s.do === "take-cover") return s.why === "prone" ? "Takes Cover while prone." : s.why === "near" ? "Takes Cover by the wall or trunk next to {them}." : `Takes Cover behind {their} cover from ${s.from}.`;
   if (s.do === "climb") return climbWords(s);
-  if (s.do === "release") return `Releases its ${s.itemName ?? s.item}, which drops on its square${s.flat ? ` (a DC ${s.flat} flat check first, as it is grabbed)` : ""} (free action).`;
-  if (s.do === "order") return `Orders its band: ${s.words}${s.order?.say ? `. It says: “${s.order.say}”` : ""} (free: speaking costs no action).`;
-  if (s.do === "say") return s.intent === "yield" ? `Yields: it stops fighting and gives itself up${s.say ? `, saying: “${s.say}”` : " (no words)"}. Its turn ends, and Accepted or Fight on is yours to press (free: speaking costs no action).` : `Says to the party (${s.intent === "bargain" ? "a bargain" : "a threat"}): “${s.say}” (free: speaking costs no action).`;
-  if (s.do === "command-animal") return `Commands an animal: ${s.target}, ${s.words}${s.flat ? ` (deafened: a DC ${s.flat} flat check first)` : ""}. A Nature check against its Will DC: on a success it must do that on its next turn; on a failure it does nothing; on a critical failure what it does is yours to choose.`;
-  if (s.do === "point-out") return `Points out ${s.target} to its allies${s.flat ? ` (a DC ${s.flat} flat check first, as it is grabbed)` : ""}: those who see it point and understand it have ${s.target} hidden at its square; one that only sees the gesture rolls Perception against its Stealth DC.`;
-  if (s.do === "interact") return `Interacts: ${s.what}${s.flat ? ` (a DC ${s.flat} flat check first, as it is grabbed)` : ""}. Its card goes to chat for you to apply.`;
-  if (s.do === "delay") return `Delays until after ${s.after}'s turn: its turn ends now, and it comes back into the order right after ${s.after} (free action).`;
+  if (s.do === "release") return `Releases {their} ${s.itemName ?? s.item}, which drops on {their} square${s.flat ? ` (a DC ${s.flat} flat check first, as {they} {is|are} grabbed)` : ""} (free action).`;
+  if (s.do === "order") return `Orders {their} band: ${s.words}${s.order?.say ? `. {They} {says|say}: “${s.order.say}”` : ""} (free: speaking costs no action).`;
+  if (s.do === "say") return s.intent === "yield" ? `Yields: {they} {stops|stop} fighting and {gives|give} {themself} up${s.say ? `, saying: “${s.say}”` : " (no words)"}. {Their} turn ends, and Accepted or Fight on is yours to press (free: speaking costs no action).` : `Says to the party (${s.intent === "bargain" ? "a bargain" : "a threat"}): “${s.say}” (free: speaking costs no action).`;
+  if (s.do === "command-animal") return `Commands an animal: ${s.target}, ${s.words}${s.flat ? ` (deafened: a DC ${s.flat} flat check first)` : ""}. A Nature check against the animal's Will DC: on a success the animal must do that on its next turn; on a failure it does nothing; on a critical failure what it does is yours to choose.`;
+  if (s.do === "point-out") return `Points out ${s.target} to {their} allies${s.flat ? ` (a DC ${s.flat} flat check first, as {they} {is|are} grabbed)` : ""}: those who see {them} point and understand {them} have ${s.target} hidden at its square; one that only sees the gesture rolls Perception against ${s.target}'s Stealth DC.`;
+  if (s.do === "interact") return `Interacts: ${s.what}${s.flat ? ` (a DC ${s.flat} flat check first, as {they} {is|are} grabbed)` : ""}. Its card goes to chat for you to apply.`;
+  if (s.do === "delay") return `Delays until after ${s.after}'s turn: {their} turn ends now, and {they} {comes|come} back into the order right after ${s.after} (free action).`;
   return `${s.itemName} at ${s.targetName}${s.variant ? `, attack ${s.variant + 1}` : ""}${s.flat ? `, after a DC ${s.flat} flat check` : ""}.`;
 }
 /** What to do next with an Interact step (0.12.0): the grabbed flat check first when the step has one, then its card; "gm" once the card is posted,
@@ -1013,7 +1029,7 @@ export function nextAbility(rec = {}, { mode = "check", flat = 0, apply = false 
 }
 /** What a follow-up's check does, by degree (0 critical failure to 3 critical success), as the rules say: conditions for the target and for the monster,
     damage, and what's left for the GM, in words (`who` names the target, `me` the monster). held: the target was grabbed or restrained before the check. */
-export function followUpOutcome(check, degree, { held = false, who = "The target", me = "it" } = {}) {
+export function followUpOutcome(check, degree, { held = false, who = "The target", me = "it", forms = IT } = {}) {
   const out = { target: [], self: [], damage: null, gm: null };
   if (check === "grapple") {
     if (degree === 3) out.target.push("restrained");
@@ -1028,9 +1044,10 @@ export function followUpOutcome(check, degree, { held = false, who = "The target
     if (degree >= 2) out.gm = `Move ${who} ${degree === 3 ? 10 : 5} ft straight away from ${me} (the module doesn't move a pushed creature).`;
     if (degree === 0) out.self.push("prone");
   } else if (check === "reposition") {
-    if (degree >= 2) out.gm = `Move ${who} up to ${degree === 3 ? 10 : 5} ft closer to ${me}, staying within its reach (the module doesn't move a pulled creature).`;
-    if (degree === 0) out.gm = `${who} can move ${me} up to 5 ft (as if they Repositioned it): apply what they choose.`;
+    if (degree >= 2) out.gm = `Move ${who} up to ${degree === 3 ? 10 : 5} ft closer to ${me}, staying within {their} reach (the module doesn't move a pulled creature).`;
+    if (degree === 0) out.gm = `${who} can move ${me} up to 5 ft (as if they Repositioned {them}): apply what they choose.`;
   }
+  if (out.gm) out.gm = pro(out.gm, forms);   /* "its reach" and the like are the monster's (0.30.1) */
   return out;
 }
 /** The cover Take Cover gives against one creature, from the cover it has against that creature now, as Visioner's own Take Cover works it out (8.14.17):

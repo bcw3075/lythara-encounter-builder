@@ -8,7 +8,8 @@ import { drawChip, registerChip } from "./ui/chip.mjs";
 import { MindsApp, openLibrary, redrawLibrary } from "./ui/minds.mjs";
 import { LINES, MIND_SCHEMA } from "./minds.mjs";
 import { bandOf, bandViews, joinBand, removeBand, setBand } from "./bandlib.mjs";
-import { dropLibraryCache, dropOwn, giveOwn, kindFacts, libraryEntries, libraryExport, libraryGet, libraryImport, libraryPut, libraryRemove, mindLayers, mindOf, mindRows, rowProfile, setLines } from "./library.mjs";
+import { hasMarker, pro } from "./pronoun.mjs";
+import { dropLibraryCache, dropOwn, giveOwn, kindFacts, libraryEntries, libraryExport, libraryGet, libraryImport, libraryPut, libraryRemove, mindLayers, mindOf, mindRows, pronounOf, rowProfile, setLines } from "./library.mjs";
 import { bandLog, bandLogWords, giveOrder, onRenderOrder, orderCard, orderPreview, setHearCall } from "./fight.mjs";
 import { acceptYield, backInFight, onRenderSay, prisonerList, refuseYield, yieldedList } from "./fight.mjs";
 import { answerCommand, checkSides, commandList, dropBeliefs, onSideChange, pointCard, sideList } from "./fight.mjs";
@@ -81,7 +82,9 @@ Hooks.on("activateNote", note => {
   return false;
 });
 /* the fight */
-Hooks.on("preCreateChatMessage", message => { onPreCreateMessage(message); });
+Hooks.on("preCreateChatMessage", message => { onPreCreateMessage(message);
+  /* a net (0.30.1): a pronoun marker nothing turned reads as "it" in chat, never as a brace */
+  try { const fix = {}; for (const k of ["content", "flavor"]) if (hasMarker(message[k])) fix[k] = pro(message[k]); if (Object.keys(fix).length) message.updateSource(fix); } catch (e) { console.warn(`${ID} | pronoun`, e); } });
 Hooks.on("createChatMessage", message => { onCreateMessage(message); noteReactionRoll(message); onActionCard(message).catch(e => console.warn(`${ID} | reactions`, e)); try { onReactionCard(message); } catch (e) { console.warn(`${ID} | reaction box`, e); } try { onMemoryCard(message); } catch (e) { console.warn(`${ID} | notebook`, e); } });
 /* monsters reacting on players' turns (0.21.0): the runner watches moves, cards, items changing hands and Prone coming off. Block bodies: no handler returns anything. */
 Hooks.on("moveToken", (doc, movement) => { onTokenMoved(doc, movement); try { dropBeliefs(doc); } catch (e) { console.warn(`${ID} | point out`, e); } });
@@ -132,7 +135,7 @@ Hooks.once("ready", () => {
     /* monster minds (0.24.0), `api.minds`: how a chat reads and writes profiles (api.minds.set, api.minds.open, api.minds.library.put and the rest). `by: "angel"` never replaces a line whose words are the GM's unless `force`.
        This is the chat's door, so a write with no `by` is Angel's (the windows say "gm" themselves): only `by: "gm"` for words she dictated, and
        `giveOwn`, `dropOwn`, `library.remove` and `library.import` only when she asked for them. */
-    minds: { schema: MIND_SCHEMA, lines: LINES, rows: mindRows, profile: rowProfile, layers: mindLayers, of: mindOf, kindOf: kindFacts, giveOwn, dropOwn, open: openMinds, openLibrary,
+    minds: { schema: MIND_SCHEMA, lines: LINES, rows: mindRows, profile: rowProfile, layers: mindLayers, of: mindOf, pronounOf, kindOf: kindFacts, giveOwn, dropOwn, open: openMinds, openLibrary,
       set: (scene, ref, lines, { by = "angel", force = false } = {}) => setLines(scene, ref, lines, { by, force }),
       /* bands (0.26.0): `bands.list(scene)` reads every band with its members, leader, nature and plan; `bands.set(scene, key, change)` changes or
          makes one (as Angel unless `by: "gm"`; never over her words or choices without `force`); `bands.join(scene, ref, key)` puts a row, a kind or
