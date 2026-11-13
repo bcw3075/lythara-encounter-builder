@@ -13,6 +13,7 @@ import { dropLibraryCache, dropOwn, giveOwn, kindFacts, libraryEntries, libraryE
 import { bandLog, bandLogWords, giveOrder, onRenderOrder, orderCard, orderPreview, setHearCall } from "./fight.mjs";
 import { acceptYield, backInFight, onRenderSay, prisonerList, refuseYield, yieldedList } from "./fight.mjs";
 import { answerCommand, checkSides, commandList, dropBeliefs, onSideChange, pointCard, sideList } from "./fight.mjs";
+import { apiWanted, fightRoute, handOff, modelOf, setApiNote, setModelPick, setRoute, wakeAngel } from "./fight.mjs";
 import { chooseFor, onReactionCard, partyReactors, setReactionUsed, doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCombatGone, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, onMemoryCard, onMemoryUpdate, onMemoryHp, notebookOf, previewRemember, rememberAdd, rememberCross, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
 
 const CONTROL = "encounters", apps = new Map(), mindsApps = new Map(); let turnsApp = null, historyApp = null, historyTimer = null;
@@ -36,6 +37,15 @@ Hooks.once("init", () => {
   game.settings.register(ID, "brainAt", { scope: "world", config: false, type: Number, default: 0, onChange: () => { redrawTurns(); } });
   /* the world launch that time was written in: the server clock restarts at every launch, so a time from another launch never counts (0.23.0) */
   game.settings.register(ID, "brainLaunch", { scope: "world", config: false, type: String, default: "", onChange: () => { redrawTurns(); } });
+  /* the API route (0.31.0): the route a new fight starts on (each fight's own is on its Combat flag, her "Thinks by" list); the API thinker's own
+     generation, listening time and launch, apart from the chat's so neither retires the other; the bridge worker's note (why it stopped, or no key);
+     and Wake Angel's latest press, which the worker looks for every few seconds */
+  game.settings.register(ID, "defaultRoute", { name: "Angel thinks by (new fights)", hint: "Who thinks for the monsters Angel runs when a fight starts: the Claude API through the bridge (Sonnet, Opus for band leaders and spellcasters two or more levels above the party), a chat through the bridge, or nobody. Each fight can be switched on Monster Turns. If the API can't plan a turn it goes to a listening chat, then to you.", scope: "world", config: true, type: String, choices: { api: "The API (through the bridge)", chat: "A chat", off: "Off: I play them" }, default: "api", onChange: () => { redrawTurns(); } });
+  game.settings.register(ID, "apiBrain", { scope: "world", config: false, type: Object, default: { generation: 0, at: 0 }, onChange: () => { redrawTurns(); } });
+  game.settings.register(ID, "apiBrainAt", { scope: "world", config: false, type: Number, default: 0, onChange: () => { redrawTurns(); } });
+  game.settings.register(ID, "apiBrainLaunch", { scope: "world", config: false, type: String, default: "", onChange: () => { redrawTurns(); } });
+  game.settings.register(ID, "apiNote", { scope: "world", config: false, type: Object, default: {}, onChange: () => { redrawTurns(); } });
+  game.settings.register(ID, "apiWake", { scope: "world", config: false, type: Object, default: {}, onChange: () => { redrawTurns(); } });
   registerChip();   /* where each player put their reaction chip, per browser (0.27.0) */
   game.settings.register(ID, "treasure", { scope: "world", config: false, type: Object, default: { manual: {}, builds: {} } });
 });
@@ -102,6 +112,9 @@ Hooks.on("updateCombat", (combat, change) => { if (foundry.utils.hasProperty(cha
 /* a turn handed on with no `updateCombat` (the current combatant deleted, 0.24.0): `combatTurnChange` on the pages core tells, `deleteCombatant` on every page */
 Hooks.on("combatTurnChange", combat => { onTurnHandedOn(combat); });
 Hooks.on("deleteCombatant", combatant => { onTurnHandedOn(combatant.parent); });
+/* B-6 (0.31.0): a creature that joins a fight already begun gets its side books at once (the runner's `checkSides`), so a first change of side
+   is kept as a change and not as the side it started on */
+Hooks.on("createCombatant", combatant => { if (combatant.parent?.started) checkSides(combatant.parent); });
 Hooks.on("updateToken", (tok, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}`)) { redrawTurns(); redrawMinds(tok.parent); } onTokenFlag(tok, change); try { onSideChange(tok, change); } catch (e) { console.warn(`${ID} | sides`, e); } });
 /* monster minds (0.24.0): the library is pages of one GM-only journal, read from a cache; the windows follow the scene's brief and tokens */
 for (const h of ["createJournalEntryPage", "updateJournalEntryPage", "deleteJournalEntryPage"]) Hooks.on(h, page => { onLibraryPage(page); });
@@ -131,7 +144,13 @@ Hooks.once("ready", () => {
          the GM's buttons after a failed command (never Angel's door: a handler commands from its plan, with a "command-animal" step);
          `pointOut.card` the GM's box under a Point Out step; `sides.list` who changed sides or became a player's, and `sides.check(combat)`,
          the runner's look at every monster's side (it runs by itself at each turn change and when an actor's side or owners change) */
-      commands: { list: commandList, answer: answerCommand }, pointOut: { card: pointCard }, sides: { list: sideList, check: checkSides } },
+      commands: { list: commandList, answer: answerCommand }, pointOut: { card: pointCard }, sides: { list: sideList, check: checkSides },
+      /* the API route (0.31.0): `route.of(combat)` / `route.set(combat, "api" | "chat" | "off")` her "Thinks by" list; `route.model(token)` which
+         model thinks for it and why; `route.pick(scene, tokenIds, "opus" | "sonnet" | null)` her Model tick (null: the rule again). The rest is the
+         bridge worker's door: `route.wanted()` (a read: is a fight on the API route, Wake Angel's latest press), `route.note(note)`, and
+         `handOff(combat, requestId, reason, meta)` when the API can't plan a turn (it falls back to a chat, then the GM). `route.wake()` is the
+         card's Wake Angel. The worker waits with `waitForEvent(cursor, s, { generation, route: "api" })` and hands in with `by: "api"`. */
+      route: { of: fightRoute, set: setRoute, model: modelOf, pick: setModelPick, wanted: apiWanted, note: setApiNote, wake: wakeAngel }, handOff },
     /* monster minds (0.24.0), `api.minds`: how a chat reads and writes profiles (api.minds.set, api.minds.open, api.minds.library.put and the rest). `by: "angel"` never replaces a line whose words are the GM's unless `force`.
        This is the chat's door, so a write with no `by` is Angel's (the windows say "gm" themselves): only `by: "gm"` for words she dictated, and
        `giveOwn`, `dropOwn`, `library.remove` and `library.import` only when she asked for them. */

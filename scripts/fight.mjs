@@ -21,6 +21,7 @@ import { breaksYield, gestureWords, orderHtml, sayHtml, speechFor, speechForPack
 import { canCommand, commandForPacket, commandInForce, commandSpent, commandTag, commandWords, degreeOf, outcomeOf, resultWords } from "./command.mjs";
 import { allyGets, allyResult, canPointOut, hasLost, pointLines, previewLines, squareFeet, withBelief, wrongSquare } from "./pointout.mjs";
 import { changedForPacket, sideCardWords, sideChange, sideTag, sideWord } from "./sides.mjs";
+import { apiNoteWords, modelFor, routeOf, wakeState, whoGets } from "./route.mjs";
 
 const ID = "lythara-encounter-builder", WORKBENCH = "xdy-pf2e-workbench", TOOLBELT = "pf2e-toolbelt", VISIONER = "pf2e-visioner", HUD = "pf2e-hud", GROUND_RADIUS = 10, STEP_MS = 20000, SETTLE_MS = 400, SCENE_MS = 30000, RESUMABLE = ["ready", "running", "held", "stopped", "saves"];
 export const runnerName = () => game.settings.get(ID, "runner");
@@ -907,17 +908,19 @@ export async function submitPlan(combat, requestId, plan, meta = {}) {
   /* a choice in the middle of an action (0.27.0): { choice, reason } where a plan would go; it is no plan and uses up no try */
   if ((r.choice && !r.choice.answer) || isChoice(plan)) {
     if (!r.choice || r.choice.answer) return { state: r.state, reason: "No choice is waiting on that turn." };
-    if (stale(brainNow(), cleanMeta(meta).generation)) return { state: r.state, ignored: true, reason: SUPERSEDED };
+    if (stale(brainNow(routeOfMeta(meta)), cleanMeta(meta).generation)) return { state: r.state, ignored: true, reason: SUPERSEDED };
+    const off = offRoute(combat, r, meta); if (off) return { state: r.state, ignored: true, reason: off };
     const c = cleanChoice(plan); if (!c.ok) return { state: "choice", reason: `This event asks for a choice, not a plan. ${c.reason}` };
     if (c.seq != null && c.seq !== r.choice.seq) return { state: r.state, reason: "That choice has already been answered; this one is another." };   /* an answer that arrives late never lands on the next question (review 6) */
-    await save(combat, requestId, { "choice.answer": c.choice, "choice.answeredBy": "angel", "choice.reason": c.reason || null });
+    await save(combat, requestId, { "choice.answer": c.choice, "choice.answeredBy": "angel", "choice.reason": c.reason || null, "choice.by": whole({ ...cleanMeta(meta), at: Date.now() }) });   /* who answered, for the History's API total (0.31.0) */
     return { state: "chosen", choice: c.choice };
   }
   if (r.state !== "requested" && r.state !== "ready") throw new Error(`That turn is ${r.state}.`);
   if ((r.pos ?? 0) > 0) throw new Error("That turn is under way: its first steps are done, so a new plan can't replace them.");   /* between Next steps */
-  const who = cleanMeta(meta); if (stale(brainNow(), who.generation)) return { state: r.state, ignored: true, reason: SUPERSEDED };
+  const who = cleanMeta(meta); if (stale(brainNow(routeOfMeta(meta)), who.generation)) return { state: r.state, ignored: true, reason: SUPERSEDED };
+  const off = offRoute(combat, r, meta); if (off) return { state: r.state, ignored: true, reason: off };
   if (JSON.stringify(plan ?? null).length > PLAN_BYTES) return { state: r.state, reason: "That plan is far too long to be a plan." };
-  await save(combat, requestId, { plan: whole(plan), state: "submitted", verdict: null, changeVerdict: null, by: whole(who) });   /* a new plan: an old change's refusal is about the old one */
+  await save(combat, requestId, { plan: whole(plan), state: "submitted", verdict: null, changeVerdict: null, by: whole({ ...who, at: Date.now() }) });   /* `at` tells one plan's usage from another's (0.31.0) */   /* a new plan: an old change's refusal is about the old one */
   if (isRunner()) await judge(combat, requestId);
   for (let i = 0; i < 40; i++) { await new Promise(res => setTimeout(res, 250)); const n = request(combat, requestId); if (n.state !== "submitted") return answer(n); }
   return { state: "submitted", reason: runnerProblem() ?? `${runnerName()} hasn't answered.` };
@@ -960,7 +963,7 @@ async function judgeNow(combat, requestId) {
 /* The reason goes back to the thinker once, as a retry event. A second refusal goes to the GM. */
 async function reject(combat, requestId, reason) {
   const tries = (request(combat, requestId).tries ?? 0) + 1, last = tries >= MAX_TRIES, at = `requests.${requestId}`;
-  await saveTurns(combat, { [`${at}.state`]: "requested", [`${at}.since`]: clock(), [`${at}.tries`]: tries, [`${at}.steps`]: null, [`${at}.verdict`]: last ? `Couldn't do: ${reason}` : reason, [`${at}.refused.${tries}`]: { reason, plan: cleanPlan(request(combat, requestId).plan).plan ?? null, at: Date.now() }, ...(last ? {} : eventChange("retry", requestId, tries)) });   /* an earlier plan's steps go: they'd read as this one's */
+  await saveTurns(combat, { [`${at}.state`]: "requested", [`${at}.since`]: clock(), [`${at}.tries`]: tries, [`${at}.steps`]: null, [`${at}.verdict`]: last ? `Couldn't do: ${reason}` : reason, [`${at}.refused.${tries}`]: { reason, plan: cleanPlan(request(combat, requestId).plan).plan ?? null, at: Date.now(), by: request(combat, requestId).by ?? null }, ...(last ? {} : eventChange("retry", requestId, tries)) });   /* an earlier plan's steps go: they'd read as this one's */
   return { state: "requested", reason, triesLeft: Math.max(0, MAX_TRIES - tries) };
 }
 
@@ -970,12 +973,18 @@ async function reject(combat, requestId, reason) {
 /* a plan replaces the last one whole: a merge would keep keys the new one doesn't have */
 const whole = v => v && typeof v === "object" ? foundry.data.operators.ForcedReplacement.create(v) : v;
 const PLAN_BYTES = 8000, SUPERSEDED = "A newer chat is thinking for the monsters now, so this was ignored.";
-/* the generation lives in "brain" and is written only by a hello; when the thinker last asked lives in "brainAt", which every wait renews */
-const brainNow = () => ({ generation: game.settings.get(ID, "brain")?.generation ?? 0, at: game.settings.get(ID, "brainAt") ?? 0, launch: game.settings.get(ID, "brainLaunch") ?? "" });
+/* the generation lives in "brain" and is written only by a hello; when the thinker last asked lives in "brainAt", which every wait renews.
+   The API route (0.31.0) has its own three, so the bridge's worker and a chat never retire each other: a hello retires only its own route's
+   older thinker. */
+const BRAIN_KEYS = { chat: ["brain", "brainAt", "brainLaunch"], api: ["apiBrain", "apiBrainAt", "apiBrainLaunch"] };
+const thinkerOf = route => route === "api" ? "api" : "chat";
+const brainNow = (route = "chat") => { const [g, a, l] = BRAIN_KEYS[thinkerOf(route)]; return { generation: game.settings.get(ID, g)?.generation ?? 0, at: game.settings.get(ID, a) ?? 0, launch: game.settings.get(ID, l) ?? "" }; };
+/* a plan, a choice or a giving-up counts against the generation of the route it came by */
+const routeOfMeta = meta => cleanMeta(meta).by === "api" ? "api" : "chat";
 /* which launch of the world this is: the server clock restarts with each, so a listening time is only good for its own (0.23.0). The same on every page. */
 const launchNow = () => String(game.world?.lastPlayed ?? "");
 /* the time first, the launch after: between the two a new time with an old launch reads as not listening, never the other way round */
-const renewBrain = async () => { await game.settings.set(ID, "brainAt", clock()); if (game.settings.get(ID, "brainLaunch") !== launchNow()) await game.settings.set(ID, "brainLaunch", launchNow()); };
+const renewBrain = async (route = "chat") => { const [, a, l] = BRAIN_KEYS[thinkerOf(route)]; await game.settings.set(ID, a, clock()); if (game.settings.get(ID, l) !== launchNow()) await game.settings.set(ID, l, launchNow()); };
 const fights = () => game.combats.filter(c => c.started);
 const eventsOf = combat => Object.values(turns(combat).events ?? {}).map(e => ({ ...e, combatId: combat.id }));
 function eventChange(kind, requestId, tries, extra = {}) {
@@ -1006,11 +1015,50 @@ async function checkStalls() {
     await saveTurns(combat, { [`requests.${r.id}.stall`]: whole(s), ...eventChange("stall", r.id, r.tries ?? 0, { since: s.since }) });
   }
 }
-function firstEvent(cursor) {
-  const reqOf = e => request(game.combats.get(e.combatId), e.requestId);
-  const ev = pickEvent(fights().flatMap(eventsOf), cursor, e => live(e, reqOf(e)));
-  if (ev?.kind === "choice") { const c = game.combats.get(ev.combatId); return choiceOut(ev, reqOf(ev), packetFor(c, ev.requestId)); }
-  return ev ? eventOut(ev, reqOf(ev)) : null;
+/** The first event after the cursor that is this thinker's (0.31.0): still live, for a turn that is still the fight's own (a turn the GM skipped past
+    is never planned: it cost a wait each, and on the API money, seen live 2026-11-11), and offered to this route by the fight's route and who is
+    listening (`whoGets`: API, then a listening chat, then the GM). Each goes out with the model the monster is thought for by (`modelOf`). */
+function firstEvent(cursor, thinker = "chat") {
+  const reqOf = e => request(game.combats.get(e.combatId), e.requestId), api = brainListening("api");
+  const mine = e => { const c = game.combats.get(e.combatId), r = reqOf(e); if (!c || !live(e, r)) return false;
+    if (["turn", "retry", "replan"].includes(e.kind) && !r.reaction && currentRequest(c)?.id !== e.requestId) return false;
+    return whoGets({ route: fightRoute(c), kind: e.kind, api, handedOff: !!r.handedOff }) === thinker; };
+  const ev = pickEvent(fights().flatMap(eventsOf), cursor, mine); if (!ev) return null;
+  const c = game.combats.get(ev.combatId), r = reqOf(ev), tok = c.scene?.tokens.get(r.tokenId), m = tok ? modelOf(tok, c) : null, model = m ? { model: m.model, modelWhy: m.why || null } : {};
+  if (ev.kind === "choice") return { ...choiceOut(ev, r, packetFor(c, ev.requestId)), ...model };
+  return { ...eventOut(ev, r), ...model };
+}
+/** A fight's route (0.31.0): its own, else the setting for new fights. */
+export const fightRoute = combat => routeOf(combat?.getFlag(ID, "route"), game.settings.get(ID, "defaultRoute"));
+/** Her "Thinks by" list on Monster Turns. Any GM. */
+export async function setRoute(combat, route) { if (!game.user.isGM) throw new Error("Only a GM can do this."); if (!["api", "chat", "off"].includes(route)) throw new Error(`A route is api, chat or off, not ${route}.`); await combat.setFlag(ID, "route", route); return fightRoute(combat); }
+/** Why a thinker's plan for this request no longer counts, or null: the fight moved to another route while it thought, or the API handed the
+    turn on. A GM's own hand-in (no generation) always counts. */
+function offRoute(combat, r, meta) {
+  const m = cleanMeta(meta); if (m.generation == null || m.by === "gm") return null;
+  const route = fightRoute(combat);
+  if (route === "off") return "Angel is off for this fight, so this was ignored.";
+  if (m.by === "api" && route !== "api") return "This fight isn't on the API route any more, so this was ignored.";
+  if (m.by === "api" && r.handedOff) return "The API handed this turn on to the chat, so this was ignored.";
+  return null;
+}
+/** Which model thinks for a monster, and why (`route.mjs` modelFor): her pick on the token, else Opus for a band leader (whoever leads now) or a
+    spellcaster two or more levels above the party, else Sonnet. The party's level is the encounter's brief's, else the sheets'. */
+export function modelOf(tok, combat = null) {
+  const scene = tok?.parent, actor = tok?.actor; if (!actor) return modelFor({});
+  const band = scene ? bandOf(scene, tok) : null, leads = !!band && leaderOf(scene, band, combat)?.tok?.id === tok.id;
+  const casts = (actor.spellcasting?.regular ?? []).some(e => !e.isRitual && CASTERS.includes(e.category) && (e.spells?.size ?? 0) > 0);
+  const pl = scene?.getFlag(ID, "brief")?.partyLevel, partyLevel = Number.isFinite(pl) ? pl : suggestedLevel();
+  const pick = tok.getFlag(ID, "modelPick");
+  return modelFor({ pick: pick === "opus" || pick === "sonnet" ? pick : null, leads, casts, level: Number.isFinite(actor.level) ? actor.level : null, partyLevel });
+}
+/** Her tick on Monster Minds: "opus", "sonnet", or null to follow the rule again. On each token given. Any GM. */
+export async function setModelPick(scene, tokenIds, pick) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  const v = pick === "opus" || pick === "sonnet" ? pick : null;
+  const updates = tokenIds.map(id => scene.tokens.get(id)).filter(Boolean).map(t => ({ _id: t.id, [`flags.${ID}.${v ? "modelPick" : "-=modelPick"}`]: v }));
+  if (updates.length) await scene.updateEmbeddedDocuments("Token", updates);
+  return updates.length;
 }
 /** The packet a choice goes out with: the request's own, or (a monster's reaction has none) the one from that monster's latest turn. */
 function packetFor(combat, id) {
@@ -1020,27 +1068,49 @@ function packetFor(combat, id) {
 /** Wait for something to think about. With no generation this is a new thinker: it gets `hello` (the prompt, the schemas, its generation) at once and
     any older thinker is retired. Otherwise it returns the first event after `cursor` whose request still waits, holding up to maxSeconds (at most 100)
     for one; { idle: true } if none came. The cursor only moves when the caller asks again with the one it was given, so a dropped call loses nothing. */
-export async function waitForEvent(cursor = 0, maxSeconds = 90, { generation = null } = {}) {
+export async function waitForEvent(cursor = 0, maxSeconds = 90, { generation = null, route = "chat" } = {}) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
   cursor = Number.isFinite(cursor) ? cursor : 0;
-  if (generation == null) { const g = (brainNow().generation ?? 0) + 1; await game.settings.set(ID, "brain", { generation: g, at: 0 }); await renewBrain(); return { cursor, hello: hello(g) }; }
-  if (stale(brainNow(), generation)) return { cursor, superseded: true, reason: SUPERSEDED };
-  await renewBrain();
-  let got = firstEvent(cursor);
+  const who = thinkerOf(route);   /* the bridge's API worker waits with route "api" (0.31.0); a chat with none */
+  if (generation == null) { const g = (brainNow(who).generation ?? 0) + 1; await game.settings.set(ID, BRAIN_KEYS[who][0], { generation: g, at: 0 }); await renewBrain(who);
+    if (who === "api" && game.settings.get(ID, "apiNote")?.state) await game.settings.set(ID, "apiNote", {});   /* listening again: the old note is gone */
+    return { cursor, hello: { ...hello(g), route: who } }; }
+  if (stale(brainNow(who), generation)) return { cursor, superseded: true, reason: SUPERSEDED };
+  await renewBrain(who);
+  let got = firstEvent(cursor, who);
   if (!got) got = await new Promise(res => {
     let hook = null, timer = null;
     const done = v => { Hooks.off("updateCombat", hook); clearTimeout(timer); res(v); };
-    hook = Hooks.on("updateCombat", () => { const e = firstEvent(cursor); if (e) done(e); });
+    hook = Hooks.on("updateCombat", () => { const e = firstEvent(cursor, who); if (e) done(e); });
     timer = setTimeout(() => done(null), waitSeconds(maxSeconds) * 1000);
   });
-  if (stale(brainNow(), generation)) return { cursor, superseded: true, reason: SUPERSEDED };
+  if (stale(brainNow(who), generation)) return { cursor, superseded: true, reason: SUPERSEDED };
   return got ? { cursor: got.seq, event: got } : { cursor, idle: true };
 }
 /** Foundry's server clock: the same in every browser, so the light means the same on Rhea's computer as on the server PC. */
 export const clock = () => game.time.serverTime;
 /** Is the thinker there? For the Monster Turns window. */
-export const brainListening = () => listening(brainNow(), clock(), launchNow());
-export const brainSeenAt = () => brainNow().at ?? 0;
+export const brainListening = (route = "chat") => listening(brainNow(route), clock(), launchNow());
+export const brainSeenAt = (route = "chat") => brainNow(route).at ?? 0;
+/** For the bridge's API worker (0.31.0), a read that writes nothing: is a fight on the API route, and Wake Angel's latest press. */
+export function apiWanted() {
+  return { ok: game.user.isGM, want: fights().some(c => fightRoute(c) === "api"), wake: game.settings.get(ID, "apiWake") ?? {}, launch: launchNow(), listening: brainListening("api"), generation: brainNow("api").generation ?? 0 };
+}
+/** The worker's note for the card: why it stopped ("stopped", "capped"), that it has no key ("no-key"), or {} to clear. */
+export async function setApiNote(note = {}) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  const n = note && typeof note === "object" && ["stopped", "capped", "no-key"].includes(note.state) ? { state: note.state, reason: text(note.reason, 200) || null, at: clock(), launch: launchNow() } : {};
+  /* a worker that stops is no longer listening: its light goes off at once, so the next turn falls back to a chat or the GM instead of waiting
+     two minutes for the light to fade */
+  if (n.state === "stopped" || n.state === "capped") await game.settings.set(ID, "apiBrainAt", 0);
+  await game.settings.set(ID, "apiNote", n); return n;
+}
+/** The worker's note in words for the card, when it was written in this launch of the world (an older one is about a bridge that has restarted since). */
+export const apiNoteNow = () => { const n = game.settings.get(ID, "apiNote"); return n?.state && (n.launch ?? "") === launchNow() ? apiNoteWords(n) : ""; };
+/** Where Wake Angel's latest press stands for the card: "waking" (under 20 s, no light yet), "silent" (nothing answered), or null. */
+export const apiWakeNow = () => wakeState(game.settings.get(ID, "apiWake"), { now: clock(), launch: launchNow(), api: brainListening("api") });
+/** Wake Angel on the card: a press the bridge's worker sees at its next look (every few seconds). */
+export async function wakeAngel() { if (!game.user.isGM) throw new Error("Only a GM can do this."); const w = game.settings.get(ID, "apiWake") ?? {}; const n = { n: (w.n ?? 0) + 1, at: clock(), launch: launchNow() }; await game.settings.set(ID, "apiWake", n); return n; }
 /** Legality only: what the runner would say, with nothing written. Needs the fight open on this page. */
 export async function checkOnly(combat, requestId, plan) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
@@ -1055,17 +1125,30 @@ export async function checkOnly(combat, requestId, plan) {
 export async function reportFailure(combat, requestId, reason, meta = {}) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
   const r = request(combat, requestId); if (!r) throw new Error("No such request.");
-  if (r.choice && !r.choice.answer) { if (stale(brainNow(), cleanMeta(meta).generation)) return { ignored: true, reason: SUPERSEDED }; await save(combat, requestId, { "choice.gaveUp": true }); return { state: r.state, gaveUp: true }; }   /* the GM chooses on her card */
+  if (r.choice && !r.choice.answer) { if (stale(brainNow(routeOfMeta(meta)), cleanMeta(meta).generation)) return { ignored: true, reason: SUPERSEDED }; await save(combat, requestId, { "choice.gaveUp": true }); return { state: r.state, gaveUp: true }; }   /* the GM chooses on her card */
   if (r.state !== "requested") throw new Error(`That turn is ${r.state}.`);
-  if (stale(brainNow(), cleanMeta(meta).generation)) return { ignored: true, reason: SUPERSEDED };
+  if (stale(brainNow(routeOfMeta(meta)), cleanMeta(meta).generation)) return { ignored: true, reason: SUPERSEDED };
   await save(combat, requestId, { gaveUp: true, verdict: `Angel couldn't plan this turn: ${text(reason, 200) || "no reason given"}. Play it yourself.` });
   return { state: "requested", gaveUp: true };
+}
+/** The API couldn't plan this turn (0.31.0): it falls back to a listening chat, then to the GM, as agreed. The card says why. A fresh event goes out,
+    so a chat whose cursor is already past the turn's first event still gets it. Only the API route hands a turn on. */
+export async function handOff(combat, requestId, reason, meta = {}) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  const r = request(combat, requestId); if (!r) throw new Error("No such request.");
+  const who = cleanMeta(meta); if (who.by !== "api") throw new Error("Only the API route hands a turn on.");
+  if (stale(brainNow("api"), who.generation)) return { ignored: true, reason: SUPERSEDED };
+  const open = !!r.choice && !r.choice.answer && !r.choice.gaveUp;
+  if (!open && r.state !== "requested") return { state: r.state, reason: `That turn is ${r.state}.` };
+  const ev = open ? eventChange("choice", requestId, r.tries ?? 0, { choiceSeq: r.choice.seq }) : eventChange((r.tries ?? 0) > 0 ? "retry" : r.why ? "replan" : "turn", requestId, r.tries ?? 0);
+  await saveTurns(combat, { [`requests.${requestId}.handedOff`]: { reason: text(reason, 200) || "no reason given", at: clock() }, ...ev });
+  return { state: r.state, handedOff: true };
 }
 /** A short read of where a fight stands, for whoever thinks. */
 export function fightState(combat = game.combat) {
   if (!combat) return { fight: false };
   const r = currentRequest(combat);
-  return { combatId: combat.id, started: combat.started, round: combat.round, listening: brainListening(), generation: brainNow().generation ?? 0,
+  return { combatId: combat.id, started: combat.started, round: combat.round, route: fightRoute(combat), listening: brainListening(), apiListening: brainListening("api"), generation: brainNow().generation ?? 0,
     request: r ? { id: r.id, state: r.state, monster: r.packet?.you?.label ?? null, verdict: r.verdict ?? null, triesLeft: Math.max(0, MAX_TRIES - (r.tries ?? 0)), gaveUp: !!r.gaveUp } : null };
 }
 

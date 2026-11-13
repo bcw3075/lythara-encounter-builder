@@ -130,10 +130,11 @@ export function choicePacket(p) {
     you: { label: p.you?.label ?? null, name: p.you?.name ?? null, hp: p.you?.hp ?? null, conditions: p.you?.conditions ?? [], ...(p.you?.side ? { side: p.you.side } : {}) },
     allies: (p.allies ?? []).map(who), perceived: (p.perceived ?? []).filter(x => x?.label).map(who), round: p.round ?? null };
 }
-/** What the thinker receives for a choice: the question, and the monster's packet as it last was, cut down (`choicePacket`). */
+/** What the thinker receives for a choice: the question, and the monster's packet as it last was, cut down (`choicePacket`). The seq to pass back
+    is the question's own (`choiceSeq`): a choice the API handed on to the chat goes out again as a newer event of the same question (0.31.0). */
 export function choiceOut(ev, req, packet = null) {
   return { seq: ev.seq, kind: "choice", combatId: ev.combatId, requestId: ev.requestId, round: req.round, monster: packet?.you?.label ?? null,
-    choice: { about: req.choice.kind, on: req.choice.ally ?? null, words: req.choice.words, answers: CHOICE_KINDS, answerWith: `{ "choice": "repent" | "refuse", "reason": "a few words", "seq": ${ev.seq} } where a plan would go` }, packet: choicePacket(packet) };
+    choice: { about: req.choice.kind, on: req.choice.ally ?? null, words: req.choice.words, answers: CHOICE_KINDS, answerWith: `{ "choice": "repent" | "refuse", "reason": "a few words", "seq": ${ev.choiceSeq ?? ev.seq} } where a plan would go` }, packet: choicePacket(packet) };
 }
 
 /* ---------- stalls (Rhea, 2026-11-08) ---------- */

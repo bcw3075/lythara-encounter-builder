@@ -48,6 +48,7 @@ Settled by Angel, told to Rhea, hers to change:
 - **A marker survives `esc`** (it escapes only `& < > "`), so a card can be turned after it is built; but text the GM typed is in the same card, which is why only the exact marker shapes are touched.
 
 ## Open items
+- A party member Angel plays (a character) has no pronoun line in its packet's `mind`: the thinker isn't told the sheet's pronoun, so its "reason" and "why" may not use it (found 2026-11-13 in 0.31.0's close-out on installed 0.30.1: Valeros, Gender box "M/He/Him", had `mind: { goesFor: "The wounded" }` only). The module's own sentences about it use the sheet.
 - Not swept (they still say "it"): the thinker's instructions; band nature and plan lines; the "not certain" reasons of a monster's reaction to a player's move; a hearer's "is out of earshot (no sound reaches it …)"; the animal in a handler's plan refusal for a Command an Animal step that names a hostile animal; Monster Minds' and the Minds Library's own help text.
 - A character's pronoun can't be set in Monster Minds: only on its sheet.
 - A monster whose name is shown to players as "a creature" is still written with its pronoun in the lines players see (Weight of Guilt's window).

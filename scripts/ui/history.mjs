@@ -6,7 +6,7 @@ import { esc } from "../journal.mjs";
 import { SPEECH_LOG } from "../speech.mjs";
 import { COMMAND_LOG } from "../command.mjs";
 import { SIDE_LOG } from "../sides.mjs";
-import { historyHTML, historyOf, journalHTML, namer, notebooksHTML } from "../history.mjs";
+import { apiUseWords, historyHTML, historyOf, journalHTML, namer, notebooksHTML } from "../history.mjs";
 import { bandLogWords, notebookOf, runnerName } from "../fight.mjs";
 import { bookPrint } from "../memory.mjs";
 import { MINDS } from "../minds.mjs";
@@ -105,7 +105,7 @@ export class HistoryApp extends foundry.applications.api.ApplicationV2 {
     const rds = rounds(c), last = rds.at(-1)?.round;
     const open = (key, t) => this.folds.has(key) ? this.folds.get(key) : t.current || rds.find(r => r.turns.includes(t))?.round === last;
     const saved = c.getFlag(ID, "turns")?.historySaved;
-    return `<div class="leb-h-top"><span>${esc(c.scene?.name ?? "")} · round ${c.round}${saved ? (unsaved(c) ? " · changed since saved" : " · saved") : ""}</span><button type="button" data-do="save"><i class="fa-solid fa-book"></i> Save to journal</button></div>${historyHTML(rds, esc, { open })}${notebooksHTML(notebooks(c), esc)}`;
+    return `<div class="leb-h-top"><span>${esc(c.scene?.name ?? "")} · round ${c.round}${saved ? (unsaved(c) ? " · changed since saved" : " · saved") : ""}</span><button type="button" data-do="save"><i class="fa-solid fa-book"></i> Save to journal</button></div>${(() => { const w = apiUseWords(c.getFlag(ID, "turns") ?? {}); return w ? `<p class="leb-h-api">${esc(w)}</p>` : ""; })()}${historyHTML(rds, esc, { open })}${notebooksHTML(notebooks(c), esc)}`;
   }
   _replaceHTML(html, content) {
     const atEnd = content.scrollHeight - content.scrollTop - content.clientHeight < 40, top = content.scrollTop;

@@ -1,0 +1,61 @@
+---
+feature: api-route
+files: [scripts/route.mjs]
+functions: [fight.mjs:routeOfMeta, fight.mjs:thinkerOf, fight.mjs:fightRoute, fight.mjs:setRoute, fight.mjs:offRoute, fight.mjs:modelOf, fight.mjs:setModelPick, fight.mjs:apiWanted, fight.mjs:setApiNote, fight.mjs:apiNoteNow, fight.mjs:apiWakeNow, fight.mjs:wakeAngel, fight.mjs:handOff]
+dependsOn: [brain, turn-loop, card-ui, minds, history, bands]
+since: 0.31.0
+---
+The API route: a fight's monsters thought for through the Claude API by the bridge's worker (Sonnet, Opus for band leaders and spellcasters two or more levels above the party), a route per fight (API, chat, off) with the fallback API, a listening chat, then the GM, Wake Angel, the Model tick, and the cost in the History.
+
+## Decisions
+1. **Models (Rhea, 2026-11-12, after the API usage test she judged blind):** Sonnet by default, Opus for band leaders (Angel's recommendation, the one clear difference in her marks) "and Opus on the bosses with spells as well" (hers). The test's numbers: Sonnet about 2¢ and 7 s a turn, Opus about 4¢ and 10 s; both answered every turn with JSON the module could read.
+2. **What a boss with spells is (q-28-api, 2026-11-13): "Any caster 2+ above".** Opus for every monster that can cast spells (a spell in a prepared, spontaneous, innate or focus entry; rituals don't count) and is two or more levels above the party, so a fight can have several. She chose it over Angel's recommendation, which also asked for the fight's highest level and either 2+ above or alone. With a per-monster Opus tick on Monster Minds, set by the rule and hers to flip either way. A band leader is whoever leads now, so Opus passes to a successor by the rule. The party's level is the encounter's brief's, else the sheets'.
+3. **The samples (2026-11-13, `plan/samples-api/` in the private repo): "Build as shown"**, with the calls Angel listed beside them as hers to change:
+   - a new fight starts on the route the module's setting "Angel thinks by (new fights)" names, API unless changed; each fight can be switched in the "Thinks by" list at the top of Monster Turns;
+   - the bridge listens by itself whenever a fight on the API route is running, so nothing needs clicking; **Wake Angel** shows only on a waiting turn when nobody listens for it;
+   - **the fallback, as agreed in the design:** a turn the API can't plan goes to a listening chat, then to her; a hard failure (the key refused, no credit, a model the API doesn't know) stops the API until Wake Angel, and the card says why;
+   - **a safety cap:** at most 120 API calls an hour (about $5 at the worst), then it stops and says so, so a fault can't drain the $50 workspace;
+   - **a turn the GM skipped past is never planned,** on the chat route too (the brain feature's open item, closed here): it cost a wait each, and on the API money;
+   - **stall events stay with the chat:** the API can't go and look at why something is stuck;
+   - the History shows each plan's model, seconds and cost, and the fight's total at the top.
+4. **The Wake Angel button (Rhea, 2026-11-06):** asked for when Angel isn't listening; impossible on the chat route (nothing can start a chat from outside), so it was kept for this route, where the worker can listen all fight and the button starts it if it isn't.
+5. **The key stays on her PC (2026-11-05):** she made the Console workspace "Angel Mod", its $50 a month limit and the key, and put the key in the bridge's `config.json` herself. Claude never sees it; the module never sees it; the worker sends it only to the API.
+
+## How it works
+- **Two thinkers, one brain interface.** The API route has its own world settings `apiBrain` (the generation), `apiBrainAt` and `apiBrainLaunch`, beside the chat's `brain`, `brainAt` and `brainLaunch`, so a hello retires only its own route's older thinker (`thinkerOf`, `brainNow(route)`, `renewBrain(route)`). `waitForEvent(cursor, s, { generation, route: "api" })` is the worker's wait; a plan, a choice or a giving-up counts against the generation of the route its `by` names (`routeOfMeta`).
+- **Who gets an event** (`whoGets` in `route.mjs`, used by `firstEvent`): a fight on "off" goes to nobody; on "chat" to the chat; on "api" to the API while it listens, else to the chat, and always to the chat for a stall or a turn the API handed on. `firstEvent` also drops a turn, retry or re-plan event for a request that is no longer the fight's current one (`currentRequest`), so a skipped turn is never planned. Each event goes out with `model` ("sonnet" or "opus") and `modelWhy` from `modelOf`.
+- **A fight's route** is the Combat flag `route` (`fightRoute`, `setRoute`), else the world setting `defaultRoute` ("api", "chat", "off"; default "api"). A plan from a thinker for a fight that is now on another route, or on "off", or from the API after it handed the turn on, is ignored with words (`offRoute`); a GM's own hand-in (no generation) always counts.
+- **The model** (`modelFor` in `route.mjs`, glued by `modelOf`): her pick on the token (`flags.<module>.modelPick`, "opus" or "sonnet"; absent means the rule), else Opus for the band's leader now (`leaderOf`) or a spellcaster at least `OPUS_LEVELS_ABOVE` (2) levels above the party, else Sonnet. The answer keeps what the rule alone would pick, so the Model row can say what an untick undoes. `setModelPick` keeps a pick only where it differs from the rule (the window's `setModel`), so the rule still moves Opus to a new leader. The bridge maps "sonnet" and "opus" to model ids (its `apiModels`).
+- **The worker's door:** `apiWanted` (`route.wanted` on the API; a read: is any started fight on the API route, Wake Angel's latest press `{ n, at, launch }`, the launch); `setApiNote` (`route.note`) writes `apiNote` ("stopped", "capped", "no-key", or `{}`), and a stop also sets `apiBrainAt` to 0 so the light goes off at once and the next turn falls back; a hello on the API route clears the note. `handOff(combat, requestId, reason, meta)` (by "api" only) marks the request `handedOff: { reason, at }` and writes a fresh event of the same kind (a choice keeps its `choiceSeq`, and `choiceOut` asks for that seq back), so a chat whose cursor is past the first one still gets it.
+- **Monster Turns** (`ui/turns.mjs`): the top line is `listenLine` (which light is on, and through what) with the "Thinks by" list; a ticked monster's row on the API route shows its model; a waiting turn shows "Angel is thinking (Opus: leads its band)." when the API listens, the API's reason when it handed the turn on, "Angel is off for this fight…" on "off", and when nobody listens the worker's note (`apiNoteNow`, this launch only), the words and **Wake Angel** beside Play it myself. A press writes `apiWake` (`wakeAngel`); "Waking Angel…" lasts `WAKE_MS` (20 s) and then "Nothing answered…" (`wakeState`); the window sets a timer for that change and for either light going grey.
+- **Monster Minds** (`ui/minds.mjs`): the Model row under Band, for the monsters the page is for (a kind's page leaves out those with their own profile): one tick with "(else Sonnet)" and the rule's reason, "yours · back to the rule" when she has picked, and a half-ticked box with each monster's model when they differ. Angel isn't told about the tick.
+- **The History**: each plan's `by` carries `at` (so one plan's usage is told from another's), a refusal keeps the refused plan's `by`, and an answered choice keeps `choice.by`; `byWords` gives "Angel (API, Opus 5.5) · 9.8 s · 4¢", `apiUseWords` the fight's total at the top of the window, and a handed-on turn has a line saying so.
+- **Prompt version 32:** the thinker is told that on the API route it answers with the JSON alone and has no tools, and that a ground judgment's picture comes with the event when it can be taken.
+- **The bridge's side** (its own repo, `src/worker.mjs`, bridge 0.4.0): the worker looks every `apiPollS` seconds with `route.wanted()`, says hello, waits in chunks, sends each event to the Messages API with the hello's prompt as a cached system prompt and the event as the user message (with the map's picture for a ground or walls judgment when the element is on its page), and hands the answer in with `submitPlan(..., { by: "api", generation, model, usage })`. Its own DEVELOPING.md has the rest.
+
+## Checks
+- (rt-1) {unit} The model rule: a leader, a caster two or more above, one only one above, a non-caster far above, an unknown level, no facts, a caster below.
+- (rt-2) {unit} Her pick wins and the rule is kept beside it; a bogus pick is ignored.
+- (rt-3) {unit} Who gets an event on each route, with and without the API listening, handed on, a stall, a choice; `routeOf` with bad input.
+- (rt-4) {unit} The light's words on each route.
+- (rt-5) {unit} The worker's note in words (no key, stopped with a reason, nothing, control characters) and Wake Angel's states (waking, silent, the light on, another launch, never pressed).
+- (rt-6) {unit} Model names, cents and a plan's line for the History.
+- (rt-7) {unit} The fight's API total counts each plan once, refused plans and choices too, and is empty with no API plans.
+- (rt-8) {unit} A handed-on choice asks for its own number back; `cleanMeta` keeps the usage.
+- (rt-9) {unit} The hello (prompt version 32) says the API route answers with the JSON alone and how the ground picture comes.
+- (rt-10) {live} On PF2 Test with bridge 0.4.0 and her key: a fight on the API route with a ticked monster: the light turns to "Angel is listening (API)" by itself within seconds, the turn is planned with Sonnet and runs, the row shows "Sonnet", the History shows "Angel (API, Sonnet 5.5) · … s · …¢" and the fight's total.
+- (rt-11) {live,shared:minds} Opus by the rule: a band leader's turn goes with Opus ("Angel is thinking (Opus: leads its band)."); Monster Minds' Model row by real clicks: the rule's pick and why, an untick gives "yours · back to the rule" and the next turn goes with Sonnet, back to the rule clears the pick.
+- (rt-12) {live,shared:card-ui} The "Thinks by" list by real clicks as AI: Chat, and a chat's `fight_wait` gets the next turn while the API gets nothing; Off, and a waiting turn says "Angel is off for this fight" with nobody planning; back to API.
+- (rt-13) {live} Nobody listening on the API route: a waiting turn shows the words and Wake Angel beside Play it myself; a press shows "Waking Angel…" and the worker starts within seconds; a turn handed on (by `run_script` as the API) shows the reason and goes to a listening chat.
+- (rt-14) {live,player} As Test Player: no route list, Model row or note anywhere, and an API-planned Strike's cards are the usual ones.
+- (rt-15) {live,shared:brain} A ticked monster's turn skipped past with nobody listening is not sent to the API (or a chat) when it starts listening; the current turn is.
+
+## Traps
+- **The card's buttons share one click handler** (`[data-request] [data-do]` in `ui/turns.mjs`): any button there whose `data-do` it doesn't know falls through to Play it myself. Wake Angel is answered before that fall-through; a new card button must be too.
+- **A stopped worker left its light on for two minutes** in the first draft, so the next turn on the API route waited for a thinker that had gone; a stop now zeroes `apiBrainAt` in the same step as its note.
+
+## Open items
+- A bridge that is shut down or crashes leaves the API light on for up to two minutes; turns on the API route wait until it fades, then fall back to a chat or the GM.
+- `handOff` writes an event from the bridge's page; when the bridge isn't the runner that is a second writer of events (two numbering at once could collide). The bridge is the runner in PF2 Test.
+- The ground and walls picture is taken only from the bridge's own page (the runner's in PF2 Test).
+- Two fights at once on the API route, and the cost of a long fight, haven't been measured.

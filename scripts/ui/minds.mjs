@@ -8,6 +8,8 @@ import { BAND_CAPS, FALL_BACK, NATURE, NATURE_LABEL, NATURE_PICKS, NATURE_SUGGES
 import { bandViews, joinBand, removeBand, setBand } from "../bandlib.mjs";
 import { dropOwn, giveOwn, kindFacts, libraryEntries, libraryExport, libraryGet, libraryImport, libraryPut, libraryRemove, mindRows, partyPeople, rowActor, rowProfile, setLines } from "../library.mjs";
 import { formsOf, fromGender, pro } from "../pronoun.mjs";
+import { modelOf, setModelPick } from "../fight.mjs";
+import { modelName } from "../route.mjs";
 
 const STYLE = `.leb-minds .window-content{overflow:hidden!important;padding:0;display:flex;flex-direction:column}
 .leb-minds .lm-body{flex:1;display:flex;min-height:0}.leb-minds .lm-side{width:230px;overflow-y:auto;padding:8px;border-right:1px solid var(--color-border,#8886)}
@@ -25,7 +27,7 @@ const STYLE = `.leb-minds .window-content{overflow:hidden!important;padding:0;di
 .leb-minds .lm-tag.library{background:#cfe6b5}.leb-minds .lm-tag.brief{background:#d9d9d9}.leb-minds .lm-band h3{margin:14px 0 2px;font-size:13px;letter-spacing:.06em;text-transform:uppercase;opacity:.75;border:0}
 .leb-minds .lm-spot{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.leb-minds .lm-spot input[type=number]{width:64px}.leb-minds .lm-spot button{width:auto;flex:0 0 auto}.leb-minds .lm-spot select{width:auto}.leb-minds .lm-mem{margin:0;padding-left:18px}
 .leb-minds .lm-tag.people{background:#bcd6f5}.leb-minds .lm-tag.kind{background:#cfe6b5}.leb-minds .lm-tag.encounter{background:#f3d9a8}.leb-minds .lm-tag.own{background:#f0c2ec}.leb-minds .lm-tag.statblock{background:#d9d9d9}.leb-minds .lm-tag.fight{background:#f5b8b0}
-.leb-minds .lm-from a{display:block;margin-top:3px;font-size:11px}.leb-minds .lm-warn{margin:6px 0 0;padding:6px 9px;border:1px solid #a9772a;background:#f3d9a833;border-radius:5px;font-size:13px}
+.leb-minds .lm-from a{display:block;margin-top:3px;font-size:11px}.leb-minds .lm-from.gm{color:#f3d9a8}.leb-minds .lm-mod{display:flex;gap:6px;align-items:center;margin:2px 0}.leb-minds .lm-mod .lm-hint{margin-top:0}.leb-minds .lm-warn{margin:6px 0 0;padding:6px 9px;border:1px solid #a9772a;background:#f3d9a833;border-radius:5px;font-size:13px}
 .leb-minds .lm-note{margin-top:10px;opacity:.75;font-size:12px}.leb-minds .lm-msg{padding:4px 16px;font-size:13px}
 .leb-minds .lm-foot{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;padding:8px 12px;border-top:1px solid var(--color-border,#8886)}.leb-minds .lm-foot button{width:auto;flex:0 0 auto}.leb-minds .lm-foot .lm-left{margin-right:auto}.leb-minds .lm-unsaved{align-self:center;font-size:12px;opacity:.8}
 .leb-minds table.lm-tbl{width:100%;border-collapse:collapse;table-layout:fixed}.leb-minds .lm-tbl td,.leb-minds .lm-tbl th{padding:6px 8px;border-top:1px solid #8883;text-align:left;vertical-align:top;word-wrap:break-word}
@@ -63,7 +65,7 @@ export class MindsApp extends ApplicationV2 {
     let at = bandSel ? null : this.find(rows);
     if (!at && !bandSel && rows.length) { this.sel = refKey(rows[0].ref); this.draft = {}; at = this.find(rows); }
     const built = rows.filter(r => Number.isInteger(r.ref.row)), loose = rows.filter(r => r.ref.kind), party = rows.filter(r => r.party);
-    const item = r => `<div class="lm-it${refKey(r.ref) === this.sel ? " on" : ""}" data-sel="${esc(refKey(r.ref))}">${esc(r.name)} <small>${r.party ? "Angel plays it" : `× ${r.count}`}</small></div>${r.own.map(o => `<div class="lm-it sub${refKey(o.ref) === this.sel ? " on" : ""}" data-sel="${esc(refKey(o.ref))}">${esc(o.name)} <small>own profile</small></div>`).join("")}`;
+    const item = r => `<div class="lm-it${refKey(r.ref) === this.sel ? " on" : ""}" data-sel="${esc(refKey(r.ref))}">${esc(r.name)} <small>${r.party ? (r.owned ? "a player's" : "Angel plays it") : `× ${r.count}`}</small></div>${r.own.map(o => `<div class="lm-it sub${refKey(o.ref) === this.sel ? " on" : ""}" data-sel="${esc(refKey(o.ref))}">${esc(o.name)} <small>own profile</small></div>`).join("")}`;
     const side = `${built.length ? `<h4>In this encounter</h4>${built.map(item).join("")}` : ""}${loose.length ? `<h4>${built.length ? "Not placed by the build" : "On this map"}</h4>${loose.map(item).join("")}` : ""}${party.length ? `<h4>With the party</h4>${party.map(item).join("")}` : ""}<h4>Bands</h4>${bands.map(v => `<div class="lm-it${`band:${v.band.key}` === this.sel ? " on" : ""}" data-sel="band:${esc(v.band.key)}">${esc(v.band.name)} <small>${v.members} in it</small></div>`).join("")}<div class="lm-it" data-action="newBand"><span><i class="fa-solid fa-plus"></i> New band…</span></div>`;
     if (bandSel) return this.bandHtml(bandSel, side);
     if (!at) return `<div class="lm-body"><div class="lm-side">${side}</div><div class="lm-main"><p>No monsters on this map yet. Build an encounter or put monsters on it, then open this again.</p></div></div><div class="lm-foot"><button type="button" class="lm-left" data-action="library"><i class="fa-solid fa-book"></i> Minds Library…</button></div>`;
@@ -89,7 +91,15 @@ export class MindsApp extends ApplicationV2 {
     const foot = `<button type="button" class="lm-left" data-action="library"><i class="fa-solid fa-book"></i> Minds Library…</button>${single && !row.party ? `<button type="button" data-action="dropOwn">Follow its kind again</button>` : ""}${!single && row.tokens.length ? `<button type="button" data-action="giveOwn">Give one monster its own profile…</button>` : ""}${!single && profile.kind ? `<button type="button" data-action="toLibrary">Save to library…</button>` : ""}<span class="lm-unsaved">${this.dirty ? "Not saved yet" : ""}</span><button type="button" data-action="save" class="lm-go"><i class="fa-solid fa-floppy-disk"></i> ${single ? "Save its profile" : "Save for this encounter"}</button>`;
     const inBand = !single && !row.party ? (Number.isInteger(ref.row) ? scene.getFlag(ID, "brief")?.creatures?.[ref.row]?.band ?? "" : (() => { const ks = [...new Set(row.tokens.map(id => bandId(scene.tokens.get(id)?.getFlag(ID, "band"))))]; return ks.length > 1 ? "?" : ks[0] ?? ""; })()) : null;
     const bandRow = inBand === null ? "" : `<div class="lm-row"><label>Band</label><div><select name="band" title="The group these monsters fight as part of. Its leader, nature and plan are on the band's own page, under Bands.">${inBand === "?" ? `<option value="?" selected>(only some of them: pick one to set all)</option>` : ""}<option value="">(no band)</option>${bands.map(v => `<option value="${esc(v.band.key)}"${v.band.key === bandId(inBand) ? " selected" : ""}>${esc(v.band.name)}</option>`).join("")}</select></div><div class="lm-from">${bands.length ? "changed at once" : "make one with New band…"}</div></div>`;
-    return `<div class="lm-body"><div class="lm-side">${side}</div><div class="lm-main"><div class="lm-head">${head}</div>${bandRow}${LINES.map(lineRow).join("")}
+    /* the Model row (0.31.0; Rhea's q-28-api and her sample of 2026-11-13): which model thinks for these monsters on the API route, per monster:
+       by the rule (Opus for a band leader or a spellcaster two or more levels above the party, else Sonnet) until she ticks or unticks it */
+    const fight = game.combats.find(x => x.started && x.scene?.id === scene.id) ?? null, mtoks = (single ? [at.own?.token ?? ref.token] : row.tokens.filter(id => !row.own.some(o => o.token === id))).map(id => scene.tokens.get(id)).filter(Boolean);
+    const ms = this.models = mtoks.map(t => ({ t, m: modelOf(t, fight) })), cap = w => w ? `${w[0].toUpperCase()}${w.slice(1)}.` : "";
+    const modelRow = !ms.length ? "" : (() => { const same = ms.every(x => x.m.model === ms[0].m.model), mine = ms.some(x => x.m.by === "gm"), whys = [...new Set(ms.map(x => x.m.why))];
+      const box = same ? `<label class="lm-mod"><input type="checkbox" data-model ${ms[0].m.model === "opus" ? "checked" : ""}> Opus <span class="lm-hint">(${ms[0].m.model === "opus" ? "else Sonnet" : "Sonnet"})</span></label>` : `<label class="lm-mod"><input type="checkbox" data-model data-some="1"> <span class="lm-hint">(only some of them: tick to set all)</span></label>`;
+      const why = !same ? ms.map(x => `${x.t.name}: ${modelName(x.m.model)}${x.m.why ? ` (${x.m.why})` : ""}.`).join(" ") : mine ? (ms[0].m.rule !== ms[0].m.model ? `The rule would pick ${modelName(ms[0].m.rule)}${whys[0] ? `: ${whys[0]}` : ""}.` : cap(whys[0])) : whys.length === 1 ? cap(whys[0]) : "";
+      return `<div class="lm-row lm-modelrow"><label>Model</label><div>${box}${why ? `<div class="lm-hint">${esc(why)}</div>` : ""}</div><div class="lm-from${mine ? " gm" : ""}">${mine ? `yours · <a data-modelrule>back to the rule</a>` : "by the rule"}</div></div>`; })();
+    return `<div class="lm-body"><div class="lm-side">${side}</div><div class="lm-main"><div class="lm-head">${head}</div>${bandRow}${modelRow}${LINES.map(lineRow).join("")}
       <div class="lm-note">Tags show where each line comes from. ${single ? "This profile is this monster's alone." : "Changing a line here changes it for this encounter only, until you choose Save to library."} Angel is told these lines at every plan; a line naming a party member is left out until the monster perceives them.</div></div></div>
       ${this.message ? `<div class="lm-msg">${esc(this.message)}</div>` : ""}<div class="lm-foot">${foot}</div>`;
   }
@@ -131,7 +141,10 @@ export class MindsApp extends ApplicationV2 {
     root.querySelectorAll("[data-action]").forEach(el => { if (el.dataset.bound) return; el.dataset.bound = "1"; el.addEventListener("click", ev => { ev.preventDefault(); this.act(el.dataset.action).catch(e => { ui.notifications.error(e.message); console.error(e); }); }); });
     if (root.querySelector(".lm-band")) return this.bindBand(root);
     root.querySelector('select[name="band"]')?.addEventListener("change", ev => { if (ev.target.value === "?") return; joinBand(this.scene, this.row.ref, ev.target.value).then(() => { this.message = ev.target.value ? "In that band now." : "In no band now."; this.render(); }).catch(e => { ui.notifications.error(e.message); this.render(); }); });
-    root.querySelectorAll(".lm-row textarea,.lm-row input,.lm-row select:not([name=band])").forEach(el => { const k = el.name.split(".")[0]; for (const ev of ["input", "change"]) el.addEventListener(ev, () => this.touch(k)); });
+    /* the Model tick (0.31.0): what she ticks is kept only where it differs from the rule, so the rule still moves Opus to a new leader */
+    root.querySelectorAll("[data-model]").forEach(el => { el.indeterminate = el.dataset.some === "1"; el.addEventListener("change", () => this.setModel(el.checked ? "opus" : "sonnet").catch(e => { ui.notifications.error(e.message); this.render(); })); });
+    root.querySelectorAll("[data-modelrule]").forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); this.setModel(null).catch(e => { ui.notifications.error(e.message); this.render(); }); }));
+    root.querySelectorAll(".lm-row:not(.lm-modelrow) textarea,.lm-row:not(.lm-modelrow) input,.lm-row:not(.lm-modelrow) select:not([name=band])").forEach(el => { const k = el.name.split(".")[0]; for (const ev of ["input", "change"]) el.addEventListener(ev, () => this.touch(k)); });
     /* a pronoun pill: the pick goes into the hidden field, "other…" shows the box for her own words; no redraw (as for any field) */
     root.querySelectorAll("[data-pron]").forEach(el => el.addEventListener("click", () => { const box = el.closest(".lm-pron"), own = box.querySelector('[name="pronoun.text"]');
       box.querySelector('[name="pronoun.pick"]').value = el.dataset.pron; box.querySelectorAll(".lm-pp").forEach(x => x.classList.toggle("on", x === el)); own.hidden = el.dataset.pron !== "other"; if (!own.hidden) own.focus(); this.touch("pronoun"); }));
@@ -238,6 +251,14 @@ export class MindsApp extends ApplicationV2 {
   }
   /* the draft as `setLines` takes it: null takes this layer's line away; a line cleared over something below is blank on purpose */
   changes() { const out = {}; for (const [k, d] of Object.entries(this.draft)) out[k] = d === null ? null : d.blank ? (this.below[k] ? { blank: true } : null) : d; return out; }
+  /** Her Model tick on every monster this page is for: "opus" or "sonnet" (kept only where the rule would pick the other), or null (the rule again). */
+  async setModel(want) {
+    const ms = this.models ?? []; if (!ms.length) return;
+    const rule = ms.filter(x => want === null || x.m.rule === want).map(x => x.t.id), pick = want === null ? [] : ms.filter(x => x.m.rule !== want).map(x => x.t.id);
+    if (rule.length) await setModelPick(this.scene, rule, null);
+    if (pick.length) await setModelPick(this.scene, pick, want);
+    this.render();
+  }
   async act(a) {
     const scene = this.scene, row = this.row, ref = this.ref;
     if (a === "library") return openLibrary();

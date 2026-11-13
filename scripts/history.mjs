@@ -4,11 +4,11 @@
    card can't say (HP before and after). GM only: never sent to the thinker. Pure: no Foundry globals. */
 import { IT, pro } from "./pronoun.mjs";
 import { CHECK_OUTCOMES, OUTCOMES, climbResult, describeChanges, describeStep, isMove } from "./turn.mjs";
+import { apiTotal, apiTotalWords, byWords } from "./route.mjs";
 
 const DEGREES = { strike: OUTCOMES, check: CHECK_OUTCOMES };
 const same = (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
 const sq = s => s ? `${s[0]}, ${s[1]}` : "?";
-const ROUTE = { chat: "Angel (chat)", api: "Angel (API)", gm: "a GM" };
 
 /** Names for the GM: E and M labels in any text become the creatures' names. */
 export function namer(labels = {}, names = {}, forms = {}) {   /* forms: { tokenId: that creature's own pronoun } (pronoun.mjs), "it" for any not given */
@@ -100,11 +100,12 @@ function partOf(id, r, look, n) {
   if (r.escaped) lines.push({ kind: "end", text: `Escaped: ${r.escaped.name ?? "it"} got away${r.escaped.xp != null ? ` (${r.escaped.xp} XP not earned)` : ""}.` });
   else if (r.extended) lines.push({ kind: "note", text: pro(`You extended the map to the ${r.extended}; the monster kept {their} turn.`, f) });
   else if (r.state === "fled") lines.push({ kind: "note", text: "At the map's edge, waiting for you." });
+  if (r.handedOff) lines.push({ kind: "note", text: `The API couldn't plan this turn (${n.named(r.handedOff.reason ?? "")}): handed on to the chat, or to you.` });   /* 0.31.0 */
   if (r.note && !r.escaped) lines.push({ kind: "note", text: n.named(r.note) });
   if (r.why && !r.parent && !r.replanned) lines.push({ kind: "end", text: `The turn ended: ${n.named(describeChanges(r.why, n.nameOf, undefined, f))}` });
   const end = r.state === "manual" ? "You played the rest yourself." : r.gaveUp ? `Angel gave up: ${n.named(r.verdict ?? "")}` : r.replanned ? "Asked again (below)." : /^Couldn't do/.test(r.verdict ?? "") ? `${n.named(r.verdict)} You played the turn.` : null;
   if (end) lines.push({ kind: "end", text: end });
-  return { id, at: r.at ?? 0, by: r.by ? `${ROUTE[r.by.by] ?? "a GM"}${r.by.model ? `, ${r.by.model}` : ""}` : null, reason: plan?.reason ? n.named(plan.reason) : null,
+  return { id, at: r.at ?? 0, by: byWords(r.by),   /* the route, the model's short name, and on the API its seconds and cost (0.31.0) */ reason: plan?.reason ? n.named(plan.reason) : null,
     asked: r.why && r.parent ? n.named(describeChanges(r.why, n.nameOf, undefined, f)) : null, plan: steps.map((s, i) => ({ text: n.named(describeStep(s, f)), why: plan?.steps?.[i]?.why ? n.named(plan.steps[i].why) : null })),
     lines, state: r.state, waiting: asking && !r.gaveUp, their: pro("{Their}", f),
     /* what it remembered when this plan was asked for (0.25.0): the notebook as it was sent, read from the request's own packet */
@@ -115,6 +116,14 @@ function partOf(id, r, look, n) {
     an order the GM gave and every fall of a leader get a line of their own in their round (an order from a plan is a step of that plan).
     t: the Combat's turns flag. fight: { round, turn (index), order: [{ id, name, npc }] } in initiative order (npc: a monster, not one on the party's side); names: tokenId → name.
     Monsters with no request in a round that has passed them were played by the GM (one line each), so the rounds read in order. */
+/** What the API cost this fight, in words for the top of the History (0.31.0), or "". Every plan the API made counts, refused ones included (each
+    refusal keeps the plan's `by`), and every choice it answered; one plan is counted once however often it is read (`at`). */
+export function apiUseWords(t = {}) {
+  const seen = new Set(), bys = [];
+  const add = b => { if (!b || b.by !== "api") return; const k = b.at ?? JSON.stringify(b); if (seen.has(k)) return; seen.add(k); bys.push(b); };
+  for (const r of Object.values(t.requests ?? {})) { if (!r) continue; add(r.by); for (const x of Object.values(r.refused ?? {})) add(x?.by); add(r.choice?.by); }
+  return apiTotalWords(apiTotal(bys));
+}
 export function historyOf(t = {}, fight = {}, names = {}, look = {}, bandLog = [], forms = {}) {   /* forms: tokenId → its own pronoun (0.30.1) */
   const n = namer(t.labels ?? {}, names, forms), reqs = Object.entries(t.requests ?? {}).filter(([, r]) => r && Number.isFinite(r.round));
   const order = fight.order ?? [], at = id => { const i = order.findIndex(c => c.id === id); return i < 0 ? 999 : i; };

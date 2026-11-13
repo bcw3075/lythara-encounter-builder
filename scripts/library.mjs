@@ -203,7 +203,7 @@ export function mindRows(scene) {
     rows.push({ ref: { row: g }, name: c.name || toks[0]?.name || "Creature", count: toks.length || c.count, tokens: toks.map(t => t.id), uuid: c.uuid,
       own: Object.keys(c.own).map(n => { const t = toks.find(x => builtRef(scene, x)?.n === +n); return { ref: { row: g, n: +n }, name: t?.name ?? `${c.name} ${+n + 1}`, token: t?.id ?? null }; }) }); });
   for (const t of npcs) { if (builtRef(scene, t)) continue; const a = t.actor;
-    if (a.alliance === "party") { party.push({ ref: { token: t.id }, name: t.name, count: 1, tokens: [t.id], party: true, own: [] }); continue; }
+    if (a.alliance === "party") { party.push({ ref: { token: t.id }, name: t.name, count: 1, tokens: [t.id], party: true, owned: !!a.hasPlayerOwner, own: [] }); continue; }   /* owned: a player's creature, which the module no longer plays (B-7, 0.31.0) */
     if (t.getFlag(ID, "cache") || a.isOfType?.("loot")) continue;
     const k = kindFacts(a), row = loose.get(k.key) ?? { ref: { kind: k.key }, name: k.kindName, count: 0, tokens: [], own: [] }; row.count++; row.tokens.push(t.id);
     if (Object.keys(cleanLines(t.getFlag(ID, "mind"))).length) row.own.push({ ref: { token: t.id }, name: t.name, token: t.id });

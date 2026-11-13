@@ -21,6 +21,7 @@ Settled by Angel, told to Rhea in the release note, hers to change:
 - **The card shows in the round of the change only;** the tag stays.
 
 ## How it works
+- **A creature that joins a fight already begun (0.31.0, bug B-6):** the runner opens its books at once, from a `createCombatant` hook (`main.mjs`) calling `checkSides`; before, they opened only at the fight's start and on a change, so a joiner's first change of side was stored as the side it started on (`from`), nothing was logged then, and changing back was logged as changing sides (found on 0.30.0 in 0.30.1's close-out).
 - **The rules** (`sides.mjs`, pure): `sideWord`, `sideChange(was, now, round)` (the books' entry and the events "first", "turned", "back", "owned", "unowned"), `sideTag`, `sideCardWords`, `sideLogWords`, `changedForPacket`.
 - **Where it is kept:** on the Combat's turns flag, `sides.<token>` = `{ side, from, home, owned, changed? }`, `leads.<band>` (who led at the last look) and `turned.<band>` = `{ token, round }`. Log lines `side`, `sideBack`, `owned`, `unowned` share the band log.
 - **The look** (`checkSides`, runner, in the notebooks' queue): at every turn change before the bands are settled, and when an actor's `system.details.alliance` or `ownership` changes (`onSideChange`, from `updateActor` and from `updateToken`'s `delta`). It compares every NPC combatant with the books. Membership needs no write: `bandlib` counts only a creature on the opposition's side as a band's (`isMonster`), so the band's packet, orders and hearers drop it and take it back by themselves.
@@ -37,6 +38,7 @@ Settled by Angel, told to Rhea in the release note, hers to change:
 - (sc-5) {live} Flipped back: the tag goes, the band's packets include it again, the orders it heard before are still its standing orders, and the log has the line.
 - (sc-6) {live,player} Given to the test player: its row is greyed with the tag, its open request is closed with the note, its turn asks nothing of Angel, and the test player can move it; taken back, its row is as before.
 - (sc-7) {live,shared:minds} A turncoat still ticked for Angel gets a turn request whose packet has its mind profile (not empty).
+- (sc-8) {live} B-6 (0.31.0): a creature added to a fight already begun has `sides.<token>` at once, `from` its own side; its first change of side is logged as changing sides, and the change back as coming back.
 
 ## Traps
 - **A guessed leader leaves no mark when it goes:** `leaderOf` simply guesses the next member, so the books keep who led at the last look (`leads`) and compare.
@@ -44,7 +46,6 @@ Settled by Angel, told to Rhea in the release note, hers to change:
 - **The look runs inside the notebooks' queue and settles the bands itself:** calling the queued `settleBands` from there would wait on its own job.
 
 ## Open items
-- **Bug B-6 (found on 0.30.0 on 2026-11-13 in 0.30.1's close-out, not fixed there):** a creature that joins a fight already begun has no books until something changes (`checkSides` opens them at the fight's start and on a change, not when a combatant is added). If its first change is its side, the side it changed to is stored as the side it started on (`from`), so nothing is logged then, and changing back is logged as changing sides. With its books open (the usual case) a linked token's change through its world actor was seen to work both ways.
 - An NPC a player owned before the fight (a companion built as an NPC, an ally whose sheet a player holds) is no longer played by the module, where before 0.30.0 it could be ticked for Angel: its row is greyed with "a player's".
 - A band member that is on nobody's side when the fight starts is simply not in its band (no line is logged: nothing changed in the fight).
 - Only NPCs are looked at: a character that changes sides isn't the module's to keep books for.

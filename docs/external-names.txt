@@ -165,3 +165,8 @@ appliedDamage.isHealing
 appliedDamage.persistent
 appliedDamage.shield
 appliedDamage.updates
+
+# foundry-claude-bridge 0.4.0, the API worker (docs/features/api-route.md quotes them)
+worker.mjs
+apiModels
+apiPollS
