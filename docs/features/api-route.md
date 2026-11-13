@@ -57,6 +57,8 @@ The API route: a fight's monsters thought for through the Claude API by the brid
 - **The card's buttons share one click handler** (`[data-request] [data-do]` in `ui/turns.mjs`): any button there whose `data-do` it doesn't know falls through to Play it myself. Wake Angel is answered before that fall-through; a new card button must be too.
 - **A stopped worker left its light on for two minutes** in the first draft, so the next turn on the API route waited for a thinker that had gone; a stop now zeroes `apiBrainAt` in the same step as its note.
 
+- **Wake Angel on a turn the API handed on can let the API's first answer land** (seen live in 0.31.0's test): an answer still on its way when the hand-on is cleared is no longer refused, and the woken worker finds the turn already planned. One plan lands, by the API, which is what the press asks for.
+
 ## Open items
 - A bridge that is shut down or crashes leaves the API light on for up to two minutes; turns on the API route wait until it fades, then fall back to a chat or the GM.
 - `handOff` writes an event from the bridge's page; when the bridge isn't the runner that is a second writer of events (two numbering at once could collide). The bridge is the runner in PF2 Test.
