@@ -3893,7 +3893,10 @@ async function runCommand(combat, id, i, step, tok) {
         const message = await Promise.race([card, sleep(1500).then(() => null)]).catch(() => null);
         const die = roll.dice?.[0]?.total ?? null, degree = Number.isInteger(roll.degreeOfSuccess) ? roll.degreeOfSuccess : degreeOf(roll.total, dc, die);
         const cmd = { by: tok.id, round: combat.round, at: Date.now(), instruction: step.instruction, ...(step.foe ? { foe: step.foe } : {}), ...(step.to ? { to: step.to } : {}), degree, total: roll.total, dc };
-        await saveTurns(combat, { [`requests.${id}.log.${i}.check`]: { degree, total: roll.total, die, dc, message: message?.id ?? null }, [`requests.${id}.log.${i}.words`]: step.words, [`commands.${animal.id}`]: whole(cmd), [`requests.${id}.since`]: clock() });
+        /* the result also goes on the request's note (0.30.0 live test: a plan whose last step was the command left nothing on the card once the
+           turn was done); the card turns its labels into names, and a note never goes to the thinker */
+        await saveTurns(combat, { [`requests.${id}.log.${i}.check`]: { degree, total: roll.total, die, dc, message: message?.id ?? null }, [`requests.${id}.log.${i}.words`]: step.words, [`commands.${animal.id}`]: whole(cmd), [`requests.${id}.since`]: clock(),
+          [`requests.${id}.note`]: joinNote(combat, id, `Command an Animal: ${resultWords({ check: { degree, total: roll.total, die, dc }, words: step.words }, step.target)}`) });
       }
     } finally { pending = null; }
   }
@@ -3904,6 +3907,7 @@ async function runCommand(combat, id, i, step, tok) {
 export function commandList(combat) {
   const scene = combat?.scene, cmds = turns(combat).commands ?? {}, labels = turns(combat).labels ?? {}, n = namer(labels, Object.fromEntries((scene?.tokens.contents ?? []).map(x => [x.id, x.name])));
   return Object.entries(cmds).map(([id, c]) => { const tok = scene?.tokens.get(id); if (!tok || !c || !commandInForce(c, combat.round)) return null;
+    if (c.used && combat.combatant?.tokenId !== id) return null;   /* its commanded turn is over (the entry itself goes when its next turn begins): no tag for the rest of the round (0.30.0 live test) */
     const isTurn = combat.combatant?.tokenId === id && c.used?.round === combat.round, tag = commandTag(c, combat.round, isTurn);
     return { id, name: tok.name, by: scene.tokens.get(c.by)?.name ?? "its handler", tag: tag ? { ...tag, text: n.named(tag.text) } : null, degree: c.degree, own: !!c.own, angel: !!c.angel, isTurn, words: n.named(commandWords(c)), total: c.total, dc: c.dc, ticked: !!tok.getFlag(ID, "run") }; }).filter(Boolean);
 }
@@ -3988,7 +3992,7 @@ async function runPointOut(combat, id, i, step, tok) {
         }
         /* the action shows like any other: one plain public card, unless the GM has hidden the pointer (the line would give it away) */
         let message = null;
-        if (!tok.hidden) message = await watched(() => ChatMessage.implementation.create({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), content: `<p><strong>Point Out</strong> <span class="action-glyph">1</span>: points ${target.hidden ? "at something" : `at ${esc(moverName(target) === "A creature" ? "a creature" : target.name)}`} for its allies.</p>` })).catch(e => { console.warn(`${ID} | point out card`, e); return null; });
+        if (!tok.hidden) message = await watched(() => ChatMessage.implementation.create({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), content: `<p><strong>Point Out</strong> <span class="action-glyph">1</span>: points ${target.hidden ? "at something" : `at ${esc(moverName(target) === "A creature" && !target.actor?.hasPlayerOwner ? "a creature" : target.name)}`} for its allies.</p>` })).catch(e => { console.warn(`${ID} | point out card`, e); return null; });
         await saveTurns(combat, { ...change, [`requests.${id}.log.${i}.pointed`]: whole({ list: out, real, ...(lang ? { lang } : {}) }), [`requests.${id}.log.${i}.posted`]: { message: message?.id ?? null }, [`requests.${id}.since`]: clock() });
       }
     } finally { pending = null; }
