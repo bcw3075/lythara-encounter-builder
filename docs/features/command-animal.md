@@ -13,7 +13,7 @@ Rhea, 2026-11-11 and 2026-11-12 (the design is in the project's design doc, R3-6
 2. **What counts as an animal: PF2e's `animal` trait only** (over "the Mind pick" and "either"), asked 2026-11-12. The Mind pick is how a creature thinks, not what it is (a worg is a beast). A homebrew creature becomes commandable by adding the trait to its sheet. The animal must be on the handler's side: the rule fails at once on a hostile or unfriendly animal, so such a step is refused before any roll.
 3. **She was shown sample pictures before any code** (the step on the handler's card with its roll and result line, the public Nature check in chat, the animal's row reading "commanded: …", the failed turn passed by the module, the critical failure waiting with two buttons) and answered: "They look good". The build follows them:
    - the Nature check is a public roll like any other, and the instruction itself gets no chat line;
-   - a step is refused with the reason when the animal is hostile or unfriendly to the handler, can't hear it, or lacks the animal trait;
+   - a step is refused with the reason when the animal is hostile or unfriendly to the handler, can't hear it, or lacks the animal trait (and, from the review, when a player runs the animal or it has no place in the fight's order: no turn of it would ever answer the command);
    - a deafened handler rolls the DC 5 flat check first (Command an Animal is an auditory action);
    - after a failure the module passes the animal's turn (0.29.0's pass request) with a note and **Play it myself**;
    - after a critical failure the turn waits for her with **Play it myself** and **Let Angel plan it** (Angel's addition, shown in the sample).
@@ -54,6 +54,6 @@ Settled by Angel, told to Rhea in the release note, hers to change:
 ## Open items
 - No button for a handler she plays herself: a command comes only from a plan (Angel's, or one handed in through the API). She rolls Nature by hand and plays the animal.
 - The plan check doesn't enforce the command on the animal's own plan (above).
-- An animal a player owns isn't commanded through the module (the module doesn't play it), and its command, if one was given before, stays on its row until the fight ends.
+- An animal that becomes a player's after it was commanded keeps the command on its row until the fight ends (the module no longer plays its turn).
 - A Delay by the animal on its commanded turn keeps the command for the turn it comes back to in the same round; one that comes back in a later round has lost it.
 - The GM may lower the DC for a friendly animal or a treat (the rule's own words): not offered; she can re-roll by hand.

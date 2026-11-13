@@ -38,17 +38,19 @@ export function allyGets(ally = {}) {
 }
 /** A square near the real one that isn't it, for an ally that misread the gesture: one or two squares off, inside the map. rnd: () => [0, 1).
     Null when the map has no other square in reach (never on a real map). */
-export function wrongSquare(real, [cols, rows] = [0, 0], rnd = Math.random) {
-  const out = [];
-  for (let dx = -2; dx <= 2; dx++) for (let dy = -2; dy <= 2; dy++) { if (!dx && !dy) continue; const x = real[0] + dx, y = real[1] + dy; if (x >= 0 && y >= 0 && (!cols || x < cols) && (!rows || y < rows)) out.push([x, y]); }
+export function wrongSquare(real, [cols, rows] = [0, 0], rnd = Math.random, taken = null) {
+  const out = [];   /* taken(x, y): a square a creature stands on (the creature's own space included), never picked */
+  for (let dx = -2; dx <= 2; dx++) for (let dy = -2; dy <= 2; dy++) { if (!dx && !dy) continue; const x = real[0] + dx, y = real[1] + dy; if (x >= 0 && y >= 0 && (!cols || x < cols) && (!rows || y < rows) && !taken?.(x, y)) out.push([x, y]); }
   return out.length ? out[Math.min(out.length - 1, Math.floor(rnd() * out.length))] : null;
 }
 /** One ally's result as the turns flag keeps it, from what it gets and (for a roll) its Perception total against the Stealth DC.
     Out: { id, how, total?, dc?, ok?, square?, wrong? }; `square` is what it now believes, `wrong` only when that isn't the real square. */
-export function allyResult(id, how, { real, total = null, dc = null, wrongAt = null } = {}) {
+export function allyResult(id, how, { real, total = null, die = null, dc = null, wrongAt = null } = {}) {
   if (how === "understood") return { id, how, square: [...real] };
   if (how !== "roll") return { id, how };
-  const ok = total != null && dc != null && total >= dc;
+  /* a success or better; a natural 20 lifts a failure to one and a natural 1 drops a success to a failure, as for any check */
+  let deg = total == null || dc == null ? 1 : total >= dc + 10 ? 3 : total >= dc ? 2 : total <= dc - 10 ? 0 : 1; if (die === 20) deg = Math.min(3, deg + 1); else if (die === 1) deg = Math.max(0, deg - 1);
+  const ok = deg >= 2;
   return ok || !wrongAt ? { id, how, total, dc, ok: true, square: [...real] } : { id, how, total, dc, ok: false, square: [...wrongAt], wrong: true };
 }
 /** The GM's box under the step (her sample): one line an ally, in names. list: allyResult's, with `name`; lang: the pointer's language in words. */

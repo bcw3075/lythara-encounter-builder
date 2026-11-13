@@ -27,7 +27,7 @@ const join = parts => parts.filter(Boolean).join("; ");
 export function stepResult(step, rec = {}, look = {}, n = namer(), done = false) {
   const card = id => (id && look.card?.(id)) || null, cards = [], tag = id => { if (id) cards.push(id); };
   const target = step.target ? n.nameOf(step.target) ?? step.targetName ?? step.target : null, tid = step.target ? n.tokenOf(step.target) : null;
-  const flat = rec.flat ? `flat check ${rec.flat.total} vs DC ${rec.flat.dc}: ${rec.flat.ok ? "passed" : "failed, the action is spent"}` : rec.flatStarted ? "flat check rolled, result not recorded" : "";
+  const flat = rec.flat?.blind ? "struck at the square it believed its target was in (a pointed-out square it misread): nothing was there, and to it that reads as a hidden creature's flat check failing" : rec.flat ? `flat check ${rec.flat.total} vs DC ${rec.flat.dc}: ${rec.flat.ok ? "passed" : "failed, the action is spent"}` : rec.flatStarted ? "flat check rolled, result not recorded" : "";
   const damage = () => { if (!rec.damage) return ""; tag(rec.damage.message); const c = card(rec.damage.message); return `damage ${c?.total ?? "?"}${c?.label ? ` ${c.label}` : ""}${rec.applied ? (Array.isArray(rec.hp) ? `, applied: ${hpWords(target ?? "target", rec.hp)}` : ", applied") : rec.applying ? ", applying (not confirmed)" : ", not applied (apply it from the card)"}`; };
   let text = "";
   if (step.do === "strike") {

@@ -19,7 +19,7 @@ export function sideChange(was, now, round = 0) {
     if (now.side === was.from) { events.push({ kind: "back", from: was.side, to: now.side, band: was.home ?? "" }); delete entry.changed; }
     else { events.push({ kind: "turned", from: was.side, to: now.side, band: was.home ?? "" }); entry.changed = round; }
   }
-  if (!!now.owned !== !!was.owned) events.push({ kind: now.owned ? "owned" : "unowned" });
+  if (!!now.owned !== !!was.owned) { events.push({ kind: now.owned ? "owned" : "unowned" }); if (now.owned) entry.ownedAt = round; else delete entry.ownedAt; }
   return { entry, events };
 }
 const SIDE = { party: "the party's", opposition: "the monsters'", none: "nobody's" };
@@ -34,7 +34,7 @@ export function sideLogWords(e, { nameOf = id => id, bandName = "" } = {}) {
 }
 /** The tag on its row of Monster Turns. entry: the books' entry; round: the fight's round. */
 export function sideTag(entry) {
-  if (entry?.owned) return { kind: "owned", text: "a player's now: not played by the module" };
+  if (entry?.owned) return { kind: "owned", text: entry.ownedAt != null ? "a player's now: not played by the module" : "a player's: not played by the module" };   /* "now" only when it changed hands in this fight */
   if (entry?.changed != null) return { kind: "turned", text: `changed sides, round ${entry.changed}` };
   return null;
 }
@@ -48,7 +48,8 @@ export function sideCardWords(entry, { bandName = "" } = {}) {
     something it knows and no longer follows. heard: lines in labels (the plan's objective, standing orders), already gated by the caller. */
 export function changedForPacket(entry, { bandName = "", heard = [] } = {}) {
   if (entry?.changed == null) return null;
-  return { since: entry.changed, was: `Until round ${entry.changed} it fought for the other side${bandName ? `, in the band ${bandName}` : ""}. It has changed sides: its old side are its enemies now and the creatures it fought are its allies.`,
+  /* the band's name is the GM's own text and isn't sent (it has passed no name gate): "in a band" is enough */
+  return { since: entry.changed, was: `Until round ${entry.changed} it fought for the other side${bandName ? ", in a band" : ""}. It has changed sides: its old side are its enemies now and the creatures it fought are its allies.`,
     ...(heard.length ? { lastHeard: heard.slice(0, 4), note: "What it last heard from its old band, as something it knows about them. It no longer follows any of it." } : {}) };
 }
 /** The side lines the fight's log keeps. */

@@ -21,8 +21,9 @@ Rhea, 2026-11-12 (q-18 of the plan, R3-17 of the design doc; the review's findin
 Settled by Angel, told to Rhea in the release note, hers to change:
 - **"Understands" means it hears the pointer and shares a language with it;** a deafened ally, one out of earshot and one with no common language all roll.
 - **The Perception roll posts no card** (a public one would tell the table who misread; the module posts no whispered cards): the GM reads it in the box under the step and in the History.
-- **A wrong square is one or two squares from the real one,** picked at random.
-- **A Strike at a creature it knows only from a wrong square goes at the empty square:** a public line says it struck at where it believed a creature was hiding and nothing was there; the thinker is told its flat check failed (all it could tell), and the belief ends with that blow. An ability or a single-target spell aimed there stops the turn for her instead.
+- **A wrong square is one or two squares from the real one,** picked at random, never a square a creature stands on. A natural 20 or 1 on the Perception roll moves the result a step, as for any check.
+- **The height pointed out is the creature's height at that moment,** for a right square and a wrong one alike; the believer keeps that height until the belief ends.
+- **A Strike at a creature it knows only from a wrong square goes at the empty square:** a public line says it struck at where it believed a creature was hiding and nothing was there; the thinker is told its flat check failed (all it could tell), and **it goes on believing the square** until the creature moves or its own senses find it: a hidden creature stays hidden after a failed flat check, so taking the belief away would tell the thinker the square was wrong (the review's finding 4). The party's reactions aren't asked before such a blow. An ability or a single-target spell aimed there stops the turn for her instead.
 - **Any move of the pointed-out creature ends every belief about its square,** seen or not (an ally that sees it move has its own senses again anyway).
 - **The thinker is told which creatures its allies have lost** (`alliesLost` on a creature it sees), so it doesn't spend a try on a Point Out that would be refused. It is what a creature watching its own side would notice.
 - **The action's card is one plain public line** ("points at <name> for its allies"), not posted for a pointer the GM has hidden; a creature the GM has hidden is "something", one whose name doesn't show is "a creature".
@@ -33,7 +34,7 @@ Settled by Angel, told to Rhea in the release note, hers to change:
 - **Where it is kept:** on the Combat's turns flag, `pointed.<observer>.<creature>` = `{ square, round, by, wrong? }`.
 - **Perception** (`fight.mjs` `senser`): after `perceiveOne`, `withBelief`; the result carries `raw` (its own senses' state), `pointed` and `wrong`. `perceiveOne` itself is unchanged. `packetOf` marks the entry `pointed: true` and never carries `wrong`; a wrong square's height is left out.
 - **The step** (`checkPlan`; `pointCtx`, `runPointOut`): `{ do: "point-out", target }`, one action. `pointCtx` answers per label only when a plan asks (it runs every ally's senses). `runPointOut` checks that the pointer still sees the creature, works out each ally's result (`pointHearers`), rolls for those that only saw the gesture, posts the action's line, and writes the step's record and every belief in one update.
-- **Ending** (`dropBeliefs` on `moveToken`; `packetExtras`; `runBlindMiss`): the creature moved; the observer's own senses gave it a square when its packet was built; or it struck at a wrong square.
+- **Ending** (`dropBeliefs` on `moveToken`; `packetExtras`): the creature moved, or the observer's own senses gave it a square when its packet was built. A Strike at a wrong square (`runBlindMiss`) leaves the belief standing. The belief holds `{ square, height, round, by, wrong? }`; the plan check and the packet read the square and height from it, never from the token.
 - **The window** (`pointCard`): the box under the step, a preview before it runs (on a page with the fight's map open) and the results after.
 
 ## Checks
@@ -46,11 +47,14 @@ Settled by Angel, told to Rhea in the release note, hers to change:
 
 ## Traps
 - **A belief must never beat the creature's own senses** (review 15): `withBelief` is applied after `perceiveOne` and only to undetected or unnoticed. A stored Visioner state of undetected is overridden by it; a stored hidden is left as it is.
+- **A wrong belief must look exactly like a right one to the thinker, in what is left out as much as in what is said** (the review's findings 3 and 4): the first build sent a height of 0 for a wrong square and the live height for a right one, and took the creature out of `perceived` after a blow at a wrong square, where a hidden creature stays. Either tells it.
 - **`wrong` never leaves the runner's side of the packet:** `packetOf` copies named fields only, and the unit test scans the perceived block for the word.
 - **A believed square goes into the monster's last-seen memory** (`remember` keeps a hidden creature's square), so once the belief ends it remembers the square it believed, right or wrong: that is what it knew.
 - **`pointCtx` is a Proxy that works on first read:** spreading `ctx` copies the reference, never the answers.
 
 ## Open items
+- An ally that holds a belief counts as knowing where the creature is, so a wrong square can't be put right by pointing again while the creature stands still (telling the pointer that an ally still needs it would tell the thinker a square was wrong). The GM can move the creature a square and back, or play the ally herself.
+- A monster that believes a wrong square can spend action after action on it. That is what it would do; the card's note tells her each time.
 - A party member the GM plays, or a monster on the party's side, can Point Out for the party through a plan; players' own Point Outs aren't read by the module (Visioner handles those for the party's side).
 - An area spell placed on a wrongly believed square isn't stopped: its area is checked against real positions as any area is.
 - A wrong belief's distance in the packet is counted between squares, without height.

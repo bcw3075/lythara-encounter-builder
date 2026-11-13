@@ -21,13 +21,16 @@ export const commandWords = c => c?.instruction === "attack" ? `attack ${c.foe}`
 
 /** Whether this creature can be commanded by this handler, as things stand (q-17: PF2e's `animal` trait only; on the handler's side; it must
     hear the handler). animal: { self, ally, traits, fallen, yielded, asleep, deafened, below, path (false: a wall stops the sound; null: not
-    tested), pending (it already carries a command it hasn't acted on) }. Out: { ok } or { ok: false, why }. */
+    tested), pending (it already carries a command it hasn't acted on), played (false: a player runs it), inFight (false: it has no place in
+    the fight's order, so no turn would ever come for the command) }. Out: { ok } or { ok: false, why }. */
 export function canCommand({ animal = null, handlerBelow = false } = {}) {
   const no = why => ({ ok: false, why });
   if (!animal) return no("it doesn't know of that creature");
   if (animal.self) return no("it can't command itself");
   if (!animal.ally) return no("it is hostile or unfriendly to it (Command an Animal fails at once on such an animal)");
   if (!(animal.traits ?? []).includes("animal")) return no("it isn't an animal (only a creature with the animal trait can be commanded)");
+  if (animal.played === false) return no("a player runs it (the module doesn't play it, so it can't be held to a command)");
+  if (animal.inFight === false) return no("it isn't in this fight's order");
   if (animal.fallen) return no("it is down");
   if (animal.yielded) return no("it has yielded");
   if (animal.asleep) return no("it is unconscious");
