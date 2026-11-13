@@ -36,14 +36,20 @@ export function modelName(m) {
   return `${x[1][0].toUpperCase()}${x[1].slice(1)} ${x[2]}${x[3] ? `.${x[3]}` : ""}`;
 }
 
+/** How long a turn stays with the thinker it was given to, even if that thinker's light lapses meanwhile (a slow answer): the API's three tries
+    take at most about three and a half minutes. */
+export const HOLD_MS = 240000;
 /** Who an event in a fight goes to. route: the fight's; kind: the event's; api, chat: whether each thinker is listening now; handedOff: the API
-    gave this turn up and it fell back to the chat. Out: "api", "chat" or null (nobody: Rhea plays it). The agreed order is API, then a listening
-    chat, then her: a turn on the API route goes to the chat while the API isn't listening, and the chat answers anything the API can't. */
-export function whoGets({ route = "api", kind = "turn", api = false, handedOff = false } = {}) {
+    gave this turn up and it fell back to the chat; held: { who, at } when the turn was already given to a thinker (0.31.0 review 1: a turn
+    stays with that thinker while it listens, or for HOLD_MS, so two thinkers never plan one turn); now: the server clock.
+    Out: "api", "chat" or null (nobody: Rhea plays it). The agreed order is API, then a listening chat, then her: a turn on the API route goes to
+    the chat while the API isn't listening, and the chat answers anything the API can't. */
+export function whoGets({ route = "api", kind = "turn", api = false, chat = false, handedOff = false, held = null, now = 0 } = {}) {
   if (route === "off") return null;
   if (route === "chat") return "chat";
-  if (!API_KINDS.includes(kind) || handedOff || !api) return "chat";
-  return "api";
+  if (!API_KINDS.includes(kind) || handedOff) return "chat";
+  if (held?.who === "api" || held?.who === "chat") { if ((held.who === "api" ? api : chat) || (Number.isFinite(held.at) && now >= held.at && now - held.at < HOLD_MS)) return held.who; }
+  return api ? "api" : "chat";
 }
 /** The line at the top of the Monster Turns window, as data: which light is on and what it says. */
 export function listenLine({ route = "api", api = false, chat = false } = {}) {
@@ -65,10 +71,11 @@ export function apiNoteWords(note) {
 }
 /** How long Wake Angel waits for the light before saying nothing answered. */
 export const WAKE_MS = 20000;
-/** Where a press of Wake Angel stands. wake: the setting ({ n, at, launch }); now, launch: the page's server clock and launch; api: the light. */
-export function wakeState(wake, { now = 0, launch = "", api = false } = {}) {
+/** Where a press of Wake Angel stands. wake: the setting ({ n, at, launch }); now, launch: the page's server clock and launch; api: the light;
+    seenAt: when the API thinker last listened (in this launch), so a press it answered never reads as unanswered later (0.31.0 review 6). */
+export function wakeState(wake, { now = 0, launch = "", api = false, seenAt = 0 } = {}) {
   if (!wake?.at || (wake.launch ?? "") !== launch || now < wake.at) return null;
-  if (api) return null;
+  if (api || (Number.isFinite(seenAt) && seenAt >= wake.at)) return null;
   return now - wake.at < WAKE_MS ? "waking" : "silent";
 }
 
@@ -83,16 +90,18 @@ export function byWords(by) {
   return bits.length ? `${head} · ${bits.join(" · ")}` : head;
 }
 /** Dollars as the History shows them: cents under a dollar ("4¢", "under 1¢"), else "$1.23". */
-export const cents = d => !Number.isFinite(d) ? "" : d >= 1 ? `$${d.toFixed(2)}` : d < 0.005 ? "under 1¢" : `${Math.round(d * 100)}¢`;
-/** What the API cost this fight, from every plan's `by` (requests, and their refused plans' `by` when kept): { n, cost, models: { name: n } }. */
-export function apiTotal(bys = []) {
-  const out = { n: 0, cost: 0, models: {} };
-  for (const b of bys) { if (b?.by !== "api") continue; out.n++; if (Number.isFinite(b.usage?.cost)) out.cost += b.usage.cost; const m = modelName(b.model) || "?"; out.models[m] = (out.models[m] ?? 0) + 1; }
+export const cents = d => !Number.isFinite(d) ? "" : d >= 1 ? `$${d.toFixed(2)}` : d === 0 ? "0¢" : d < 0.005 ? "under 1¢" : `${Math.round(d * 100)}¢`;
+/** What the API cost this fight (0.31.0 review 8): one entry per answer the API gave, as the bridge's worker records it on the fight
+    (`apiUse`), whether the plan in it landed or not: { n, cost, priced, models: { name: n } }. */
+export function apiTotal(uses = []) {
+  const out = { n: 0, cost: 0, priced: 0, models: {} };
+  for (const u of uses) { if (!u || typeof u !== "object") continue; out.n++; if (Number.isFinite(u.cost)) { out.cost += u.cost; out.priced++; } const m = modelName(u.model) || "?"; out.models[m] = (out.models[m] ?? 0) + 1; }
   return out;
 }
-/** The History's line for the fight's API use, or "" when the API made no plan. */
+/** The History's line for the fight's API use, or "" when the API answered nothing. */
 export function apiTotalWords(t) {
   if (!t?.n) return "";
   const by = Object.entries(t.models).map(([m, n]) => `${m.replace(/ [\d.]+$/, "")} ${n}`).join(", ");
-  return `Angel through the API this fight: ${t.n} plan${t.n === 1 ? "" : "s"}, ${cents(t.cost)}${by ? ` (${by})` : ""}.`;
+  const cost = t.priced ? `${cents(t.cost)}${t.priced < t.n ? " for the ones with a price" : ""}` : "no price known";
+  return `Angel through the API this fight: ${t.n} answer${t.n === 1 ? "" : "s"}, ${cost}${by ? ` (${by})` : ""}.`;
 }

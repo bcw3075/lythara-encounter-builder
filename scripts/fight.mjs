@@ -12,7 +12,7 @@ import { natureOf } from "./bands.mjs";
 import { HOLDS, NEVER_GIVES_UP, applyHeard, canOrder, cleanOrder, fallBackWords, fallOutcome, dropperOf, holdWords, fromPending, hearing, labelsIn, logWords, orderLanguage, orderWords, ordersForPacket, roundLine, shiftHeard, toPending } from "./orders.mjs";
 import { namer } from "./history.mjs";
 import { RUNGS, STORE_MAX, GM_LINE_MAX, evict, forPacket, gmLine, lineKey, render, rethinkFor, rungOf, severity, sideWords, spellWords, witnessLines } from "./memory.mjs";
-import { readMap, partySize, suggestedLevel } from "./builder.mjs";
+import { readMap, partyLevels, partySize, suggestedLevel } from "./builder.mjs";
 import { aimArea, aimWords, alliesCaught, burstReachable, caughtBy, shapeOf, squaresNear } from "./area.mjs";
 import { AC_ROWS, CHOICES, GUILT, KNOWN, MONSTER_REACTIONS, answerWords, barrierWords, acAdds, canReact, castRank, coverInDc, choiceWords, earthLess, glimpseResistance, guiltLines, guiltWords, harmWords, missWords, notAskedWords, shieldGrantsBlock, spentRows, untilNextTurnEnds, readCard, cardTrigger, degreeAgainst, equipTrigger, finished, fits, gateWords, moveTrigger, proneOffTrigger, reactionStrike, reactionsOf, routeGates, squaresAlong, untilFor } from "./react.mjs";
 import { MAX_TRIES, choiceOut, cleanChoice, cleanMeta, cleanPlan, eventOut, hello, isChoice, listening, live, nextSeq, pickEvent, stale, stallOf, text, waitSeconds } from "./brain.mjs";
@@ -1019,10 +1019,10 @@ async function checkStalls() {
     is never planned: it cost a wait each, and on the API money, seen live 2026-11-11), and offered to this route by the fight's route and who is
     listening (`whoGets`: API, then a listening chat, then the GM). Each goes out with the model the monster is thought for by (`modelOf`). */
 function firstEvent(cursor, thinker = "chat") {
-  const reqOf = e => request(game.combats.get(e.combatId), e.requestId), api = brainListening("api");
+  const reqOf = e => request(game.combats.get(e.combatId), e.requestId), api = brainListening("api"), chat = brainListening("chat"), now = clock();
   const mine = e => { const c = game.combats.get(e.combatId), r = reqOf(e); if (!c || !live(e, r)) return false;
     if (["turn", "retry", "replan"].includes(e.kind) && !r.reaction && currentRequest(c)?.id !== e.requestId) return false;
-    return whoGets({ route: fightRoute(c), kind: e.kind, api, handedOff: !!r.handedOff }) === thinker; };
+    return whoGets({ route: fightRoute(c), kind: e.kind, api, chat, handedOff: !!r.handedOff, held: r.thinker ?? null, now }) === thinker; };
   const ev = pickEvent(fights().flatMap(eventsOf), cursor, mine); if (!ev) return null;
   const c = game.combats.get(ev.combatId), r = reqOf(ev), tok = c.scene?.tokens.get(r.tokenId), m = tok ? modelOf(tok, c) : null, model = m ? { model: m.model, modelWhy: m.why || null } : {};
   if (ev.kind === "choice") return { ...choiceOut(ev, r, packetFor(c, ev.requestId)), ...model };
@@ -1040,6 +1040,9 @@ function offRoute(combat, r, meta) {
   if (route === "off") return "Angel is off for this fight, so this was ignored.";
   if (m.by === "api" && route !== "api") return "This fight isn't on the API route any more, so this was ignored.";
   if (m.by === "api" && r.handedOff) return "The API handed this turn on to the chat, so this was ignored.";
+  /* the turn was given to the other thinker (0.31.0 review 1): its plan is the one that counts, so a second never replaces it */
+  const mine = m.by === "api" ? "api" : "chat";
+  if (r.thinker?.who && r.thinker.who !== mine) return `This turn went to ${r.thinker.who === "api" ? "the API" : "the chat"}, so this was ignored.`;
   return null;
 }
 /** Which model thinks for a monster, and why (`route.mjs` modelFor): her pick on the token, else Opus for a band leader (whoever leads now) or a
@@ -1048,7 +1051,8 @@ export function modelOf(tok, combat = null) {
   const scene = tok?.parent, actor = tok?.actor; if (!actor) return modelFor({});
   const band = scene ? bandOf(scene, tok) : null, leads = !!band && leaderOf(scene, band, combat)?.tok?.id === tok.id;
   const casts = (actor.spellcasting?.regular ?? []).some(e => !e.isRitual && CASTERS.includes(e.category) && (e.spells?.size ?? 0) > 0);
-  const pl = scene?.getFlag(ID, "brief")?.partyLevel, partyLevel = Number.isFinite(pl) ? pl : suggestedLevel();
+  /* the party's level: the brief's, else the sheets' most common; unknown (no party found) means the rule can't call anyone 2+ above (review 12) */
+  const pl = scene?.getFlag(ID, "brief")?.partyLevel, partyLevel = Number.isFinite(pl) ? pl : partyLevels().length ? suggestedLevel() : null;
   const pick = tok.getFlag(ID, "modelPick");
   return modelFor({ pick: pick === "opus" || pick === "sonnet" ? pick : null, leads, casts, level: Number.isFinite(actor.level) ? actor.level : null, partyLevel });
 }
@@ -1085,12 +1089,17 @@ export async function waitForEvent(cursor = 0, maxSeconds = 90, { generation = n
     timer = setTimeout(() => done(null), waitSeconds(maxSeconds) * 1000);
   });
   if (stale(brainNow(who), generation)) return { cursor, superseded: true, reason: SUPERSEDED };
+  /* the turn is this thinker's now (0.31.0 review 1): stamped on its request, so the other thinker isn't given it too, and the light renewed,
+     since thinking can outlast it */
+  if (got && got.kind !== "stall") { const c = game.combats.get(got.combatId); if (c) await saveTurns(c, { [`requests.${got.requestId}.thinker`]: whole({ who, at: clock() }) }).catch(e => console.warn(`${ID} | thinker`, e)); await renewBrain(who); }
   return got ? { cursor: got.seq, event: got } : { cursor, idle: true };
 }
 /** Foundry's server clock: the same in every browser, so the light means the same on Rhea's computer as on the server PC. */
 export const clock = () => game.time.serverTime;
 /** Is the thinker there? For the Monster Turns window. */
-export const brainListening = (route = "chat") => listening(brainNow(route), clock(), launchNow());
+export const brainListening = (route = "chat") => listening(brainNow(route), clock(), launchNow()) && !(thinkerOf(route) === "api" && apiStopped());
+/* the worker wrote that it stopped after it last listened (0.31.0): its light is off from that moment, so the next turn falls back at once */
+const apiStopped = () => { const n = game.settings.get(ID, "apiNote"); return (n?.state === "stopped" || n?.state === "capped") && (n.launch ?? "") === launchNow() && (n.at ?? 0) >= (game.settings.get(ID, "apiBrainAt") ?? 0); };
 export const brainSeenAt = (route = "chat") => brainNow(route).at ?? 0;
 /** For the bridge's API worker (0.31.0), a read that writes nothing: is a fight on the API route, and Wake Angel's latest press. */
 export function apiWanted() {
@@ -1100,17 +1109,33 @@ export function apiWanted() {
 export async function setApiNote(note = {}) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
   const n = note && typeof note === "object" && ["stopped", "capped", "no-key"].includes(note.state) ? { state: note.state, reason: text(note.reason, 200) || null, at: clock(), launch: launchNow() } : {};
-  /* a worker that stops is no longer listening: its light goes off at once, so the next turn falls back to a chat or the GM instead of waiting
-     two minutes for the light to fade */
-  if (n.state === "stopped" || n.state === "capped") await game.settings.set(ID, "apiBrainAt", 0);
+  /* a worker that stops is no longer listening: `brainListening("api")` reads this note, so its light goes off at once and the next turn falls
+     back to a chat or the GM instead of waiting two minutes for the light to fade */
   await game.settings.set(ID, "apiNote", n); return n;
 }
 /** The worker's note in words for the card, when it was written in this launch of the world (an older one is about a bridge that has restarted since). */
 export const apiNoteNow = () => { const n = game.settings.get(ID, "apiNote"); return n?.state && (n.launch ?? "") === launchNow() ? apiNoteWords(n) : ""; };
 /** Where Wake Angel's latest press stands for the card: "waking" (under 20 s, no light yet), "silent" (nothing answered), or null. */
-export const apiWakeNow = () => wakeState(game.settings.get(ID, "apiWake"), { now: clock(), launch: launchNow(), api: brainListening("api") });
-/** Wake Angel on the card: a press the bridge's worker sees at its next look (every few seconds). */
-export async function wakeAngel() { if (!game.user.isGM) throw new Error("Only a GM can do this."); const w = game.settings.get(ID, "apiWake") ?? {}; const n = { n: (w.n ?? 0) + 1, at: clock(), launch: launchNow() }; await game.settings.set(ID, "apiWake", n); return n; }
+export const apiWakeNow = () => { const b = brainNow("api"); return wakeState(game.settings.get(ID, "apiWake"), { now: clock(), launch: launchNow(), api: brainListening("api"), seenAt: (b.launch ?? "") === launchNow() ? b.at ?? 0 : 0 }); };
+/** Wake Angel on the card: a press the bridge's worker sees at its next look (every few seconds). On a turn the API handed on it also gives
+    that turn back to the API, with a fresh event (0.31.0 review 5): otherwise a woken API would never see it. */
+export async function wakeAngel(combat = null, requestId = null) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  const r = combat && requestId ? request(combat, requestId) : null;
+  if (r?.handedOff && r.state === "requested" && !r.gaveUp) await saveTurns(combat, { [`requests.${requestId}.handedOff`]: null, [`requests.${requestId}.thinker`]: null, ...eventChange((r.tries ?? 0) > 0 ? "retry" : r.why ? "replan" : "turn", requestId, r.tries ?? 0) });
+  const w = game.settings.get(ID, "apiWake") ?? {}; const n = { n: (w.n ?? 0) + 1, at: clock(), launch: launchNow() }; await game.settings.set(ID, "apiWake", n); return n;
+}
+/** The worker is thinking (0.31.0 review 1): its light kept on while an answer takes long, for its own generation only. */
+export async function apiAlive(generation) { if (!game.user.isGM) throw new Error("Only a GM can do this."); if (stale(brainNow("api"), generation)) return { ok: false, superseded: true }; await renewBrain("api"); return { ok: true }; }
+/** What one API answer cost, kept on the fight whether its plan landed or not (0.31.0 review 8): the History's total reads these. */
+export async function apiSpend(combat, use = {}) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  const num = v => Number.isFinite(v) && v >= 0 ? v : null;
+  await saveTurns(combat, { [`apiUse.${Date.now().toString(36)}${foundry.utils.randomID(4)}`]: { model: text(use.model, 60) || null, cost: num(use.cost), in: num(use.in), out: num(use.out), seconds: num(use.seconds), requestId: text(use.requestId, 40) || null, at: Date.now() } });
+  return true;
+}
+/** A fight started with no route of its own takes the setting's now, so changing the setting later moves only fights not yet begun (review 10). */
+export async function fixRoute(combat) { if (!game.user.isGM || !combat || combat.getFlag(ID, "route")) return; await combat.setFlag(ID, "route", routeOf(null, game.settings.get(ID, "defaultRoute"))); }
 /** Legality only: what the runner would say, with nothing written. Needs the fight open on this page. */
 export async function checkOnly(combat, requestId, plan) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
@@ -1141,7 +1166,7 @@ export async function handOff(combat, requestId, reason, meta = {}) {
   const open = !!r.choice && !r.choice.answer && !r.choice.gaveUp;
   if (!open && r.state !== "requested") return { state: r.state, reason: `That turn is ${r.state}.` };
   const ev = open ? eventChange("choice", requestId, r.tries ?? 0, { choiceSeq: r.choice.seq }) : eventChange((r.tries ?? 0) > 0 ? "retry" : r.why ? "replan" : "turn", requestId, r.tries ?? 0);
-  await saveTurns(combat, { [`requests.${requestId}.handedOff`]: { reason: text(reason, 200) || "no reason given", at: clock() }, ...ev });
+  await saveTurns(combat, { [`requests.${requestId}.handedOff`]: { reason: text(reason, 200) || "no reason given", at: clock() }, [`requests.${requestId}.thinker`]: null, ...ev });
   return { state: r.state, handedOff: true };
 }
 /** A short read of where a fight stands, for whoever thinks. */

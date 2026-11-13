@@ -116,14 +116,9 @@ function partOf(id, r, look, n) {
     an order the GM gave and every fall of a leader get a line of their own in their round (an order from a plan is a step of that plan).
     t: the Combat's turns flag. fight: { round, turn (index), order: [{ id, name, npc }] } in initiative order (npc: a monster, not one on the party's side); names: tokenId → name.
     Monsters with no request in a round that has passed them were played by the GM (one line each), so the rounds read in order. */
-/** What the API cost this fight, in words for the top of the History (0.31.0), or "". Every plan the API made counts, refused ones included (each
-    refusal keeps the plan's `by`), and every choice it answered; one plan is counted once however often it is read (`at`). */
-export function apiUseWords(t = {}) {
-  const seen = new Set(), bys = [];
-  const add = b => { if (!b || b.by !== "api") return; const k = b.at ?? JSON.stringify(b); if (seen.has(k)) return; seen.add(k); bys.push(b); };
-  for (const r of Object.values(t.requests ?? {})) { if (!r) continue; add(r.by); for (const x of Object.values(r.refused ?? {})) add(x?.by); add(r.choice?.by); }
-  return apiTotalWords(apiTotal(bys));
-}
+/** What the API cost this fight, in words for the top of the History (0.31.0), or "": every answer the API gave, as the bridge's worker kept it
+    on the fight (`apiUse`), whether its plan landed, was refused or was ignored (review 8). */
+export function apiUseWords(t = {}) { return apiTotalWords(apiTotal(Object.values(t.apiUse ?? {}))); }
 export function historyOf(t = {}, fight = {}, names = {}, look = {}, bandLog = [], forms = {}) {   /* forms: tokenId → its own pronoun (0.30.1) */
   const n = namer(t.labels ?? {}, names, forms), reqs = Object.entries(t.requests ?? {}).filter(([, r]) => r && Number.isFinite(r.round));
   const order = fight.order ?? [], at = id => { const i = order.findIndex(c => c.id === id); return i < 0 ? 999 : i; };
