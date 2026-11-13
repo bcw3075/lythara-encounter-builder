@@ -36,6 +36,8 @@ const ensureStyle = () => { if (!document.getElementById("leb-minds-style")) { c
 const { ApplicationV2, DialogV2 } = foundry.applications.api;
 const who = by => by === "gm" ? "yours" : by === "angel" ? "Angel" : "from its stat block";
 const refKey = ref => JSON.stringify(ref ?? null);
+/* the line under the Pronoun row: how the pick reads, so she sees it before saving (it follows a click on a pill and her typing; 0.30.1 live test) */
+const pronHint = (who, line) => { const f = line?.pick && cleanLine("pronoun", line) ? formsOf(line) : null; return `How cards, chat lines and the History write about ${who}${f ? `: “${pro("{they} {is|are} hurt", f)}”, “${pro("{their} turn", f)}”` : ""}.`; };
 const tag = (from, name) => `<i class="lm-tag ${esc(from)}">${esc(LAYER_WORDS[from] ?? from)}</i>${name ? esc(name) : ""}`;
 const warnHtml = (text, people, library = false) => { const w = lineWarnings(text, people), out = [];
   for (const n of w.names) out.push(library ? `“${esc(n)}” in this line is a party member's name. Library text is used in every encounter, so it should name nobody.` : `“${esc(n)}” in this line is a party member's name. A monster only gets a line like this while it perceives that creature. Reword it?`);
@@ -76,7 +78,7 @@ export class MindsApp extends ApplicationV2 {
       const cur = profile.assembled.lines[k], d = this.draft[k], val = d !== undefined ? (d ?? below[k] ?? {}) : (cur ?? {}), text = val.text ?? "", fromMine = d !== undefined ? d !== null : !!mine[k] && !mine[k].blank, blanked = d === undefined && !!mine[k]?.blank;
       /* the Pronoun line (0.30.1, the sample Rhea chose on 2026-11-13): pills, with her own words for "other…". A character's comes from its sheet. */
       if (k === "pronoun" && sheetPronoun) return `<div class="lm-row"><label>${esc(LINE_LABEL[k])}</label><div><b>${esc(sheetPronoun)}</b><div class="lm-hint">From the Gender box on the character sheet. Change it there.</div></div><div class="lm-from">character sheet</div></div>`;
-      const f = formsOf(val.pick ? val : "they"), hint = k !== "pronoun" ? "" : `<div class="lm-hint">How cards, chat lines and the History write about ${single || row.party || row.count === 1 ? "this creature" : "these creatures"}${val.pick ? `: “${esc(pro("{they} {is|are} hurt", f))}”, “${esc(pro("{their} turn", f))}”` : ""}.</div>`;
+      const who = single || row.party || row.count === 1 ? "this creature" : "these creatures", hint = k !== "pronoun" ? "" : `<div class="lm-hint" data-who="${who}">${esc(pronHint(who, val))}</div>`;
       const field = k === "pronoun"
         ? `<div class="lm-pron"><input type="hidden" name="pronoun.pick" value="${esc(val.pick ?? "")}">${Object.entries(PICKS[k]).map(([id, p]) => `<span class="lm-pp${val.pick === id ? " on" : ""}" data-pron="${id}" title="${esc(p.words)}">${esc(p.label)}</span>`).join("")}<input type="text" name="pronoun.text" maxlength="${CAPS.pronoun}" value="${esc(val.pick === "other" ? text : "")}" placeholder="xe / xem / xyr"${val.pick === "other" ? "" : " hidden"}></div>${hint}`
         : PICKS[k]
@@ -117,6 +119,7 @@ export class MindsApp extends ApplicationV2 {
     this.take(k); const root = this.element, row = root.querySelector(`.lm-row[data-line="${k}"]`); if (!row) return;
     row.querySelector(".lm-warns").innerHTML = warnHtml(row.querySelector(`[name="${k}.text"]`)?.value ?? "", this.people);
     row.querySelector(".lm-from").innerHTML = this.srcOf(k); this.bindRevert(row);
+    if (k === "pronoun") { const hint = row.querySelector(".lm-hint"); if (hint) hint.textContent = pronHint(hint.dataset.who, { pick: row.querySelector('[name="pronoun.pick"]')?.value, text: row.querySelector('[name="pronoun.text"]')?.value ?? "" }); }
     const mark = root.querySelector(".lm-unsaved"); if (mark) mark.textContent = this.dirty ? "Not saved yet" : "";
   }
   bindRevert(el) { el.querySelectorAll("[data-revert]").forEach(a => a.addEventListener("click", () => { this.draft[a.dataset.revert] = null; this.render(); })); }
