@@ -44,6 +44,7 @@ Settled by Angel, told to Rhea in the release note, hers to change:
 - **The look runs inside the notebooks' queue and settles the bands itself:** calling the queued `settleBands` from there would wait on its own job.
 
 ## Open items
+- **Bug B-6 (found on 0.30.0 on 2026-11-13 in 0.30.1's close-out, not fixed there):** a creature that joins a fight already begun has no books until something changes (`checkSides` opens them at the fight's start and on a change, not when a combatant is added). If its first change is its side, the side it changed to is stored as the side it started on (`from`), so nothing is logged then, and changing back is logged as changing sides. With its books open (the usual case) a linked token's change through its world actor was seen to work both ways.
 - An NPC a player owned before the fight (a companion built as an NPC, an ally whose sheet a player holds) is no longer played by the module, where before 0.30.0 it could be ticked for Angel: its row is greyed with "a player's".
 - A band member that is on nobody's side when the fight starts is simply not in its band (no line is logged: nothing changed in the fight).
 - Only NPCs are looked at: a character that changes sides isn't the module's to keep books for.
