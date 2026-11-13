@@ -4,6 +4,8 @@
 import { ID } from "../builder.mjs";
 import { esc } from "../journal.mjs";
 import { SPEECH_LOG } from "../speech.mjs";
+import { COMMAND_LOG } from "../command.mjs";
+import { SIDE_LOG } from "../sides.mjs";
 import { historyHTML, historyOf, journalHTML, namer, notebooksHTML } from "../history.mjs";
 import { bandLogWords, notebookOf, runnerName } from "../fight.mjs";
 import { bookPrint } from "../memory.mjs";
@@ -61,7 +63,7 @@ export async function saveHistory(combat) {
 /** Has anything happened since it was last saved? */
 const unsaved = combat => { const t = combat.getFlag(ID, "turns") ?? {}, nb = combat.getFlag(ID, "notebook"); /* with no monster turn, only her own notebook lines and cross-outs are worth the question at End Encounter: a fight she played herself isn't interrupted for notebooks nobody touched */
   /* nor for a band log with nothing of hers in it (0.28.0): an order she gave from the Give orders box is hers */
-  if (!Object.keys(t.requests ?? {}).length && !Object.values(nb ?? {}).some(b => Object.values(b ?? {}).some(l => l?.k === "gm" || l?.x)) && !Object.values(t.orders?.log ?? {}).some(e => (e?.k === "order" && e.by === "gm") || SPEECH_LOG.includes(e?.k))) return false; return t.historySaved !== signature(t.requests, nb, t.orders?.log); };
+  if (!Object.keys(t.requests ?? {}).length && !Object.values(nb ?? {}).some(b => Object.values(b ?? {}).some(l => l?.k === "gm" || l?.x)) && !Object.values(t.orders?.log ?? {}).some(e => (e?.k === "order" && e.by === "gm") || SPEECH_LOG.includes(e?.k) || COMMAND_LOG.includes(e?.k) || SIDE_LOG.includes(e?.k))) return false; return t.historySaved !== signature(t.requests, nb, t.orders?.log); };
 /** Every creature's notebook as the Remembers fold-out shows it, in names, for the window's last section and the saved page. */
 function notebooks(combat) {
   const labels = combat.getFlag(ID, "turns")?.labels ?? {}, n = namer(labels, Object.fromEntries(combat.scene?.tokens.map(t => [t.id, t.name]) ?? []));

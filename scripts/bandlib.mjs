@@ -9,7 +9,8 @@ import { PLANNED, applyBand, bandForPacket, bandId, cleanBand, cleanBands, guess
 export { PLANNED };
 
 const gmOnly = () => { if (!game.user.isGM) throw new Error("Only a GM can do this."); };
-const isMonster = t => !!t?.actor && t.actor.isOfType?.("npc") && t.actor.alliance !== "party" && !t.getFlag(ID, "cache");
+/* on the monsters' side (0.30.0, R3-15): a creature that changed sides, to the party's or to nobody's, belongs to no band until it is back */
+const isMonster = t => !!t?.actor && t.actor.isOfType?.("npc") && t.actor.alliance === "opposition" && !t.getFlag(ID, "cache");
 /** A scene's bands: the brief's, then the scene's own list (bands made before the map had a brief stay there and are still read: 0.26.0 review 2).
     A key in both is the brief's. */
 export function bandsOf(scene) { const mine = briefOf(scene)?.bands ?? [], have = new Set(mine.map(b => b.key)); return [...mine, ...cleanBands(scene?.getFlag(ID, "bands")).filter(b => !have.has(b.key))]; }

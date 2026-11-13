@@ -29,6 +29,7 @@ The Change button on the plan card: the GM edits the steps still to come (leave 
 - History (`history.mjs`): an edit is a line at the step it changed from: "<user> changed the plan from step N: <new steps> (Was: <old steps>)", in names; a refused note or change "<user>'s change wasn't used: <why>"; a note shows as the re-plan's "Asked again" line.
 - Prompt version 21 tells the thinker what a GM note is and that it comes before the monster's own tactics (its mind, since 0.24.0). `noteForThinker` takes a length since 0.24.0 (a note's 300 characters by default; monster minds pass their own caps).
 - **0.28.0:** `notePeople` takes the labels to use as a third argument (the fight's own by default), so an order from the GM's box can name a creature whose label is only about to be given out (`docs/features/orders.md`). A note to Angel is unchanged.
+- **0.30.0:** a Command an Animal step's two creatures can be changed (`editableParts` gives `target`, the animal, and `foe`, the creature it is set on), and a "go" command's square (`to`).
 
 ## Checks
 - (ch-1) {unit} `changeProblem` (ready, held, stopped with a done step; running, requested, done, saves, nothing left, next step begun, a change already on its way), `editableParts` per step kind, `applyEdits` (remove, changed parts, an unchanged step keeps its why, the input untouched), `noteForThinker` (labels, unknown names, whole words, longest first, the limit), the `gm` change in words, the prompt's version and words, the history's edit lines.

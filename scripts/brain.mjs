@@ -7,7 +7,7 @@ import { PROMPT_VERSION, promptText } from "./prompt.mjs";
 
 export const PLAN_SCHEMA = 1;
 /** Every kind a plan may name. The module carries out only those in turn.mjs's COSTS so far; checkPlan turns down the rest by name. */
-export const STEP_KINDS = ["stride", "step", "crawl", "fly", "swim", "climb", "burrow", "release", "strike", "ability", "spell", "stand", "drop-prone", "seek", "hide", "sneak", "take-cover", "flee", "interact", "delay", "order", "say", "none"];
+export const STEP_KINDS = ["stride", "step", "crawl", "fly", "swim", "climb", "burrow", "release", "strike", "ability", "spell", "stand", "drop-prone", "seek", "hide", "sneak", "take-cover", "flee", "interact", "delay", "order", "say", "command-animal", "point-out", "none"];
 export const MAX_STEPS = 8, MAX_TRIES = 2, LISTEN_MS = 120000, MAX_WAIT_S = 100;   /* run_script stops at 120 s */
 const LABEL = /^[EM]\d{1,3}$/, ITEM = /^[\w-]{1,80}$/, BY = ["chat", "api", "gm"];
 
@@ -53,6 +53,9 @@ export function cleanPlan(raw) {
     if (s.job != null) { if (typeof s.job !== "string" || !/^[rk]\d{1,3}$/.test(s.job)) return bad(`${at}: "job" is the id of a kind in "orders.give.jobs", like "r0".`); out.job = s.job; }
     if (s.intent != null) { if (!["yield", "bargain", "threat"].includes(s.intent)) return bad(`${at}: "intent" is "yield", "bargain" or "threat".`); out.intent = s.intent; }   /* a `say` step (0.29.0) */
     if (s.say != null) { if (typeof s.say !== "string") return bad(`${at}: "say" is one sentence of text.`); const w = text(s.say, 160); if (w) out.say = w; }
+    /* Command an Animal (0.30.0): the instruction, and the creature the animal is set on ("target" is the animal, "to" the square of a "go") */
+    if (s.instruction != null) { if (!["attack", "go", "stay"].includes(s.instruction)) return bad(`${at}: "instruction" is "attack", "go" or "stay".`); out.instruction = s.instruction; }
+    if (s.foe != null) { if (typeof s.foe !== "string" || !LABEL.test(s.foe)) return bad(`${at}: "foe" isn't a label like E1.`); out.foe = s.foe; }
     /* its own short reason, for the GM's history window (Rhea, 2026-11-08); never read by the check */
     if (s.why != null) { const w = text(String(s.why), 160); if (w) out.why = w; }
     steps.push(out);

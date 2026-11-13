@@ -7,6 +7,8 @@
 import { PLANNED, nextInLine } from "./bands.mjs";
 import { cutWords } from "./minds.mjs";
 import { SPEECH_LOG, speechLogWords } from "./speech.mjs";
+import { COMMAND_LOG, commandLogWords } from "./command.mjs";
+import { SIDE_LOG, sideLogWords } from "./sides.mjs";
 
 export const ORDER_PARTS = ["objective", "job", "fallBack", "yield"];   /* "yield" (0.29.0, R3-7): the leader tells its band to give themselves up */
 export const ORDER_CAPS = { say: 160, text: 120, jobs: 4, toldOf: 6, send: 900 };
@@ -152,7 +154,7 @@ export function fallOutcome({ pick = null, state = null, members = [], leaderId 
 export const NEVER_GIVES_UP = "Never, now: its leader was struck down and it fights on to the end.";
 
 /* ---------- the band log, in words (the History, the cards) ---------- */
-const FELL = { down: "is down", dead: "is dead", fled: "has fled the fight", gone: "is gone", yielded: "has given itself up" };
+const FELL = { down: "is down", dead: "is dead", fled: "has fled the fight", gone: "is gone", yielded: "has given itself up", turned: "has changed sides" };
 /** One entry of the band log for the GM. nameOf(tokenId) → a name; named(text) turns labels into names; langName(slug) → "Goblin".
     Entries: { k: "order", band, r, by, from, o, words (as the leader meant it, in labels), say, lang, heard: [ids], missed: { id: why }, msg }
     and { k: "fell", band, r, was, state, pick, leader, loosen, objective, never }. */
@@ -172,6 +174,8 @@ export function logWords(e, { nameOf = id => id, named = s => s, langName = l =>
     return `${who} The band has no pick for this: each is told its leader fell.`;
   }
   if (SPEECH_LOG.includes(e?.k)) return speechLogWords(e, { nameOf });   /* yielding (0.29.0): not a band's line, but the same log */
+  if (COMMAND_LOG.includes(e?.k)) return commandLogWords(e, { nameOf, named });   /* 0.30.0: a failed command the GM answered */
+  if (SIDE_LOG.includes(e?.k)) return sideLogWords(e, { nameOf, bandName });   /* 0.30.0: a creature changed sides, or a player got it */
   return "";
 }
 /** What a member's card says of this round's order: { heard: words } when it heard one this round, { missed: why } when its band had one it

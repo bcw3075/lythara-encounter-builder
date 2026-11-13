@@ -40,6 +40,7 @@ Settled by Angel, told to Rhea, hers to change:
 - **API** (`api.minds`): `rows`, `profile`, `layers`, `of`, `kindOf`, `set(scene, ref, lines, { by, force })` with ref `{ row }`, `{ row, n }`, `{ kind }` or `{ token }`, `giveOwn`, `dropOwn`, `open`, `openLibrary`, and `library.{ list, get, put, remove, export, import }`.
 
 - **0.28.0:** the band's page has a Second select under the Leader (the leader isn't offered; saved with Save band like the mark). The this-fight layer of a mind is written for the first time: when a band falls apart or fights harder the runner writes `discipline` or `givesUp` under the Combat's `minds.own.<token>` (`docs/features/orders.md`), and the windows tag such a line "this fight".
+- **A monster that changed sides keeps its mind (0.30.0):** `mindLayers` reads the full layers for an NPC on the party's side whose books on the turns flag say it began the fight on the opposition's; any other creature on the party's side still has only its own lines.
 
 ## Checks
 - (mi-1) {unit} The rules: lines and caps, the kind's key (compendium source, Elite and Weak, name and level), the stat-block guess, layers and their order (own stops kind; blank stops inherit; this fight on top), the packet (labels for perceived names, a line held back whole, fixed order, the same bytes twice, nothing left is no mind), warnings at save, whose words, the library preview, entries, export and import, the brief's encounter layer.

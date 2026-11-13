@@ -4,8 +4,10 @@ import { BURROW_DEPTH, FT, burrowVertical, climbDistance, distanceBetween, headi
 import { placeable } from "./area.mjs";
 import { cleanOrder, orderWords } from "./orders.mjs";
 import { cleanSay } from "./speech.mjs";
+import { DEAF_FLAT, cleanCommand, commandWords } from "./command.mjs";
+import { pointResult } from "./pointout.mjs";
 /** What each step kind costs. An ability's cost is its own (0 for a free action); 1 here is only the fallback. */
-export const COSTS = { strike: 1, stride: 1, fly: 1, swim: 1, climb: 1, burrow: 1, release: 0, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, flee: 1, interact: 1, delay: 0, order: 0, say: 0, none: 0 };
+export const COSTS = { strike: 1, stride: 1, fly: 1, swim: 1, climb: 1, burrow: 1, release: 0, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, flee: 1, interact: 1, delay: 0, order: 0, say: 0, "command-animal": 1, "point-out": 1, none: 0 };
 /* Interact and Delay (0.12.0). Interact (https://2e.aonprd.com/Actions.aspx?ID=2296): 1 action, manipulate; the module can't know what a monster does
    with its hands, so it posts a card saying what, and the GM applies it, as for any ability the module can't run. Restrained bars manipulate actions;
    Grabbed asks a DC 5 flat check for them, lost on a failure. Delay (ID 2294): a free action when its turn begins, so it must be the plan's only step and
@@ -105,6 +107,7 @@ export function checkPlan(plan, ctx) {
   if (!plan || !Array.isArray(plan.steps)) return { ok: false, reason: "The plan has no steps." };
   if (ctx.yielded) return { ok: false, reason: "It has yielded and stands down: it takes no actions until the GM answers its yield." };   /* 0.29.0, design review 3 */
   let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, herePos = ctx.me?.pos ?? here, hereElev = Number(ctx.me?.elev) || 0, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, surfaced = false, fled = false, ordered = false, said = false, gaveUp = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {}, shots = {};
+  const commanded = new Set(), pointed = new Set();   /* 0.30.0: one command an animal and one Point Out a creature in a plan */
   /* up a tree it climbed (it holds on there: no Stride, Step and the like until it climbs down), and what it holds in its hands */
   let tree = hereElev > 0 && ctx.onTree ? ctx.onTree : null, below = !!ctx.below; if (below) hereElev = 0;   /* its token sits below 0; once up it stands at 0 */ const holding = new Map((ctx.holding ?? []).map(h => [h.id, h.name])), released = new Set();
   const upTree = word => `it is ${Math.round(hereElev)} ft up the tree at [${tree.at[0]}, ${tree.at[1]}], so it can't ${word} there: a Climb (a "climb" step) with "height": 0 gets it down${ctx.flySpeed > 0 ? `, or it can Fly off` : ""}.`;
@@ -184,6 +187,36 @@ export function checkPlan(plan, ctx) {
       if (n > 0 && left <= 0) return { ok: false, reason: `${at}: ${isYield ? "yield" : "say it"} before its last action, not after: once its actions are spent the turn can end before it speaks.` };
       const words = sc.say?.ok ? c.say.words : "";   /* one that can't speak now yields without words */
       steps.push({ do: "say", intent: c.say.intent, ...(words ? { say: words } : {}) }); said = true; gaveUp = isYield; continue;
+    }
+    /* Command an Animal (0.30.0, Rhea's R3-6 and q-17): one action, auditory and concentrate; a Nature check against the animal's Will DC when
+       the step runs. The animal is one of its allies with PF2e's animal trait that can hear it; the instruction is data (a creature the
+       handler perceives, a square, or "stay") */
+    if (step.do === "command-animal") {
+      const cc = ctx.command ?? { animals: {} };
+      if (typeof step.target !== "string") return { ok: false, reason: `${at}: a "command-animal" step needs "target": the label of the animal it commands (one of its "allies").` };
+      const a = cc.animals?.[step.target] ?? null;
+      if (!a) return { ok: false, reason: ctx.targets?.[step.target] ? `${at}: it can't command ${step.target}: it is hostile or unfriendly to it (Command an Animal fails at once on such an animal).` : `${at}: it doesn't know of "${step.target}" as one of its allies.` };
+      if (!a.ok) return { ok: false, reason: `${at}: it can't command ${step.target}: ${a.why}.` };
+      if (commanded.has(step.target)) return { ok: false, reason: `${at}: ${step.target} already gets a command in this plan (one instruction for its next turn).` };
+      const c = cleanCommand({ instruction: step.instruction, foe: step.foe, to: step.to }); if (!c.ok) return { ok: false, reason: `${at}: ${c.reason}` };
+      if (c.command.foe) {
+        if (ctx.allies?.[c.command.foe] || ctx.allyLabels?.includes?.(c.command.foe)) return { ok: false, reason: `${at}: "${c.command.foe}" is on its side: an animal is set on a creature its handler fights.` };
+        if (!ctx.targets?.[c.command.foe]) return { ok: false, reason: `${at}: it can only set an animal on a creature it perceives itself, and it doesn't perceive "${c.command.foe}".` };
+      }
+      commanded.add(step.target);
+      steps.push({ do: "command-animal", target: step.target, targetName: a.name ?? step.target, ...c.command, words: commandWords(c.command), ...(cc.deafened ? { flat: DEAF_FLAT } : {}) }); last = { do: "command-animal" }; continue;
+    }
+    /* Point Out (0.30.0, q-18): one action, auditory, manipulate and visual; a creature it sees that at least one of its allies has lost */
+    if (step.do === "point-out") {
+      if (ctx.cantAttack) return { ok: false, reason: `${at}: it is restrained, so it can't Point Out (a manipulate action).` };
+      if (typeof step.target !== "string") return { ok: false, reason: `${at}: a "point-out" step needs "target": the label of the creature it points out.` };
+      if (ctx.allies?.[step.target] || ctx.allyLabels?.includes?.(step.target)) return { ok: false, reason: `${at}: "${step.target}" is on its side: it points out a creature its allies have lost track of.` };
+      if (!ctx.targets?.[step.target]) return { ok: false, reason: `${at}: it doesn't know of "${step.target}".` };
+      const p = ctx.pointOut?.[step.target] ?? { ok: false, why: "it can't point that creature out here" };
+      if (!p.ok) return { ok: false, reason: `${at}: it can't Point Out ${step.target}: ${p.why}.` };
+      if (pointed.has(step.target)) return { ok: false, reason: `${at}: this plan already points ${step.target} out.` };
+      pointed.add(step.target);
+      steps.push({ do: "point-out", target: step.target, targetName: ctx.targets[step.target].name ?? step.target, ...(ctx.grabbed ? { flat: GRABBED_FLAT } : {}) }); last = { do: "point-out" }; continue;
     }
     if (step.do === "delay") {
       if (n > 0 || plan.steps.length > 1) return { ok: false, reason: `${at}: a delay has to be the plan's only step: it is a free action taken as the turn begins, and the rest of the turn doesn't happen yet.` };
@@ -557,8 +590,12 @@ function checkAbility(step, ab, { ctx, last, at, attacks, distanceTo }) {
     if (ctx.cantAttack && traits.includes("attack")) return no(ctx.cantAttack);
     if (ctx.cantAttack && traits.includes("manipulate")) return no(`it is restrained, so it can't use ${ab.name} (a manipulate action).`);
     if (ctx.cantMove && traits.includes("move")) return no(ctx.cantMove);
-    let t = null; if (step.target) { t = ctx.targets[step.target]; if (!t) return no(`it doesn't know of "${step.target}".`); }
+    /* the target: a creature it perceives, or one of its allies or itself (0.30.0, B-5: the prompt says "a label", and an ability that helps its side,
+       such as a rallying display, was refused as "it doesn't know of M2"); an ability with the attack trait is never aimed at its own side */
     const isAttack = traits.includes("attack");
+    let t = null; if (step.target) { t = ctx.targets[step.target] ?? null;
+      if (!t) { const mine = ctx.allies?.[step.target] ?? null; if (!mine) return no(`it doesn't know of "${step.target}".`);
+        if (isAttack) return no(`"${step.target}" is on its side: ${ab.name} is an attack, and needs a creature it fights.`); t = mine; } }
     return { ok: true, step: { do: "ability", item: ab.id, itemName: ab.name, mode: "card", ...(t ? { target: step.target, targetName: t.name ?? step.target, flat: t.flat ?? 0 } : {}), ...(isAttack ? { attack: true, mapCounts: true, variant: Math.min(attacks, 2) } : {}) } };
   }
   if (ctx.cantAttack) return no(ctx.cantAttack);
@@ -656,6 +693,8 @@ export function doneStep(step, rec = {}) {
   if (step.do === "release") return { do: "release", item: step.itemName ?? step.item, result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.dropped ? "dropped it" : "unknown" };
   if (step.do === "order") return { do: "order", order: step.words, result: rec.given ? `given${Array.isArray(rec.heard) ? `: ${rec.heard.length ? `${rec.heard.length} of its band heard it` : "nobody heard it"}` : ""}` : rec.skipped ? `not given (${rec.skipped})` : "unknown" };
   if (step.do === "say") return { do: "say", intent: step.intent, result: rec.said ? (step.intent === "yield" ? "yielded: it stands down" : "said") : rec.skipped ? `not said (${rec.skipped})` : "unknown" };
+  if (step.do === "command-animal") { const c = rec.check; return { do: "command-animal", target: step.target, command: step.words, result: rec.skipped ? `not given (${rec.skipped})` : rec.flat && !rec.flat.ok ? "flat check failed (deafened): the command is lost" : c ? `${CHECK_OUTCOMES[c.degree] ?? "unknown"}: ${c.degree >= 2 ? "it will do as told on its next turn" : c.degree === 1 ? "it does nothing on its next turn" : "it does something else on its next turn"}` : "unknown" }; }
+  if (step.do === "point-out") return { do: "point-out", target: step.target, result: rec.flat && !rec.flat.ok ? "flat check failed" : pointResult(rec) };
   if (step.do === "interact") return { do: "interact", what: step.what, result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.posted ? "card posted for the GM to apply" : "unknown" };
   if (step.do === "delay") return { do: "delay", after: step.after, result: rec.moved ? "delayed: its turn comes back after that creature's" : rec.ended ? "turn ended; its place in the order may not have moved" : "unknown" };
   if (step.do === "ability") return { do: "ability", item: step.item, ...(step.target ? { target: step.target } : {}), result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.check ? CHECK_OUTCOMES[rec.check.degree] ?? "unknown" : rec.posted ? (step.mode === "hold" ? "kept hold" : "card posted for the GM to apply") : "unknown" };
@@ -747,6 +786,7 @@ export function changeProblem(r) {
 export function editableParts(s) {
   const out = [];
   if (s?.target != null) out.push("target");
+  if (s?.foe != null) out.push("foe");   /* the creature an animal is set on (0.30.0) */
   if (s?.do === "delay") out.push("after");
   if (s?.to != null) out.push("to");
   for (const k of ["at", "toward"]) if (s?.[k] != null) out.push(k);
@@ -876,6 +916,8 @@ export function describeStep(s) {
   if (s.do === "release") return `Releases its ${s.itemName ?? s.item}, which drops on its square${s.flat ? ` (a DC ${s.flat} flat check first, as it is grabbed)` : ""} (free action).`;
   if (s.do === "order") return `Orders its band: ${s.words}${s.order?.say ? `. It says: “${s.order.say}”` : ""} (free: speaking costs no action).`;
   if (s.do === "say") return s.intent === "yield" ? `Yields: it stops fighting and gives itself up${s.say ? `, saying: “${s.say}”` : " (no words)"}. Its turn ends, and Accepted or Fight on is yours to press (free: speaking costs no action).` : `Says to the party (${s.intent === "bargain" ? "a bargain" : "a threat"}): “${s.say}” (free: speaking costs no action).`;
+  if (s.do === "command-animal") return `Commands an animal: ${s.target}, ${s.words}${s.flat ? ` (deafened: a DC ${s.flat} flat check first)` : ""}. A Nature check against its Will DC: on a success it must do that on its next turn; on a failure it does nothing; on a critical failure what it does is yours to choose.`;
+  if (s.do === "point-out") return `Points out ${s.target} to its allies${s.flat ? ` (a DC ${s.flat} flat check first, as it is grabbed)` : ""}: those who see it point and understand it have ${s.target} hidden at its square; one that only sees the gesture rolls Perception against its Stealth DC.`;
   if (s.do === "interact") return `Interacts: ${s.what}${s.flat ? ` (a DC ${s.flat} flat check first, as it is grabbed)` : ""}. Its card goes to chat for you to apply.`;
   if (s.do === "delay") return `Delays until after ${s.after}'s turn: its turn ends now, and it comes back into the order right after ${s.after} (free action).`;
   return `${s.itemName} at ${s.targetName}${s.variant ? `, attack ${s.variant + 1}` : ""}${s.flat ? `, after a DC ${s.flat} flat check` : ""}.`;
@@ -938,6 +980,21 @@ export function nextStealth(rec = {}, kind = "hide") {
   }
   if (!rec.applyStarted) return "apply";
   return rec.applied ? "next" : "check";
+}
+/** What to do next with a Command an Animal step, from its record (0.30.0). Never repeated: a roll that was begun and has no result is "ask".
+    flat: the DC 5 flat check of a deafened handler (an auditory action), 0 when it hears. */
+export function nextCommand(rec = {}, { flat = 0 } = {}) {
+  if (rec.skipped) return "next";
+  if (flat) { if (!rec.flatStarted) return "flat"; if (!rec.flat) return "ask"; if (!rec.flat.ok) return "next"; }
+  if (!rec.started) return "check";
+  return rec.check ? "next" : "ask";
+}
+/** What to do next with a Point Out step, from its record (0.30.0): the grabbed flat check of a manipulate action, then the gesture. */
+export function nextPoint(rec = {}, { flat = 0 } = {}) {
+  if (rec.skipped) return "next";
+  if (flat) { if (!rec.flatStarted) return "flat"; if (!rec.flat) return "ask"; if (!rec.flat.ok) return "next"; }
+  if (!rec.started) return "point";
+  return rec.pointed ? "next" : "ask";
 }
 /** What to do next with an ability step, from its record. Never repeated: when the record can't tell whether a stage finished, "ask". mode: "check" (a
     follow-up: flat check if any, the check, its effects, then a Trip's critical damage), "hold" or "card" (its card posted). "gm" means done, with something

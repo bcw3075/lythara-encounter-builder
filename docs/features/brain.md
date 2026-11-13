@@ -66,6 +66,7 @@ Every `fight_wait` updates `lastSeen`. The panel's light is green under 120 s, t
 
 - **Prompt version 29, packet schema 6 (0.29.0):** a "Speaking to the party" section (the `say` step with its three intents, when a creature yields and when it never does, `speech.can` and `speech.canYield`, the `yielded` mark on others) and the order to yield; `STEP_KINDS` has `say` and `cleanPlan` reads `intent` (`docs/features/speech.md`).
 - **Prompt version 28, packet schema 5 (0.28.0):** the prompt has an Orders section (the packet's `orders`: what it has heard and how an order sits above the band's plan, `toldOf`, and for a leader `give` with the `order` step's four forms and when to use one); the band section no longer says nobody gives orders, and says the module has already acted on a leader's fall; orders heard take their place in the order of who wins. `order` is a step kind; `cleanPlan` takes its `part`, `job` and `say`.
+- **Prompt version 30, packet schema 7 (0.30.0):** sections for Command an Animal (the `command-animal` step, what the `command` block in an animal's packet binds it to, `went: "wrong"`), Point Out (the `point-out` step, `alliesLost`, a `pointed` square that may be wrong) and `you.changedSides`. `STEP_KINDS` has both kinds; `cleanPlan` takes `instruction` and `foe`.
 
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.

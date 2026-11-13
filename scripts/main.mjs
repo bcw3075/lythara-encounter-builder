@@ -11,6 +11,7 @@ import { bandOf, bandViews, joinBand, removeBand, setBand } from "./bandlib.mjs"
 import { dropLibraryCache, dropOwn, giveOwn, kindFacts, libraryEntries, libraryExport, libraryGet, libraryImport, libraryPut, libraryRemove, mindLayers, mindOf, mindRows, rowProfile, setLines } from "./library.mjs";
 import { bandLog, bandLogWords, giveOrder, onRenderOrder, orderCard, orderPreview, setHearCall } from "./fight.mjs";
 import { acceptYield, backInFight, onRenderSay, prisonerList, refuseYield, yieldedList } from "./fight.mjs";
+import { answerCommand, checkSides, commandList, dropBeliefs, onSideChange, pointCard, sideList } from "./fight.mjs";
 import { chooseFor, onReactionCard, partyReactors, setReactionUsed, doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCombatGone, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, onMemoryCard, onMemoryUpdate, onMemoryHp, notebookOf, previewRemember, rememberAdd, rememberCross, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
 
 const CONTROL = "encounters", apps = new Map(), mindsApps = new Map(); let turnsApp = null, historyApp = null, historyTimer = null;
@@ -83,12 +84,12 @@ Hooks.on("activateNote", note => {
 Hooks.on("preCreateChatMessage", message => { onPreCreateMessage(message); });
 Hooks.on("createChatMessage", message => { onCreateMessage(message); noteReactionRoll(message); onActionCard(message).catch(e => console.warn(`${ID} | reactions`, e)); try { onReactionCard(message); } catch (e) { console.warn(`${ID} | reaction box`, e); } try { onMemoryCard(message); } catch (e) { console.warn(`${ID} | notebook`, e); } });
 /* monsters reacting on players' turns (0.21.0): the runner watches moves, cards, items changing hands and Prone coming off. Block bodies: no handler returns anything. */
-Hooks.on("moveToken", (doc, movement) => { onTokenMoved(doc, movement); });
+Hooks.on("moveToken", (doc, movement) => { onTokenMoved(doc, movement); try { dropBeliefs(doc); } catch (e) { console.warn(`${ID} | point out`, e); } });
 Hooks.on("updateItem", (item, change) => { onItemHands(item, change); noteChange(item); });
 Hooks.on("deleteItem", item => { onConditionGone(item); noteChange(item); });
 /* the start of a turn settles (0.23.0): the runner notes every change to a creature in a fight, and reads a monster only once they have stopped */
 Hooks.on("createItem", item => { noteChange(item); });
-Hooks.on("updateActor", (actor, change, options) => { noteChange(actor); try { onMemoryHp(actor, change, options); } catch (e) { console.warn(`${ID} | notebook`, e); } });
+Hooks.on("updateActor", (actor, change, options) => { noteChange(actor); try { onSideChange(actor, change); if ("ownership" in change || "==ownership" in change) redrawTurns(); } catch (e) { console.warn(`${ID} | sides`, e); } try { onMemoryHp(actor, change, options); } catch (e) { console.warn(`${ID} | notebook`, e); } });
 Hooks.on("updateChatMessage", (message, change) => { onMessageUpdate(message, change); try { onMemoryUpdate(message, change); } catch (e) { console.warn(`${ID} | notebook`, e); } });
 Hooks.on("preUpdateCombatant", (combatant, change, options) => { keepTurn(combatant, change, options); });
 Hooks.on("updateCombatant", (combatant, change, options, userId) => { saveTurn(combatant, options, userId); noteChange(combatant); });
@@ -98,7 +99,7 @@ Hooks.on("updateCombat", (combat, change) => { if (foundry.utils.hasProperty(cha
 /* a turn handed on with no `updateCombat` (the current combatant deleted, 0.24.0): `combatTurnChange` on the pages core tells, `deleteCombatant` on every page */
 Hooks.on("combatTurnChange", combat => { onTurnHandedOn(combat); });
 Hooks.on("deleteCombatant", combatant => { onTurnHandedOn(combatant.parent); });
-Hooks.on("updateToken", (tok, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}`)) { redrawTurns(); redrawMinds(tok.parent); } onTokenFlag(tok, change); });
+Hooks.on("updateToken", (tok, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}`)) { redrawTurns(); redrawMinds(tok.parent); } onTokenFlag(tok, change); try { onSideChange(tok, change); } catch (e) { console.warn(`${ID} | sides`, e); } });
 /* monster minds (0.24.0): the library is pages of one GM-only journal, read from a cache; the windows follow the scene's brief and tokens */
 for (const h of ["createJournalEntryPage", "updateJournalEntryPage", "deleteJournalEntryPage"]) Hooks.on(h, page => { onLibraryPage(page); });
 Hooks.on("deleteJournalEntry", entry => { if (entry.getFlag(ID, "mindsLibrary")) { dropLibraryCache(); redrawLibrary(); } });
@@ -122,7 +123,12 @@ Hooks.once("ready", () => {
       orders: { preview: orderPreview, give: giveOrder, hear: setHearCall, card: orderCard, log: bandLog, words: bandLogWords },
       /* speech and yielding (0.29.0): who stands down and this fight's prisoners; `accept`, `fightOn` (`{ own: true }` is Play it myself) and
          `back` are the GM's buttons on Monster Turns: never Angel's door (a monster yields from its plan, with a "say" step) */
-      speech: { yielded: yieldedList, prisoners: prisonerList, accept: acceptYield, fightOn: refuseYield, back: backInFight } },
+      speech: { yielded: yieldedList, prisoners: prisonerList, accept: acceptYield, fightOn: refuseYield, back: backInFight },
+      /* tier 3d (0.30.0): `commands.list` the commands in force (an animal's row and card) and `commands.answer(combat, tokenId, "own" | "angel")`,
+         the GM's buttons after a failed command (never Angel's door: a handler commands from its plan, with a "command-animal" step);
+         `pointOut.card` the GM's box under a Point Out step; `sides.list` who changed sides or became a player's, and `sides.check(combat)`,
+         the runner's look at every monster's side (it runs by itself at each turn change and when an actor's side or owners change) */
+      commands: { list: commandList, answer: answerCommand }, pointOut: { card: pointCard }, sides: { list: sideList, check: checkSides } },
     /* monster minds (0.24.0), `api.minds`: how a chat reads and writes profiles (api.minds.set, api.minds.open, api.minds.library.put and the rest). `by: "angel"` never replaces a line whose words are the GM's unless `force`.
        This is the chat's door, so a write with no `by` is Angel's (the windows say "gm" themselves): only `by: "gm"` for words she dictated, and
        `giveOwn`, `dropOwn`, `library.remove` and `library.import` only when she asked for them. */

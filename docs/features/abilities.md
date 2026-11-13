@@ -27,6 +27,7 @@ Abilities: Strike follow-ups (Grab, Knockdown, Push, Pull) run for real; every o
 **Everything else.** Conditions and start and end of turn stay with Workbench. Flat checks are never rolled by PF2e or Visioner [DOC], so the mod rolls them: concealed DC 5, hidden DC 11, spending the action on a failure [RULES]. Skill actions use `game.pf2e.actions.get(slug).use(...)`; demoralize, hide, seek, take-cover, grapple, trip, shove, feint, escape, sneak, stand and create-a-diversion are registered [LIVE].
 - **Anything else: the checklist.** The card says what the thinker wants to do, the mod posts the item's card, and Rhea applies it. Never faked.
 - **0.27.0 (`reactions.md`):** an ability's own damage (a critical Trip's) asks the damage gate before it is applied; a refused Glimpse of Redemption's resistance is on the copy of the creature the damage is applied to.
+- **An ability aimed at a friend (0.30.0, bug B-5):** a non-follow-up ability's `target` may be one of its allies' labels or its own, as a spell's may (`ctx.allies` is always gathered now); the step's token is found through `tokenIdOf`, which knows allies' labels. An ability with the attack trait aimed at its own side is refused as such. Before, "target": "M2" on a rallying ability was refused as "it doesn't know of M2" although the prompt says an ability's target is a label (found by the API usage test: both models wrote it).
 
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.

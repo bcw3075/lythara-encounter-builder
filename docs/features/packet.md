@@ -83,6 +83,7 @@ Result per pair: `observed / concealed / hidden / undetected / unnoticed`.
 
 - **Speech (0.29.0, schema 6):** `speech` comes after `orders`: whether it may say its sentence to the party this round and whether it may yield, each with the reason when not; never for the party's side. A creature in `perceived` or `allies` that has yielded or is a prisoner carries `yielded: true` (`docs/features/speech.md`).
 - **Orders (0.28.0, schema 5):** `orders` comes after `bandNow`, since it changes during the fight: what the monster has heard from its leader, whom it was told of and hasn't perceived (a label and nothing else: no square, no health word, never a target), and for a leader whether it may give this round's order (`docs/features/orders.md`).
+- **Tier 3d (0.30.0, schema 7):** `command` comes after `speech`: a handler's Command an Animal in force for this turn (`command-animal.md`). A creature in `perceived` that this monster sees and at least one of its allies has lost carries `alliesLost: true`; a hidden creature whose square comes from an ally's Point Out carries `pointed: true` (the square can be wrong, and nothing in the packet says so: `point-out.md`). `you.changedSides` is there for a creature that changed sides in this fight (`sides.md`). `senser`'s results carry `raw`, what the creature's own senses say before a pointed-out belief.
 
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.

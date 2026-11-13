@@ -114,7 +114,10 @@ const looseOf = scene => (scene?.getFlag(ID, "minds") ?? []).filter(x => x && ty
 export function mindLayers(scene, tok, combat = null) {
   const actor = tok?.actor; if (!actor) return [];
   const mine = cleanLines(tok.getFlag(ID, "mind"));
-  if (actor.alliance === "party") return Object.keys(mine).length ? [{ from: "own", lines: mine }] : [];
+  /* a monster that changed sides in this fight keeps its mind (0.30.0, design review 2): only a creature that began on the party's side has
+     nothing but its own lines */
+  const turned = actor.isOfType?.("npc") && combat?.getFlag(ID, "turns")?.sides?.[tok.id]?.from === "opposition";
+  if (actor.alliance === "party" && !turned) return Object.keys(mine).length ? [{ from: "own", lines: mine }] : [];
   const kind = kindFacts(actor), ref = builtRef(scene, tok), brief = ref ? briefOf(scene) : null, row = brief?.creatures[ref.row] ?? null, layers = [];
   const fight = combat?.getFlag(ID, "minds") ?? null, agreed = cleanLines(fight?.own?.[tok.id] ?? (fight?.kinds ?? []).find(x => x?.kind === kind.key)?.lines);
   if (Object.keys(agreed).length) layers.push({ from: "fight", lines: agreed });

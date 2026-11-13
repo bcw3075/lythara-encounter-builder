@@ -67,6 +67,7 @@ So the rule the code follows: **a card is the event; an HP drop with no card for
 
 - **0.28.0:** a creature healing itself reads "E5 healed itself." (it read "E5 healed E5."). A band that fights harder finds who struck its leader down in the blow's own card first (`onMemoryCard` keeps the origin of a damage card that leaves its creature at 0 hit points on the turns flag, `dropped`: the creature is down by then and writes nothing itself), and only then in the fallen leader's notebook (orders.mjs `dropperOf`, `lastHurtBy`: the last sure "hurt" line by an enemy).
 - **Yielding (0.29.0):** the side's tally counts members that stand down or are prisoners as "yielded", apart from down and fled (`sideOf`, `sideWords`), and a yield is a deed its allies see ("gave itself up", `noteDeed`). An enemy's damage-taken card on a yielded monster ends the yield from `onMemoryCard` (`docs/features/speech.md`).
+- **0.30.0:** two more deeds an ally may see: "gave an animal a command" (with whether it took) and "pointed out" a creature.
 
 ## Checks
 - (me-1) {unit} The rules: lines for each kind of event and witness (seen, heard, unseen; enemy, ally, itself), no number or name kept, the ladder by rung, tallies and their words, unsure marked, allies' deeds since its last turn, the side's tally, the packet's notebook and its size, crossing out, eviction order, what makes it think again, keys, the packet's key order (schema 3), the change words, the prompt.

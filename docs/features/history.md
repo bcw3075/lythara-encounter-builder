@@ -38,6 +38,7 @@ The GM looks back through what each monster did and why: the card's words flash 
 
 - **0.28.0 (`docs/features/orders.md`):** `historyOf` takes the band log in the GM's words as a fifth argument: an order the GM gave and every fall of a leader are lines of their own in their round (`band: true`), an order from a plan is that plan's step (`stepResult`: who heard, who didn't and why, with a link to its chat line). The saved-or-not signature includes the band log, and a fight with no monster turn asks at End Encounter when the GM gave an order from her box.
 - **Speech and yielding (0.29.0):** a `say` step reads "said in <language>" (or that it had no words) and, for a yield, that it stands down; Accepted, Fight on, a blow that ended a yield, Play it myself and Back in the fight are lines of their own in their round, from the same log as the band's lines (`bandLogWords`), and count for "changed since saved".
+- **Tier 3d (0.30.0):** `stepResult` has lines for a Command an Animal step (the Nature check against the Will DC and what it means for the animal) and a Point Out step (what each ally got; a wrong square is said, for the GM). The band log's new kinds (`commandOwn`, `commandAngel`, `side`, `sideBack`, `owned`, `unowned`) are lines of their round and count for "changed since saved".
 
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.
