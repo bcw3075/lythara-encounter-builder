@@ -34,6 +34,7 @@ The GM looks back through what each monster did and why: the card's words flash 
 - **Whether it's saved** is a signature of the requests (`signature`), not a time: many writes don't move `since`, and the server clock restarts with the server (found by the review).
 - **Folding:** only a click on a turn's summary counts as the GM's choice. Drawing an open `<details>` fires `toggle` too, which pinned every default-open turn open (found by the review).
 - **A refused plan stays in `r.plan` until the next lands,** so while a turn is `requested` the part shows "Waiting for a plan" and the refusal, not the refused plan as the plan. `why` on a request without `parent` is why the turn ended (no actions left, too many re-plans), not a re-plan.
+- **What a monster that got away saw (0.33.0, `docs/features/look.md`):** the End Encounter window also offers each escaped monster's sure lines about its enemies for its own "Knows about its enemies", each Accept / Keep, written before the fight is deleted whether she saves or discards; with the history already saved and lines to answer, the window has End encounter instead.
 - **End Encounter:** `preDeleteCombat` runs on the deleting user's browser; for a GM (not the runner) with unsaved history it cancels the delete (returns false, the one handler that does), asks, saves if chosen and deletes again with `{ [ID]: { asked: true } }`. A script deleting a fight from a GM page that isn't the runner should pass that option, or the dialog opens there. PF2e's End Encounter asks first ("End this combat?"), so there are two questions.
 - **Redraws:** `main.mjs` throttles the window to one redraw per 250 ms on flag writes, turn changes and fight or scene changes.
 
@@ -49,6 +50,7 @@ Record every id below in the release's change record when this feature, or a fea
 - (hi-3) {live,player,shared:brain} Test Player can't see the folder or entry.
 - (hi-4) {live,shared:brain} Close Simple Calendar's window first: it covered the tracker's End Encounter button.
 - (hi-5) {live,shared:brain} Delete the test journal and folder after.
+- (hi-6) {live} B-8 (0.33.0): End Encounter on a fight whose only history is the band log (her box's yield or line, or an order she gave, no monster turn and no notebook): Save to journal saves the page with her line and the fight ends.
 
 - **Swim (0.14.0):** a Swim's line shows its Athletics total against the DC and the degree when it rolled, "no progress" on a failure, "trod water" for a Swim on its own square, otherwise where it got to like any move.
 

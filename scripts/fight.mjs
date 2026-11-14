@@ -5,7 +5,9 @@ import { handedOn, untouched, settleFrom, settleWait, CHANGEABLE, NOTE_MAX, chan
 import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, SAVE_MULT, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, shouldSink, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, nextCommand, nextPoint, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract, nextClimb, climbResult, tookTurn } from "./turn.mjs";
 import { BURROW_DEPTH, FT, distanceBetween, burrowWorld, crossesWalls, cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, heightWhenCut, rockSquares, routeWordsIt, routeWords, swimWorld, glideWorld, treeTop, treesBeside, wallSquares, waterKinds, waterUnder } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, visibleConditions } from "./perceive.mjs";
-import { mindOf, pronounOf } from "./library.mjs";
+import { giveOwn, kindFacts, mindLayers, mindOf, pronounOf, setLines } from "./library.mjs";
+import { LOOK_ID, LOOK_TRIES, cleanLook, escapeLines, isLook, knowsAfter, lookOut, lookPacket, lookWaiting, openItems } from "./look.mjs";
+import { lineWords } from "./minds.mjs";
 import { IT, pro } from "./pronoun.mjs";
 import { PLANNED, bandKeyOf, bandOf, bandPacket, bandsOf, disciplineOf, fightBand, jobGroups, langsOf, leaderOf, membersOf, natureLayers, planOf, secondOf, shiftBandSpots } from "./bandlib.mjs";
 import { natureOf } from "./bands.mjs";
@@ -21,7 +23,7 @@ import { breaksYield, cleanGmSay, gestureWords, orderHtml, sayHtml, speechFor, s
 import { canCommand, commandForPacket, commandInForce, commandSpent, commandTag, commandWords, degreeOf, outcomeOf, resultWords } from "./command.mjs";
 import { allyGets, allyResult, canPointOut, hasLost, pointLines, previewLines, squareFeet, withBelief, wrongSquare } from "./pointout.mjs";
 import { changedForPacket, sideCardWords, sideChange, sideTag, sideWord } from "./sides.mjs";
-import { apiNoteWords, modelFor, routeOf, wakeState, whoGets } from "./route.mjs";
+import { HOLD_MS, apiNoteWords, modelFor, routeOf, wakeState, whoGets } from "./route.mjs";
 
 const ID = "lythara-encounter-builder", WORKBENCH = "xdy-pf2e-workbench", TOOLBELT = "pf2e-toolbelt", VISIONER = "pf2e-visioner", HUD = "pf2e-hud", GROUND_RADIUS = 10, STEP_MS = 20000, SETTLE_MS = 400, SCENE_MS = 30000, RESUMABLE = ["ready", "running", "held", "stopped", "saves"];
 export const runnerName = () => game.settings.get(ID, "runner");
@@ -418,8 +420,12 @@ async function onTurnChange(combat) {
     if (combat.combatant?.id !== combatant.id || combat.round !== round) return;
     const id = foundry.utils.randomID(8), base = { state: "requested", combatantId: combatant.id, tokenId: tok.id, round, turn: combat.turn, at: Date.now(), since: clock(), settled, log: {}, ...(afterDelay ? { afterDelay: true } : {}) };
     if (!opened || !tok.object) return await save(combat, id, { ...base, labels: {}, note: cantOpen() });   /* no map, no packet: words instead of silent wrong answers */
-    let built; try { built = await buildPacket(combat, tok); } catch (e) { console.error(`${ID} | packet`, e); return await save(combat, id, { ...base, labels: {}, note: `I couldn't work out what ${tok.name} perceives (${e.message}). Play this turn yourself.` }); }
-    await saveTurns(combat, { [`requests.${id}`]: { ...base, labels: built.labels, packet: built.packet, ...(built.mindHeld.length ? { mindHeld: built.mindHeld } : {}), seen: situationNow(combat, tok, built.labels, built.others), nbAt: Date.now(), note: null, tries: 0, pos: 0 }, ...eventChange("turn", id, 0), ...packetExtras(combat, tok, built) });
+    /* with the fight-start look's packets, one at a time (0.33.0): two packets built at once could give one label to two creatures */
+    const failed = await withPackets(async () => {
+      let built; try { built = await buildPacket(combat, tok); } catch (e) { console.error(`${ID} | packet`, e); await save(combat, id, { ...base, labels: {}, note: `I couldn't work out what ${tok.name} perceives (${e.message}). Play this turn yourself.` }); return true; }
+      await saveTurns(combat, { [`requests.${id}`]: { ...base, labels: built.labels, packet: built.packet, ...(built.mindHeld.length ? { mindHeld: built.mindHeld } : {}), seen: situationNow(combat, tok, built.labels, built.others), nbAt: Date.now(), note: null, tries: 0, pos: 0 }, ...eventChange("turn", id, 0), ...packetExtras(combat, tok, built) });
+      return false; });
+    if (failed) return;
     if (!tok.getFlag(ID, "run")) await playMyself(combat, id);   /* unticked while it was being asked for (0.29.1 review 1): hers, as an untick on the turn is */
   } finally { starting.delete(key); }
 }
@@ -476,7 +482,7 @@ export function onCombatUpdate(combat, change) {
   if ("turn" in change || "round" in change) leaveWaiting(combat).catch(e => console.warn(`${ID} | waiting`, e)).then(() => dropInstantAreas(combat, currentRequest(combat) ? { id: currentRequest(combat).id, pos: 0 } : null)).catch(e => console.warn(`${ID} | areas`, e));
   if ("turn" in change || "round" in change) { const prev = { ...(combat.previous ?? {}) };   /* the turn that just ended, read before anything awaits */
     fallIfAloft(combat, prev).catch(e => console.warn(`${ID} | fall`, e)).then(() => sinkNote(combat, prev)).catch(e => console.warn(`${ID} | sink`, e)).then(() => settleClimbers(combat)).catch(e => console.warn(`${ID} | climbing`, e)).then(() => settleBurrowers(combat)).catch(e => console.warn(`${ID} | burrowing`, e)).then(() => noteWhatTheySense(combat)).catch(e => console.warn(`${ID} | memory`, e)).then(() => checkSides(combat)).catch(e => console.warn(`${ID} | sides`, e)).then(() => settleBands(combat)).catch(e => console.warn(`${ID} | bands`, e)).then(() => onTurnChange(combat)).catch(e => console.error(`${ID} | turn`, e));
-    lookLater(combat); }
+    lookLater(combat); lookCheck(combat).catch(e => console.warn(`${ID} | look`, e)); }   /* the fight-start look (0.33.0): started at the fight's start, dropped once round 1 is over */
   act(combat);
 }
 /* ---------- falling ---------- */
@@ -905,6 +911,7 @@ function deepWater(scene, model) {
 /** Hand a plan in. Any GM may call this; the runner checks it. meta says who made it ({ by: "chat" | "api" | "gm", model, generation, usage }); a plan
     from an older chat's generation is ignored. The plan is stored as it came and cleaned by the runner, so tries are counted in one place. */
 export async function submitPlan(combat, requestId, plan, meta = {}) {
+  if (requestId === LOOK_ID) return submitLook(combat, plan, meta);   /* the fight-start look (0.33.0) */
   const r = request(combat, requestId); if (!r) throw new Error("No such request.");
   /* a choice in the middle of an action (0.27.0): { choice, reason } where a plan would go; it is no plan and uses up no try */
   if ((r.choice && !r.choice.answer) || isChoice(plan)) {
@@ -1008,6 +1015,7 @@ let stallTimer = null;
 export function watchStalls() { clearInterval(stallTimer); stallTimer = setInterval(() => { if (isRunner()) checkStalls().catch(e => console.warn(`${ID} | stalls`, e)); }, 10000); }
 async function checkStalls() {
   for (const combat of fights()) {
+    if (lookOf(combat)?.state === "asked" && combat.round >= 2) await saveTurns(combat, { "look.state": "missed", "look.endedAt": Date.now() }).catch(e => console.warn(`${ID} | look`, e));   /* a look still waiting when round 1 is over is dropped (R4-1), even with no turn change seen here */
     const r = currentRequest(combat);
     if (!r) { endLeftOver(combat); continue; }
     if (!Number.isFinite(r.since)) { await saveTurns(combat, { [`requests.${r.id}.since`]: clock() }); continue; }   /* a request from before 0.9.0 */
@@ -1024,7 +1032,8 @@ function firstEvent(cursor, thinker = "chat") {
   const mine = e => { const c = game.combats.get(e.combatId), r = reqOf(e); if (!c || !live(e, r)) return false;
     if (["turn", "retry", "replan"].includes(e.kind) && !r.reaction && currentRequest(c)?.id !== e.requestId) return false;
     return whoGets({ route: fightRoute(c), kind: e.kind, api, chat, handedOff: !!r.handedOff, held: r.thinker ?? null, now }) === thinker; };
-  const ev = pickEvent(fights().flatMap(eventsOf), cursor, mine); if (!ev) return null;
+  /* the fight-start look (0.33.0) comes after every waiting turn, and to each thinker once (`lookEvent`), not by the cursor */
+  const ev = pickEvent(fights().flatMap(eventsOf).filter(e => e.kind !== "look"), cursor, mine); if (!ev) return lookEvent(thinker, api, chat, now);
   const c = game.combats.get(ev.combatId), r = reqOf(ev), tok = c.scene?.tokens.get(r.tokenId), m = tok ? modelOf(tok, c) : null, model = m ? { model: m.model, modelWhy: m.why || null } : {};
   if (ev.kind === "choice") return { ...choiceOut(ev, r, packetFor(c, ev.requestId)), ...model };
   return { ...eventOut(ev, r), ...model };
@@ -1093,8 +1102,10 @@ export async function waitForEvent(cursor = 0, maxSeconds = 90, { generation = n
   if (stale(brainNow(who), generation)) return { cursor, superseded: true, reason: SUPERSEDED };
   /* the turn is this thinker's now (0.31.0 review 1): stamped on its request, so the other thinker isn't given it too, and the light renewed,
      since thinking can outlast it */
-  if (got && got.kind !== "stall") { const c = game.combats.get(got.combatId); if (c) await saveTurns(c, { [`requests.${got.requestId}.thinker`]: whole({ who, at: clock() }) }).catch(e => console.warn(`${ID} | thinker`, e)); await renewBrain(who); }
-  return got ? { cursor: got.seq, event: got } : { cursor, idle: true };
+  if (got && got.kind !== "stall") { const c = game.combats.get(got.combatId), look = got.kind === "look";
+    if (c) await saveTurns(c, look ? { "look.thinker": whole({ who, at: clock(), generation }) } : { [`requests.${got.requestId}.thinker`]: whole({ who, at: clock() }) }).catch(e => console.warn(`${ID} | thinker`, e)); await renewBrain(who); }
+  /* a look keeps the cursor where it was: its number is older than turns already handed out, which must not come again */
+  return got ? { cursor: got.kind === "look" ? cursor : got.seq, event: got } : { cursor, idle: true };
 }
 /** Foundry's server clock: the same in every browser, so the light means the same on Rhea's computer as on the server PC. */
 export const clock = () => game.time.serverTime;
@@ -1141,6 +1152,7 @@ export async function fixRoute(combat) { if (!game.user.isGM || !combat || comba
 /** Legality only: what the runner would say, with nothing written. Needs the fight open on this page. */
 export async function checkOnly(combat, requestId, plan) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  if (requestId === LOOK_ID) { const c = cleanLook(plan, Object.keys(lookOf(combat)?.monsters ?? {})); return c.ok ? { ok: true, suggestions: c.items.length } : c; }
   const r = request(combat, requestId); if (!r) throw new Error("No such request.");
   if (isChoice(plan)) { const c = cleanChoice(plan); return c.ok ? { ok: true, choice: c.choice } : c; }
   if (!onFightScene(combat)) throw new Error("This page doesn't have the fight's map open, so it can't tell.");
@@ -1151,6 +1163,10 @@ export async function checkOnly(combat, requestId, plan) {
 /** The thinker can't make a plan: the card says so and the GM plays. */
 export async function reportFailure(combat, requestId, reason, meta = {}) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  if (requestId === LOOK_ID) { const l = lookOf(combat); if (l?.state !== "asked") return { state: l?.state ?? "none", reason: "No fight-start look is waiting." };
+    if (stale(brainNow(routeOfMeta(meta)), cleanMeta(meta).generation)) return { ignored: true, reason: SUPERSEDED };
+    const off = offLook(combat, l, meta); if (off) return { ignored: true, reason: off };
+    await saveTurns(combat, { "look.state": "failed", "look.reason": `Angel couldn't make it: ${text(reason, 160) || "no reason given"}` }); return { state: "failed", gaveUp: true }; }
   const r = request(combat, requestId); if (!r) throw new Error("No such request.");
   if (r.choice && !r.choice.answer) { if (stale(brainNow(routeOfMeta(meta)), cleanMeta(meta).generation)) return { ignored: true, reason: SUPERSEDED }; await save(combat, requestId, { "choice.gaveUp": true }); return { state: r.state, gaveUp: true }; }   /* the GM chooses on her card */
   if (r.state !== "requested") throw new Error(`That turn is ${r.state}.`);
@@ -1162,9 +1178,12 @@ export async function reportFailure(combat, requestId, reason, meta = {}) {
     so a chat whose cursor is already past the turn's first event still gets it. Only the API route hands a turn on. */
 export async function handOff(combat, requestId, reason, meta = {}) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
-  const r = request(combat, requestId); if (!r) throw new Error("No such request.");
+  const r = request(combat, requestId); if (!r && requestId !== LOOK_ID) throw new Error("No such request.");
   const who = cleanMeta(meta); if (who.by !== "api") throw new Error("Only the API route hands a turn on.");
   if (stale(brainNow("api"), who.generation)) return { ignored: true, reason: SUPERSEDED };
+  /* the look (0.33.0): to a listening chat, as a turn is; with none it waits until round 1 ends (R4-1) */
+  if (requestId === LOOK_ID) { const l = lookOf(combat); if (l?.state !== "asked") return { state: l?.state ?? "none", reason: "No fight-start look is waiting." };
+    await saveTurns(combat, { "look.handedOff": { reason: text(reason, 200) || "no reason given", at: clock() }, "look.thinker": null }); return { state: "asked", handedOff: true }; }
   const open = !!r.choice && !r.choice.answer && !r.choice.gaveUp;
   if (!open && r.state !== "requested") return { state: r.state, reason: `That turn is ${r.state}.` };
   const ev = open ? eventChange("choice", requestId, r.tries ?? 0, { choiceSeq: r.choice.seq }) : eventChange((r.tries ?? 0) > 0 ? "retry" : r.why ? "replan" : "turn", requestId, r.tries ?? 0);
@@ -2422,12 +2441,15 @@ async function replan(combat, r, i, changes, tok, { counted = true } = {}) {
     return l?.do === "strike" && l.hit === true && abilityList(tok.actor).some(a => a.followUp && a.kind === "free" && l.effects.includes(a.effect)); };
   if (actionsOf(tok.actor, combat) - spent <= 0 && !freeNext()) { await saveTurns(combat, { [`${at}.state`]: "done", [`${at}.since`]: clock(), [`${at}.pos`]: i, [`${at}.why`]: changes, [`${at}.note`]: [r.note, `${why} No actions left, so the turn ends here.`].filter(Boolean).join(" ") }); return endAfter(combat, r.id); }   /* keep a note from its steps (out of hiding, 0 HP) */
   if (replans > MAX_REPLANS) return saveTurns(combat, { [`${at}.state`]: "done", [`${at}.pos`]: i, [`${at}.why`]: changes, [`${at}.note`]: [r.note, `${why} That would be re-plan ${replans} this turn, so play the rest yourself.`].filter(Boolean).join(" ") });
+  /* one packet at a time with the fight-start look's (0.33.0 review 2): two built at once could give one label to two creatures */
+  return withPackets(async () => {
   let built; try { built = await buildPacket(combat, tok, { spent, attacks, done, note: `Asked again mid-turn: ${why}` }); }
   catch (e) { console.error(`${ID} | packet`, e); return save(combat, r.id, { state: "stopped", note: `Something changed (${why}) and I couldn't work out what ${tok.name} perceives now (${e.message}). Play the rest yourself.` }); }
   const id = foundry.utils.randomID(8);
   await saveTurns(combat, { [`${at}.state`]: "done", [`${at}.pos`]: i, [`${at}.replanned`]: id,
     [`requests.${id}`]: { state: "requested", combatantId: r.combatantId, tokenId: r.tokenId, round: r.round, turn: r.turn, at: Date.now(), since: clock(), log: {}, labels: built.labels, packet: built.packet, ...(built.mindHeld.length ? { mindHeld: built.mindHeld } : {}), seen: situationNow(combat, tok, built.labels, built.others), nbAt: Date.now(), note: null, tries: 0, pos: 0, spent, attacks, done, replans, why: changes, parent: r.id },
     ...eventChange("replan", id, 0), ...packetExtras(combat, tok, built) });
+  });
 }
 /* ---------- fleeing off the map (Rhea, 2026-11-08) ---------- */
 const SURVEY = "lythara-survey-sheet", EXTEND_SQUARES = 10, EXTEND_MAX = 120, EXTEND_MS = 180000, EXTEND_LATE = "The map took too long to extend.";
@@ -4289,4 +4311,159 @@ export function sideList(combat) {
   const scene = combat?.scene, books = turns(combat).sides ?? {}, bands = new Map(bandsOf(scene).map(b => [b.key, b]));
   return Object.entries(books).map(([id, e]) => { const tok = scene?.tokens.get(id), tag = sideTag(e); if (!tok || !tag) return null;
     return { id, name: tok.name, tag, party: tok.actor?.alliance === "party", owned: !!e.owned, changed: e.changed ?? null, lines: e.changed === combat.round ? sideCardWords(e, { bandName: bands.get(e.home)?.name ?? "", forms: P(tok, combat) }) : null }; }).filter(Boolean);
+}
+
+/* ---------- the fight-start look (monster minds release 4, 0.33.0; docs/features/look.md) ----------
+   Rhea, 2026-11-10 (decisions 4 and 5): when the fight starts, Angel looks at the situation from what the monsters perceive and suggests updates to
+   their minds; everything waits for her OK (Accept / Keep, Accept all / Keep all), the stored profiles in force until she answers, and what she
+   accepts lasts this fight only (the fight layer, `minds` on the Combat). 2026-11-12 (R4-1): with nothing listening it waits, but only until
+   round 1 ends. One a fight, on `turns.look`, with its own event kind ("look") and request id (`LOOK_ID`). */
+const lookStarting = new Set();
+/* packets give out labels: two built at once (the first turn and the look) could give one label to two creatures, so a look's packets and a turn's
+   wait for each other (review 2 of 0.25.0 is the same trap for notebooks) */
+let packetChain = Promise.resolve();
+const withPackets = fn => { const p = packetChain.then(fn, fn); packetChain = p.catch(() => {}); return p; };
+const lookOf = combat => turns(combat).look ?? null;
+/** The runner, at every turn or round change: start the look at the fight's start; drop one still waiting once round 1 is over (R4-1). */
+async function lookCheck(combat) {
+  if (!isRunner() || !combat?.started) return;
+  const l = lookOf(combat);
+  if (!l && combat.round <= 1) return startLook(combat);
+  if (l?.state === "asked" && combat.round >= 2) await saveTurns(combat, { "look.state": "missed", "look.endedAt": Date.now() });
+}
+/** Who the look is about: every monster Angel plays in this fight (ticked, the module's to run, on the monsters' side, alive). */
+const lookTokens = combat => [...new Map(combat.combatants.map(c => c.token).filter(t => t?.actor && t.getFlag(ID, "run") && runnable(t) && !onParty(t.actor) && !t.actor.isDead).map(t => [t.id, t])).values()];
+async function startLook(combat) {
+  if (lookStarting.has(combat.id) || !lookTokens(combat).length) return;   /* nobody of Angel's in this fight: no look and no card */
+  lookStarting.add(combat.id);
+  try {
+    /* the first turn's request goes first: the fight doesn't wait on the look (0.33.0 review 3). Up to 15 s for it to be asked for. */
+    const t0 = Date.now(), firstAsked = () => { const cur = combat.combatant, tok = cur?.token; return !tok?.getFlag(ID, "run") || !runnable(tok) || Object.values(turns(combat).requests ?? {}).some(r => !r.reaction && r.combatantId === cur.id && r.round === combat.round); };
+    await sleep(1500); while (Date.now() - t0 < 15000 && game.combats.has(combat.id) && (!firstAsked() || [...starting].some(k => k.startsWith(`${combat.id}.`)))) await sleep(500);
+    if (!game.combats.has(combat.id) || lookOf(combat) || combat.round > 1) return;
+    const toks = lookTokens(combat); if (!toks.length) return;
+    if (fightRoute(combat) === "off") return void await saveTurns(combat, { look: whole({ state: "off", at: Date.now() }) });
+    if (!await ensureScene(combat)) return void await saveTurns(combat, { look: whole({ state: "failed", at: Date.now(), reason: `${game.user.name} couldn't open the fight map` }) });
+    const monsters = {}, packets = {};
+    for (const tok of toks) {
+      if (!tok.object) continue;
+      await withPackets(async () => {
+        const built = await buildPacket(combat, tok);
+        await saveTurns(combat, packetExtras(combat, tok, built));   /* its labels and what it perceives now, as a turn's packet keeps them */
+        const label = built.packet?.you?.label; if (!label) return;
+        const k = kindFacts(tok.actor); monsters[label] = { tokenId: tok.id, name: tok.name, kind: k.key, kindName: k.kindName }; packets[label] = lookPacket(built.packet);
+      });
+    }
+    if (!Object.keys(monsters).length || !game.combats.has(combat.id) || lookOf(combat)) return;
+    const ev = eventChange("look", LOOK_ID, 0), seq = Object.values(ev)[0].seq;
+    await saveTurns(combat, { look: whole({ state: "asked", seq, at: Date.now(), since: clock(), monsters, packets, tries: 0 }), ...ev });
+  } catch (e) { console.error(`${ID} | look`, e); await saveTurns(combat, { look: whole({ state: "failed", at: Date.now(), reason: text(e.message, 120) }) }).catch(() => {}); }
+  finally { lookStarting.delete(combat.id); }
+}
+/** The model a look goes with: Opus when any of its monsters is thought for by Opus (`modelOf`), else Sonnet. */
+function lookModel(combat, l) {
+  const ms = Object.values(l.monsters ?? {}).map(m => combat.scene?.tokens.get(m.tokenId)).filter(Boolean).map(t => modelOf(t, combat));
+  const opus = ms.find(m => m.model === "opus"); return opus ? { model: "opus", modelWhy: opus.why || null } : { model: "sonnet", modelWhy: null };
+}
+/** The look waiting for this thinker, if any (the first event after every live turn event: R4-1 and design review 6, "delivered after any
+    waiting turn and again at the first hello"): not by the cursor (a turn handed out first would carry the cursor past it) but once to each
+    thinker's generation. */
+function lookEvent(thinker, api, chat, now) {
+  for (const c of fights()) {
+    const l = lookOf(c); if (!lookWaiting(l, c.round)) continue;
+    if (l.thinker?.who === thinker && l.thinker.generation === (brainNow(thinker).generation ?? 0) && now - (l.thinker.at ?? 0) < HOLD_MS) continue;   /* already given to this thinker (again after the hold time, if its answer never came: review 6) */
+    if (whoGets({ route: fightRoute(c), kind: "look", api, chat, handedOff: !!l.handedOff, held: l.thinker ?? null, now }) !== thinker) continue;
+    return { ...lookOut(l, { combatId: c.id, round: c.round }), ...lookModel(c, l) };
+  }
+  return null;
+}
+/* why a thinker's look no longer counts, or null (as `offRoute` for a turn) */
+function offLook(combat, l, meta) {
+  const m = cleanMeta(meta); if (m.generation == null || m.by === "gm") return null;
+  const route = fightRoute(combat);
+  if (route === "off") return "Angel is off for this fight, so this was ignored.";
+  if (m.by === "api" && route !== "api") return "This fight isn't on the API route any more, so this was ignored.";
+  if (m.by === "api" && l.handedOff) return "The API handed the look on to the chat, so this was ignored.";
+  const mine = m.by === "api" ? "api" : "chat"; if (l.thinker?.who && l.thinker.who !== mine) return `The look went to ${l.thinker.who === "api" ? "the API" : "the chat"}, so this was ignored.`;
+  return null;
+}
+/** A look handed in (by `submitPlan` with `LOOK_ID`): checked, its suggestions kept with the line each changes as it stands now, for her card. */
+async function submitLook(combat, raw, meta = {}) {
+  const l = lookOf(combat); if (!l) return { state: "none", reason: "This fight has no fight-start look." };
+  if (l.state !== "asked") return { state: l.state, ignored: true, reason: l.state === "missed" ? "Round 1 has ended: the look didn't happen, so this was ignored." : "The look has already been answered." };
+  if (combat.round > 1) { await saveTurns(combat, { "look.state": "missed", "look.endedAt": Date.now() }); return { state: "missed", ignored: true, reason: "Round 1 has ended: the look didn't happen, so this was ignored." }; }
+  if (stale(brainNow(routeOfMeta(meta)), cleanMeta(meta).generation)) return { state: l.state, ignored: true, reason: SUPERSEDED };
+  const off = offLook(combat, l, meta); if (off) return { state: l.state, ignored: true, reason: off };
+  if (JSON.stringify(raw ?? null).length > PLAN_BYTES) return { state: l.state, reason: "That look is far too long." };
+  const c = cleanLook(raw, Object.keys(l.monsters ?? {}));
+  if (c.ok && c.seq != null && c.seq !== l.seq) return { state: l.state, ignored: true, reason: "That look answers another fight's look." };
+  /* refused: once more, as a new event (a fresh number: the API worker answers each number once) with the reason, to the same thinker; a second refusal fails it.
+     The answer reads "requested" with the tries left, as a turn's refusal does, so the worker counts it as landed (0.33.0 review 1) */
+  if (!c.ok) { const tries = (l.tries ?? 0) + 1, last = tries >= LOOK_TRIES;
+    const again = last ? {} : (() => { const ev = eventChange("look", LOOK_ID, tries); return { ...ev, "look.seq": Object.values(ev)[0].seq, "look.thinker": null, "look.refused": text(c.reason, 300) }; })();
+    await saveTurns(combat, { "look.tries": tries, ...again, ...(last ? { "look.state": "failed", "look.reason": `Angel's look was refused twice (${c.reason})` } : {}) });
+    return last ? { state: "failed", reason: c.reason } : { state: "requested", reason: c.reason, triesLeft: LOOK_TRIES - tries }; }
+  const scene = combat.scene, items = {};
+  c.items.forEach((x, i) => {
+    const m = l.monsters[x.label], tok = scene?.tokens.get(m?.tokenId), same = Object.values(l.monsters).filter(o => o.kind === m.kind);
+    const now = tok ? mindOf(scene, tok, combat).assembled.lines[x.line] : null;
+    items[i] = { ...x, tokenId: m.tokenId, name: m.name, kind: m.kind, kindName: m.kindName, count: x.to === "kind" ? same.length : 1, now: now ? lineWords(x.line, now) : "", nowBy: now?.by ?? null };
+  });
+  await saveTurns(combat, { "look.state": "ready", "look.items": whole(items), "look.fits": c.fits, "look.answeredAt": Date.now(), "look.by": whole({ ...cleanMeta(meta), at: Date.now() }) });
+  return { state: "looked", suggestions: c.items.length };
+}
+/** Her answer on the look's card: one suggestion (its number) or "all" of those still open, "accept" or "keep". An accepted line goes on this
+    fight's layer: for the kind (every monster of it in this fight) or for the one monster, marked Angel's. Any GM. */
+export async function answerLook(combat, which, answer) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  if (answer !== "accept" && answer !== "keep") throw new Error(`An answer is accept or keep, not ${answer}.`);
+  const l = lookOf(combat); if (l?.state !== "ready") throw new Error("No fight-start look is waiting for an answer.");
+  const ids = which === "all" ? openItems(l) : openItems(l).filter(i => i === String(which)); if (!ids.length) return 0;
+  const change = {}, at = Date.now();
+  if (answer === "accept") {
+    const kinds = [...(combat.getFlag(ID, "minds")?.kinds ?? [])].map(x => ({ ...x, lines: { ...(x.lines ?? {}) } }));
+    let kindsChanged = false;
+    for (const i of ids) { const x = l.items[i], line = { ...(x.pick ? { pick: x.pick } : {}), text: x.text ?? "", by: "angel", at };
+      if (x.to === "one") change[`flags.${ID}.minds.own.${x.tokenId}.${x.line}`] = whole(line);
+      else { let k = kinds.find(e => e.kind === x.kind); if (!k) { k = { kind: x.kind, lines: {} }; kinds.push(k); } k.lines[x.line] = line; kindsChanged = true; } }
+    if (kindsChanged) change[`flags.${ID}.minds.kinds`] = kinds;   /* a list: replaced whole, so read and written in one step */
+  }
+  for (const i of ids) { change[`flags.${ID}.turns.look.items.${i}.answer`] = answer; change[`flags.${ID}.turns.look.items.${i}.by`] = game.user.name; }
+  await combat.update(change);
+  return ids.length;
+}
+/** Dismiss on the look's card (any state but asked). */
+export async function dismissLook(combat) { if (!game.user.isGM) throw new Error("Only a GM can do this."); if (lookOf(combat)) await saveTurns(combat, { "look.dismissed": true }); }
+/** For the card: the look as it stands, or null. */
+export const lookNow = combat => lookOf(combat);
+
+/* ---------- an escaped monster's lines at End Encounter (R4-2, R4-4) ---------- */
+/** What each monster that got away from this fight (fled off the map; not the dead, down or the prisoners) saw of its enemies, offered for its own
+    "Knows about its enemies": [{ tokenId, name, round, lines: [{ id, text }], hers }]. `hers`: her own words are on that line, so Angel adds
+    nothing to it. Lines it already knows aren't offered again. GM pages. */
+export function escapeOffers(combat) {
+  if (!game.user.isGM || !combat?.scene) return [];
+  const t = turns(combat), labels = t.labels ?? {}, scene = combat.scene, byLabel = Object.fromEntries(Object.entries(labels).map(([id, l]) => [l, id]));
+  const nameOf = l => { const tok = scene.tokens.get(byLabel[l]); return tok && (onParty(tok.actor) || tok.actor?.hasPlayerOwner) ? tok.name : null; };   /* only the party's side: the line is about its enemies */
+  return escapedList(combat).map(e => { const tok = scene.tokens.get(e.id); if (!tok) return null;
+    /* the line as its own profile will have it: the layers without this fight's (review 5: a fight line made her own words look like Angel's) */
+    const nb = notebookOf(combat, e.id), knows = mindOf(scene, tok).assembled.lines.knows ?? null;
+    const lines = escapeLines(books(combat)[e.id], { rung: nb?.rung ?? 3, nameOf }).filter(x => !String(knows?.text ?? "").includes(x.text));
+    return lines.length ? { tokenId: e.id, name: e.name, round: e.round, lines, hers: knows?.by === "gm" && !!String(knows.text ?? "").trim(), forms: P(tok, combat) } : null; }).filter(Boolean);
+}
+/** Her answers to the offer, written when the fight ends (saved or discarded alike: R4-4). accepted: { tokenId: [texts] }. Each monster with a line
+    accepted is given its own profile (a copy of what it follows now, as Give one monster its own profile does) if it has none, and the lines go
+    on its "Knows about its enemies", marked Angel's: never its kind, this encounter or the library. Out: names written. */
+export async function acceptEscapeLines(combat, accepted = {}) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  const scene = combat.scene, done = [];
+  for (const [tokenId, texts] of Object.entries(accepted)) {
+    const tok = scene?.tokens.get(tokenId); if (!tok || !texts?.length) continue;
+    try {
+      if (!mindLayers(scene, tok).some(l => l.from === "own")) await giveOwn(scene, tok);
+      const own = mindLayers(scene, tok).find(l => l.from === "own")?.lines?.knows ?? null, words = knowsAfter(own, texts); if (!words) continue;   /* her own words: never replaced */
+      await setLines(scene, { token: tok.id }, { knows: { text: words, by: "angel" } }, { by: "angel" }); done.push(tok.name);
+    } catch (e) { console.error(`${ID} | escape lines`, e); ui.notifications?.warn(`I couldn't add what ${tok.name} saw: ${e.message}`); }
+  }
+  return done;
 }

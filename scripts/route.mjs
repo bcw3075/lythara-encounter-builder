@@ -11,8 +11,9 @@ export const MODELS = ["sonnet", "opus"];
 const MODEL_WORDS = { sonnet: "Sonnet", opus: "Opus" };
 /** How many levels above the party a spellcaster must be for Opus (q-28-api). */
 export const OPUS_LEVELS_ABOVE = 2;
-/** The event kinds the API answers: a stall asks the thinker to look into something, which only a chat with tools can do. */
-export const API_KINDS = ["turn", "retry", "replan", "choice"];
+/** The event kinds the API answers: a stall asks the thinker to look into something, which only a chat with tools can do. The fight-start look
+    (0.33.0) needs bridge 0.4.1's worker, which answers it. */
+export const API_KINDS = ["turn", "retry", "replan", "choice", "look"];
 
 /** A fight's route: its own when it has one, else the setting for new fights, else the API. */
 export const routeOf = (own, fallback = "api") => ROUTES.includes(own) ? own : ROUTES.includes(fallback) ? fallback : "api";

@@ -14,6 +14,7 @@ import { bandLog, bandLogWords, giveOrder, onRenderOrder, orderCard, orderPrevie
 import { acceptYield, backInFight, gmSpeak, onRenderSay, prisonerList, refuseYield, speakPreview, yieldedList } from "./fight.mjs";
 import { answerCommand, checkSides, commandList, dropBeliefs, onSideChange, pointCard, sideList } from "./fight.mjs";
 import { apiAlive, apiSpend, apiWanted, fightRoute, fixRoute, handOff, modelOf, setApiNote, setModelPick, setRoute, wakeAngel } from "./fight.mjs";
+import { acceptEscapeLines, answerLook, dismissLook, escapeOffers, lookNow } from "./fight.mjs";
 import { chooseFor, onReactionCard, partyReactors, setReactionUsed, doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCombatGone, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, onMemoryCard, onMemoryUpdate, onMemoryHp, notebookOf, previewRemember, rememberAdd, rememberCross, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
 
 const CONTROL = "encounters", apps = new Map(), mindsApps = new Map(); let turnsApp = null, historyApp = null, historyTimer = null;
@@ -153,7 +154,12 @@ Hooks.once("ready", () => {
          `handOff(combat, requestId, reason, meta)` when the API can't plan a turn (it falls back to a chat, then the GM), `route.alive(generation)`
          while an answer takes long, `route.spend(combat, use)` for every answer the API gave. `route.wake(combat?, requestId?)` is the card's Wake
          Angel. The worker waits with `waitForEvent(cursor, s, { generation, route: "api" })` and hands in with `by: "api"`. */
-      route: { of: fightRoute, set: setRoute, model: modelOf, pick: setModelPick, wanted: apiWanted, note: setApiNote, wake: wakeAngel, alive: apiAlive, spend: apiSpend }, handOff },
+      route: { of: fightRoute, set: setRoute, model: modelOf, pick: setModelPick, wanted: apiWanted, note: setApiNote, wake: wakeAngel, alive: apiAlive, spend: apiSpend }, handOff,
+      /* the fight-start look (0.33.0): `look.now(combat)` the look as it stands; `look.answer(combat, i | "all", "accept" | "keep")` and
+         `look.dismiss(combat)` are the GM's buttons on its card (never Angel's door: Angel answers the "look" event through submitPlan with
+         requestId "look"); `look.escapes(combat)` what the monsters that got away offer at End Encounter, `look.acceptEscapes(combat, { tokenId:
+         [lines] })` her Accepts there */
+      look: { now: lookNow, answer: answerLook, dismiss: dismissLook, escapes: escapeOffers, acceptEscapes: acceptEscapeLines } },
     /* monster minds (0.24.0), `api.minds`: how a chat reads and writes profiles (api.minds.set, api.minds.open, api.minds.library.put and the rest). `by: "angel"` never replaces a line whose words are the GM's unless `force`.
        This is the chat's door, so a write with no `by` is Angel's (the windows say "gm" themselves): only `by: "gm"` for words she dictated, and
        `giveOwn`, `dropOwn`, `library.remove` and `library.import` only when she asked for them. */

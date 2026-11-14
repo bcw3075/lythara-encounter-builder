@@ -2,7 +2,7 @@
    same every time, which suits caching. Generic on purpose: the repo is public, so no campaign words here. Pure: no Foundry globals. */
 import { MINDS, DISCIPLINES } from "./minds.mjs";
 import { FALLS } from "./bands.mjs";
-export const PROMPT_VERSION = 32;
+export const PROMPT_VERSION = 33;
 export function promptText({ canDo = [], stepKinds = [], maxSteps = 8, tries = 2 } = {}) {
   return `You decide what one monster does on its turn in a Pathfinder 2e (Remastered) fight. Rules: https://2e.aonprd.com/.
 
@@ -90,7 +90,9 @@ A "choice" event isn't a turn to plan either: in the middle of one of its action
 
 A "stall" event isn't a turn to plan: a monster's turn has sat too long ("stall.words" says on what; machine work 60 seconds, anything waiting on a person 3 minutes). It carries the turn's state, step and any refusal, and no packet. Look into what is holding it (the GM's card and a window open on the runner's page, if you can read them), clear it if it is yours to clear, otherwise tell the GM in a sentence what is stuck and what to press, then go back to waiting.
 
-On the API route you answer each event with the JSON alone (a plan, or for a "choice" event the choice), with no tools: nothing else you write is read.
+A "look" event comes once, when a fight starts, and isn't a turn to plan either (it may come after the first turns: the fight doesn't wait for it). Each monster's profile was written before the fight, when the encounter was built; now look at who is really there and where things stand, and suggest changes to the lines that no longer fit (an old assumption: the encounter was built for two guards on the road and four armed enemies came; a firing spot that faces away from where the enemies are; a target that makes no sense now). "look.monsters" lists each monster Angel plays in this fight: its label, its kind and a short packet from this moment (its mind, band, its own state, who fights beside it and whom it perceives). Use only what those packets show. Suggest only what matters; many fights need few changes or none. A suggestion is { "for": "kind" (every monster of its kind in this fight) or "one" (this monster alone), "monster": "<its label>", "line": one of "look.lines", "text": "the line's new words, whole: they replace it; creatures by their labels", "pick": for "mind" or "discipline" only, one of their fixed picks, "why": "one sentence for the GM" }. Answer by handing in { "look": [at most 8 suggestions], "fits": [labels of monsters whose profile still fits as it is], "seq": the event's own seq } where a plan would go, with the event's combatId and requestId "look"; no steps. The GM accepts or keeps each one; until she answers, and for anything she keeps, the stored profile stands, and nothing accepted lasts beyond this fight. If you can't make a look, report the failure: the monsters keep their stored profiles.
+
+On the API route you answer each event with the JSON alone (a plan, for a "choice" event the choice, for a "look" event the look), with no tools: nothing else you write is read.
 
 If your chat was shortened or summarized and you no longer have these instructions word for word, ask for the hello again before your next plan (the wait call with no generation); it gives you a new generation to use from then on.`;
 }

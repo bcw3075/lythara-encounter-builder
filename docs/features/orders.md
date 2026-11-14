@@ -93,7 +93,7 @@ Settled by Angel, told to Rhea with the samples or in the release note, hers to 
 - A reload of the runner's page between an order's one update and its chat line leaves the order given with no line in chat (the History has it).
 - The preview of her own words is redrawn only when focus leaves the box; Give the order checks them again whatever the preview shows.
 - Monster Minds doesn't show who took over in a fight; the cards and the History do.
-- A fight-layer line for one monster (a Discipline dropped to Loose, "never gives up") hides this fight's lines for its kind in `mindLayers`; nothing writes a kind's lines on a fight yet (the fight-start look will).
+- A fight-layer line for one monster (a Discipline dropped to Loose, "never gives up") lies over this fight's lines for its kind line by line in `mindLayers` (0.33.0: before, it hid them; the fight-start look writes a kind's lines, `docs/features/look.md`).
 - A member whose plan is waiting isn't asked again when an order arrives. It can't happen today (an order is given on the leader's own turn).
 - "Plan stands" and "Breaks and runs" are still told to the thinker in words only; the module changes nothing for them.
 - A leader the GM has hidden isn't acted on when it falls (bands, open items).

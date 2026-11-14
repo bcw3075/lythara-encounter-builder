@@ -120,7 +120,9 @@ export function mindLayers(scene, tok, combat = null) {
   const turned = actor.isOfType?.("npc") && combat?.getFlag(ID, "turns")?.sides?.[tok.id]?.from === "opposition";
   if (actor.alliance === "party" && !turned) return Object.keys(mine).length ? [{ from: "own", lines: mine }] : [];
   const kind = kindFacts(actor), ref = builtRef(scene, tok), brief = ref ? briefOf(scene) : null, row = brief?.creatures[ref.row] ?? null, layers = [];
-  const fight = combat?.getFlag(ID, "minds") ?? null, agreed = cleanLines(fight?.own?.[tok.id] ?? (fight?.kinds ?? []).find(x => x?.kind === kind.key)?.lines);
+  /* this fight's lines (release 4, 0.33.0): its kind's, with this one monster's laid over them line by line (a Discipline the leader's fall dropped
+     to Loose no longer hides a line the fight-start look agreed for its whole kind) */
+  const fight = combat?.getFlag(ID, "minds") ?? null, agreed = cleanLines({ ...((fight?.kinds ?? []).find(x => x?.kind === kind.key)?.lines ?? {}), ...(fight?.own?.[tok.id] ?? {}) });
   if (Object.keys(agreed).length) layers.push({ from: "fight", lines: agreed });
   const own = row ? row.own[String(ref.n)] : Object.keys(mine).length ? mine : null; if (own) layers.push({ from: "own", lines: own });
   const here = row ? rowLines(row) : cleanLines(looseOf(scene).find(x => x.kind === kind.key)?.lines); if (Object.keys(here).length) layers.push({ from: "encounter", lines: here });

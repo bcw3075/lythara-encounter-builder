@@ -7,7 +7,7 @@ import { SPEECH_LOG } from "../speech.mjs";
 import { COMMAND_LOG } from "../command.mjs";
 import { SIDE_LOG } from "../sides.mjs";
 import { apiUseWords, historyHTML, historyOf, journalHTML, namer, notebooksHTML } from "../history.mjs";
-import { bandLogWords, notebookOf, runnerName } from "../fight.mjs";
+import { acceptEscapeLines, bandLogWords, escapeOffers, notebookOf, runnerName } from "../fight.mjs";
 import { bookPrint } from "../memory.mjs";
 import { MINDS } from "../minds.mjs";
 import { pronounOf } from "../library.mjs";
@@ -49,7 +49,10 @@ const hhmm = ms => { const d = new Date(ms); return `${String(d.getHours()).padS
 /** One closed folder, one entry per game night (this browser's date), one page per fight: saving the same fight again replaces its page. GM-only (no ownership). */
 export async function saveHistory(combat) {
   if (!game.user.isGM) throw new Error("Only a GM can save the history.");
-  const reqs = Object.values(combat.getFlag(ID, "turns")?.requests ?? {}), nbs = notebooks(combat); if (!reqs.length && !nbs.length) throw new Error("There's no monster turn or notebook to save yet.");   /* a fight where she played every monster still has its notebooks (0.25.0 design review 8) */
+  const reqs = Object.values(combat.getFlag(ID, "turns")?.requests ?? {}), nbs = notebooks(combat), logged = Object.keys(combat.getFlag(ID, "turns")?.orders?.log ?? {}).length;
+  /* a fight where she played every monster still has its notebooks (0.25.0 design review 8), and its band log: her orders, her box's lines and
+     yields (B-8, found in 0.33.0's close-out: End Encounter asked to save a fight whose only history was her yield, then refused to save it) */
+  if (!reqs.length && !nbs.length && !logged) throw new Error("There's no monster turn or notebook to save yet.");
   const folder = game.folders.find(f => f.type === "JournalEntry" && f.getFlag(ID, "history")) ?? await Folder.implementation.create({ name: "Monster Turns history", type: "JournalEntry", sorting: "a", flags: { [ID]: { history: true } } });
   const date = today(), name = `Monster Turns · ${date}`;
   const entry = game.journal.find(e => e.folder?.id === folder.id && e.getFlag(ID, "historyDate") === date) ?? await JournalEntry.implementation.create({ name, folder: folder.id, flags: { [ID]: { historyDate: date } } });
@@ -81,15 +84,41 @@ function signature(requests, books = null, bandLog = null) { const s = JSON.stri
 /** preDeleteCombat: for a GM ending a fight that has unsaved history, stop the delete, ask, then delete again marked as asked. The runner's page and
     anything already asked are left alone (nobody can click on the runner's page). Returns false only to cancel this one delete, as a pre-hook must; otherwise nothing. */
 export function onPreDeleteCombat(combat, options, userId) {
-  if (userId !== game.user.id || !game.user.isGM || options?.[ID]?.asked || game.user.name === runnerName() || !unsaved(combat)) return;
-  askOnEnd(combat).catch(e => { ui.notifications.error(e.message); console.error(e); });
+  if (userId !== game.user.id || !game.user.isGM || options?.[ID]?.asked || game.user.name === runnerName()) return;
+  /* release 4 (0.33.0, R4-2): a monster that got away offers what it saw, so the question also comes when the history is already saved */
+  const offers = (() => { try { return escapeOffers(combat); } catch (e) { console.warn(`${ID} | escape offers`, e); return []; } })(), history = unsaved(combat);
+  if (!history && !offers.some(o => !o.hers)) return;   /* nothing to save and nothing to answer */
+  askOnEnd(combat, { history, offers }).catch(e => { ui.notifications.error(e.message); console.error(e); });
   return false;
 }
-async function askOnEnd(combat) {
-  const choice = await foundry.applications.api.DialogV2.wait({ window: { title: "Monster Turns history" }, position: { width: 380 },
-    content: `<p>This fight has a Monster Turns history. Save it to the journal before ending the encounter?</p><p class="hint">Saved fights go in the folder "Monster Turns history", one entry per game night.</p>`,
-    buttons: [{ action: "save", label: "Save to journal", icon: "fa-solid fa-book", default: true }, { action: "discard", label: "Discard", icon: "fa-solid fa-trash" }], rejectClose: false });
-  if (choice !== "save" && choice !== "discard") return;   /* closed: the fight goes on */
+const ESC_STYLE = `.leb-endq .leb-eo{border:1px solid #4f78b8;background:#2f446822;border-radius:3px;padding:4px 6px;margin:6px 0}.leb-endq .leb-eo p{margin:2px 0}.leb-endq .leb-eo .leb-el{display:flex;gap:6px;align-items:center;margin:3px 0}.leb-endq .leb-eo .leb-el span{flex:1}.leb-endq .leb-eo .leb-el button{flex:0 0 auto;width:auto;line-height:20px;padding:0 6px}.leb-endq .leb-hint{opacity:.75;font-size:12px}.leb-endq .leb-done{font-weight:bold}`;
+/* one escaped monster's box (R4-4's third sample): its lines with Accept / Keep, and Accept all / Keep all for it */
+function offerHTML(o, i) {
+  const rows = o.lines.map((l, j) => `<div class="leb-el" data-line="${j}"><span>${esc(l.text)}</span>${o.hers ? "" : `<button type="button" data-eo="accept">Accept</button><button type="button" data-eo="keep">Keep</button>`}</div>`).join("");
+  /* written about the monster in its own pronoun (0.30.1's rule): the markers are turned here, the lines and names never read for them */
+  return `<div class="leb-eo" data-offer="${i}"><p><b>${esc(o.name)}</b> got away (fled off the map in round ${Number(o.round) || "?"})</p>`
+    + pro(o.hers ? `<p class="leb-hint">What {they} saw is below, but your own words are on {their} “Knows about its enemies” line, so Angel adds nothing to it.</p>` : `<p class="leb-hint">What {they} saw, offered for {their} own “Knows about its enemies” line. Only this one: never {their} kind or the library. Marked as Angel's, so it never replaces your words.</p>`, o.forms)
+    + rows + (o.hers || o.lines.length < 2 ? "" : `<div class="leb-el"><span class="leb-hint">Accept all / Keep all for this one</span><button type="button" data-eo="acceptall">Accept all</button><button type="button" data-eo="keepall">Keep all</button></div>`) + `</div>`;
+}
+async function askOnEnd(combat, { history = true, offers = [] } = {}) {
+  if (!document.getElementById("leb-endq-style")) { const st = document.createElement("style"); st.id = "leb-endq-style"; st.textContent = ESC_STYLE; document.head.append(st); }   /* DialogV2 strips <style> from content */
+  const answers = new Map();   /* "offer.line" → "accept" | "keep", in this window only, until the fight ends */
+  const top = history ? `<p>This fight has a Monster Turns history. Save it to the journal before ending the encounter?</p><p class="hint">Saved fights go in the folder "Monster Turns history", one entry per game night.</p>` : `<p>The Monster Turns history is saved. Before the encounter ends:</p>`;
+  const tail = offers.some(o => !o.hers) ? `<p class="leb-hint">Your answers above stand whether you ${history ? "save or discard the history" : "end the encounter now"}.</p>` : "";
+  const mark = (root, i, j, a) => { answers.set(`${i}.${j}`, a); const row = root.querySelector(`[data-offer="${i}"] [data-line="${j}"]`); if (!row) return;
+    row.querySelectorAll("button").forEach(b => b.remove()); const d = document.createElement("span"); d.className = "leb-done"; d.textContent = a === "accept" ? "✓ Accepted" : "Kept out"; d.style.flex = "0 0 auto"; row.append(d); };
+  const choice = await foundry.applications.api.DialogV2.wait({ window: { title: "Monster Turns history" }, classes: ["leb-endq"], position: { width: offers.length ? 460 : 380 },
+    content: `${top}${offers.map(offerHTML).join("")}${tail}`,
+    buttons: history ? [{ action: "save", label: "Save to journal", icon: "fa-solid fa-book", default: true }, { action: "discard", label: "Discard", icon: "fa-solid fa-trash" }] : [{ action: "end", label: "End encounter", icon: "fa-solid fa-flag-checkered", default: true }],
+    render: (event, dialog) => { const root = dialog.element ?? event?.target?.element; if (!root) return;
+      root.querySelectorAll("[data-eo]").forEach(b => b.addEventListener("click", ev => { ev.preventDefault(); const box = b.closest("[data-offer]"), i = +box.dataset.offer, a = b.dataset.eo;
+        if (a.endsWith("all")) { offers[i].lines.forEach((_, j) => { if (!answers.has(`${i}.${j}`)) mark(root, i, j, a.startsWith("accept") ? "accept" : "keep"); }); b.closest(".leb-el")?.remove(); }
+        else mark(root, i, +b.closest("[data-line]").dataset.line, a); })); },
+    rejectClose: false });
+  if (!["save", "discard", "end"].includes(choice)) return;   /* closed: the fight goes on, and nothing she answered is written */
+  /* her answers first, before the fight and its notebooks are gone (R4-2), saved or discarded alike (R4-4) */
+  const accepted = {}; offers.forEach((o, i) => { if (o.hers) return; const t = o.lines.filter((_, j) => answers.get(`${i}.${j}`) === "accept").map(l => l.text); if (t.length) accepted[o.tokenId] = t; });
+  if (Object.keys(accepted).length) { const names = await acceptEscapeLines(combat, accepted); if (names.length) ui.notifications.info(`Added what ${names.join(", ")} saw to the “Knows about its enemies” line of ${names.length === 1 ? "that monster's" : "each one's"} own profile.`); }
   if (choice === "save") { await saveHistory(combat); ui.notifications.info("Saved the Monster Turns history to the journal."); }
   if (game.combats.get(combat.id)) await combat.delete({ [ID]: { asked: true } });
 }

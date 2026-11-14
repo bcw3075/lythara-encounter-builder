@@ -21,6 +21,9 @@ import { LISTEN_MS, stallWords } from "../brain.mjs";
 import { apiNoteNow, apiWakeNow, fightRoute, modelOf, setRoute, wakeAngel } from "../fight.mjs";
 import { ROUTES, ROUTE_WORDS, WAKE_MS, listenLine, modelName, whoGets } from "../route.mjs";
 import { pronounOf } from "../library.mjs";
+import { answerLook, dismissLook, lookNow } from "../fight.mjs";
+import { changeWords, lineName, lookEndWords, lookWho, openItems } from "../look.mjs";
+import { namer } from "../history.mjs";
 import { pro } from "../pronoun.mjs";
 /* a creature's own pronoun, for `pro` (0.30.1): every card and row is written about its creature with markers and turned here */
 const formsFor = (c, id) => { try { return pronounOf(c?.scene?.tokens.get(id), c); } catch (e) { console.warn(`${ID} | pronoun`, e); return undefined; } };   /* undefined reads as "it" */
@@ -177,7 +180,7 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     const history = `<p class="leb-btns"><button type="button" data-do="history"><i class="fa-solid fa-clock-rotate-left"></i> History</button></p>`;
     /* escaped monsters (Rhea, 2026-11-08): hidden on this scene, out of the fight; Bring back shows the token where it stands now and rolls initiative */
     const gone = escapedList(c), escaped = gone.length ? `<div class="leb-esc"><b>Escaped</b>${gone.map(e => `<div class="leb-t" data-token="${esc(e.id)}"><span>${esc(e.name)} (round ${e.round}${e.xp != null ? `, ${e.xp} XP not earned` : ""})</span><button type="button" data-do="bringback"><i class="fa-solid fa-rotate-left"></i> Bring back</button></div>`).join("")}</div>` : "";
-    return `<div>${listen}${rows || "<p>No monsters in this fight.</p>"}${problem ? `<p class="leb-warn">${esc(problem)}</p>` : ""}${party}${card}${cmdCards}${sideCards}${yieldCards}${this._speakBox(c)}${this._orderBox(c)}${mreact}${notebooks}${escaped}${prisoners}${mOtherLine}${applySetting() ? "" : "<p><em>Damage is rolled, not applied: use the card's Damage button.</em></p>"}${history}</div>`;
+    return `<div>${listen}${this._lookCard(c)}${rows || "<p>No monsters in this fight.</p>"}${problem ? `<p class="leb-warn">${esc(problem)}</p>` : ""}${party}${card}${cmdCards}${sideCards}${yieldCards}${this._speakBox(c)}${this._orderBox(c)}${mreact}${notebooks}${escaped}${prisoners}${mOtherLine}${applySetting() ? "" : "<p><em>Damage is rolled, not applied: use the card's Damage button.</em></p>"}${history}</div>`;
   }
   /** The Remembers fold-out for one creature (Rhea, 2026-11-11): what is sent to Angel, what it perceived and makes nothing of (greyed), her own
       lines, a cross on every line and a box to add one. The GM reads names beside the labels; what is stored and sent holds labels only. */
@@ -279,6 +282,28 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     stage.on("pointerdown", on); document.addEventListener("keydown", key, true); Hooks.on("canvasTearDown", torn); this._endPick = end;
   }
   _replaceHTML(html, content) { content.innerHTML = pro(html); }   /* a net: a pronoun marker nothing turned reads as "it", never as a brace (0.30.1) */
+  /** The fight-start look's card (0.33.0, Rhea's R4-4 samples): Angel's suggestions from what the monsters perceive now, each with who it applies
+      to, the line, the line now (crossed out), the change and why, Accept / Keep, then Accept all / Keep all; or that it didn't happen, or is off.
+      Angel's words and the lines' words are never read for pronoun markers (`escW`). Gone once dismissed. */
+  _lookCard(c) {
+    const l = lookNow(c); if (!l || l.dismissed) return "";
+    const n = namer(c.getFlag(ID, "turns")?.labels ?? {}, Object.fromEntries(c.scene?.tokens.map(t => [t.id, t.name]) ?? [])), w = s => escW(n.named(s));
+    const dismiss = `<div class="leb-btns"><button type="button" data-lookdo="dismiss"><i class="fa-solid fa-xmark"></i> Dismiss</button></div>`;
+    const end = lookEndWords(l);
+    if (end) return `<div class="leb-card leb-look"><b>Fight-start look</b> · ${l.state === "off" ? "off" : l.state === "missed" ? "didn't happen" : "couldn't be made"}<p>${escW(end)}</p>${dismiss}</div>`;
+    if (l.state === "asked") return `<div class="leb-card leb-look"><b>Fight-start look</b> · waiting for Angel<p class="leb-mine">Angel looks at the fight from what the monsters perceive now and suggests any changes to their minds; it can come until round 1 ends. Until then the stored profiles are used as they are.</p>${l.handedOff ? `<p class="leb-mine">The API couldn't make it (${escW(l.handedOff.reason)}): it goes to a listening chat.</p>` : ""}</div>`;
+    const items = Object.entries(l.items ?? {}), open = openItems(l);
+    const box = ([i, x]) => `<div class="leb-box leb-box-info" data-look="${esc(i)}"><div><b>${escW(x.to === "kind" ? x.kindName : x.name)}</b> · ${esc(lookWho(x))} · line “${esc(lineName(x.line))}” <span class="leb-tag leb-tag-ok">Angel's</span></div>`
+      + `<div>Now: ${x.now ? `<s>${w(x.now)}</s>` : "<em>nothing written</em>"}</div><div>Change to: ${w(changeWords(x))}</div>${x.why ? `<div class="leb-mine">Why: ${w(x.why)}</div>` : ""}`
+      + (x.answer ? `<div><b>${x.answer === "accept" ? "✓ Accepted" : "Kept as it was"}</b></div>` : `<div class="leb-btns"><button type="button" data-lookdo="accept"><i class="fa-solid fa-check"></i> Accept</button><button type="button" data-lookdo="keep"><i class="fa-solid fa-xmark"></i> Keep</button></div>`) + `</div>`;
+    const fits = (l.fits ?? []).map(lb => l.monsters?.[lb]?.name).filter(Boolean);
+    return `<div class="leb-card leb-look"><b>Fight-start look</b> · from what the monsters perceive now · ${items.length} suggestion${items.length === 1 ? "" : "s"}`
+      + `<p class="leb-mine">Until you answer, the stored profiles are used as they are. What you accept lasts for this fight only; it never reaches the library.</p>`
+      + items.map(box).join("") + (fits.length ? `<p class="leb-mine">Nothing to change for ${escW(fits.join(", "))}: the stored profile${fits.length === 1 ? " still fits" : "s still fit"} what the monsters see.</p>` : "")
+      + (!items.length ? `<p>Angel found nothing to change: the stored profiles fit what the monsters see.</p>` : "")
+      + (open.length > 1 ? `<div class="leb-btns"><button type="button" data-lookdo="acceptall"><i class="fa-solid fa-check-double"></i> Accept all</button><button type="button" data-lookdo="keepall"><i class="fa-solid fa-xmark"></i> Keep all</button></div>` : "")
+      + (!open.length ? dismiss : "") + `</div>`;
+  }
   /** A field of the Change panel into the draft (this browser only, until sent). */
   _field(el) {
     const d = this._draft; if (!d) return; const f = el.dataset.f;
@@ -393,6 +418,11 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     root.querySelectorAll("[data-yield]").forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); const tid = el.closest("[data-ytoken]")?.dataset.ytoken, a = el.dataset.yield; if (!tid) return;
       root.querySelectorAll(`[data-ytoken="${tid}"] [data-yield]`).forEach(b => { b.disabled = true; });
       (a === "accept" ? acceptYield(c, tid) : a === "back" ? backInFight(c, tid) : refuseYield(c, tid, { own: a === "own" })).catch(e => { ui.notifications.error(e.message); if (this.rendered) this.render(); }); }));
+    /* the fight-start look's buttons (0.33.0): one press greys every look button, so a second GM's click lands on a disabled one */
+    root.querySelectorAll("[data-lookdo]").forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); const a = el.dataset.lookdo, i = el.closest("[data-look]")?.dataset.look;
+      root.querySelectorAll("[data-lookdo]").forEach(b => { b.disabled = true; });
+      const done = a === "dismiss" ? dismissLook(c) : answerLook(c, a.endsWith("all") ? "all" : i, a.startsWith("accept") ? "accept" : "keep");
+      done.catch(e => { ui.notifications.error(e.message); if (this.rendered) this.render(); }); }));
     root.querySelectorAll('.leb-esc [data-do="bringback"]').forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); const tid = el.closest("[data-token]").dataset.token; el.disabled = true;
       bringBack(c, tid).then(r => { ui.notifications.info(`${r.name} is back in the fight${r.initiative != null ? ` at initiative ${r.initiative}` : ""}.`); }).catch(e => { el.disabled = false; ui.notifications.error(e.message); }); }));
     /* the Change panel's fields go into the draft as they change, so a redraw (any fight update) keeps them */

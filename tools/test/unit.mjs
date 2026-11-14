@@ -236,7 +236,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("prompt explains the mind (0.24.0)", /"mind" is how this monster thinks and fights/.test(h.prompt) && /Never plan above its Mind/.test(h.prompt) && /Trained tactician: drilled or brilliant/.test(h.prompt) && /Loose: it follows its band's plan while that suits it/.test(h.prompt) && !/worksWith/.test(h.prompt) && /It is a leaning, not a lock/.test(h.prompt) && /this order decides: the rules and its conditions first/.test(h.prompt) && !/tactics the GM wrote/.test(h.prompt) && /ask for the hello again/.test(h.prompt) && /packet \(schema 8\)/.test(h.prompt) && /"pronoun": how this monster is written about/.test(h.prompt));
   check("prompt explains the band (0.26.0)", /Its band \("band"/.test(h.prompt) && /"yourJob"/.test(h.prompt) && /"fallBack"/.test(h.prompt) && /Next in line takes over: the highest-ranking member left/.test(h.prompt) && /"bandNow"/.test(h.prompt) && /then its band's plan as far as its discipline holds it to it/.test(h.prompt) && /discipline is None gets neither "alliesDid" nor "side"/.test(h.prompt) && /in the fight only its leader's orders change it/.test(h.prompt) && /then the orders it has heard from its leader/.test(h.prompt));
   check("prompt explains the notebook (0.25.0)", /Its notebook \("notebook"/.test(h.prompt) && /"remembers"/.test(h.prompt) && /"alliesDid"/.test(h.prompt) && /\(unsure\)/.test(h.prompt) && /a Mindless creature has no notebook/.test(h.prompt));
-  check("prompt explains asking again", h.promptVersion === 32 && /A "choice" event/.test(h.prompt) && /Release doesn't count/.test(h.prompt) && /Players are asked for their reactions/.test(h.prompt) && !/doesn't ask players for reactions yet/.test(h.prompt) && /The GM asks for the rest of this turn/.test(h.prompt) && !/someone it doesn't perceive/.test(h.prompt) && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 33 && /A "choice" event/.test(h.prompt) && /Release doesn't count/.test(h.prompt) && /Players are asked for their reactions/.test(h.prompt) && !/doesn't ask players for reactions yet/.test(h.prompt) && /The GM asks for the rest of this turn/.test(h.prompt) && !/someone it doesn't perceive/.test(h.prompt) && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -1801,7 +1801,7 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
       const hs = stepResult({ do: "say", intent: "yield", say: "Mercy!" }, { said: true, yielded: true, langName: "Goblin", message: "m1" }, {}, { nameOf: () => null });
       check("history: a say step's line", typeof hs === "object" ? /said in Goblin/.test(JSON.stringify(hs)) && /stands down/.test(JSON.stringify(hs)) : /said in Goblin/.test(String(hs)));
       const h9 = hello(1);
-      check("speech: the hello carries prompt version 32, packet schema 8 and the say step", h9.promptVersion === 32 && h9.packetSchema === 8 && h9.stepKinds.includes("say") && h9.canDo.includes("say") && h9.prompt.includes('"do": "say"') && h9.prompt.includes('"speech.canYield"') && h9.prompt.includes('"part": "yield"') && h9.prompt.includes('"yielded": true')); }
+      check("speech: the hello carries prompt version 33, packet schema 8 and the say step", h9.promptVersion === 33 && h9.packetSchema === 8 && h9.stepKinds.includes("say") && h9.canDo.includes("say") && h9.prompt.includes('"do": "say"') && h9.prompt.includes('"speech.canYield"') && h9.prompt.includes('"part": "yield"') && h9.prompt.includes('"yielded": true')); }
     /* bands: the named second */
     { const rows = [{ band: "p", count: 3 }, { band: "p", count: 2 }, { band: "q", count: 1 }];
       const b2 = Bd.cleanBand({ name: "P", leader: { row: 0, n: 0 }, second: { row: 1, n: 1 } }, { rows });
@@ -1809,7 +1809,7 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
       check("band: the second is set like the leader mark (Angel never over the GM's)", Bd.applyBand(b2, { second: { row: 0, n: 2 } }, { by: "angel", rows }).skipped.join() === "second" && Bd.applyBand(b2, { second: null }, { by: "gm", rows }).band.second === null && Bd.applyBand({ ...b2, second: { row: 1, n: 1, by: "angel" } }, { second: { row: 0, n: 2 } }, { by: "angel", rows }).band.second.n === 2);
       check("band: a row taken out moves or drops the second; a second on another band's row is dropped", Bd.rowRemoved([b2], 0)[0].second.row === 0 && Bd.rowRemoved([b2], 1)[0].second === null && Bd.briefBands([{ name: "p", second: { row: 2, n: 0 } }], [{ band: "p" }, { band: "p" }, { band: "q" }], [{ count: 1 }, { count: 1 }, { count: 1 }])[0].second === null); }
     /* the thinker's instructions, and the small wording fix */
-    { const h8 = hello(1); check("order: the hello carries prompt version 32, packet schema 8 and the order step", h8.promptVersion === 32 && h8.packetSchema === 8 && h8.stepKinds.includes("order") && h8.canDo.includes("order") && h8.prompt.includes('"do": "order"') && h8.prompt.includes('"toldOf"') && h8.prompt.includes('"orders.heard"') && !/nobody gives new orders yet/.test(h8.prompt)); }
+    { const h8 = hello(1); check("order: the hello carries prompt version 33, packet schema 8 and the order step", h8.promptVersion === 33 && h8.packetSchema === 8 && h8.stepKinds.includes("order") && h8.canDo.includes("order") && h8.prompt.includes('"do": "order"') && h8.prompt.includes('"toldOf"') && h8.prompt.includes('"orders.heard"') && !/nobody gives new orders yet/.test(h8.prompt)); }
     check("memory: a creature healing itself reads as such", Mem2.render({ "001": { k: "heal", a: "E5", t: "E5", r: 1, at: 1 } }, { rung: 3 }).remembers[0].text === "E5 healed itself." && Mem2.render({ "001": { k: "heal", a: "E5", t: "E2", r: 1, at: 1 } }, { rung: 3 }).remembers[0].text === "E5 healed E2.");
   }
 }
@@ -1909,7 +1909,7 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
   check("sides: a turncoat's own packet says where it came from, and nothing for one that didn't change", cp.since === 3 && /in a band/.test(cp.was) && cp.lastHeard.length === 1 && /no longer follows/.test(cp.note) && Sd.changedForPacket(first.entry) === null && !("lastHeard" in Sd.changedForPacket(turn.entry, {})));
   /* the prompt */
   const h30 = hello(1);
-  check("tier 3d: the hello carries prompt version 32, packet schema 8 and both steps", h30.promptVersion === 32 && h30.packetSchema === 8 && h30.canDo.includes("command-animal") && h30.canDo.includes("point-out") && h30.prompt.includes('"do": "command-animal"') && h30.prompt.includes('"do": "point-out"') && /"alliesLost": true/.test(h30.prompt) && /"pointed": true/.test(h30.prompt) && /"you.changedSides"/.test(h30.prompt) && /"went": "wrong"/.test(h30.prompt));
+  check("tier 3d: the hello carries prompt version 33, packet schema 8 and both steps", h30.promptVersion === 33 && h30.packetSchema === 8 && h30.canDo.includes("command-animal") && h30.canDo.includes("point-out") && h30.prompt.includes('"do": "command-animal"') && h30.prompt.includes('"do": "point-out"') && /"alliesLost": true/.test(h30.prompt) && /"pointed": true/.test(h30.prompt) && /"you.changedSides"/.test(h30.prompt) && /"went": "wrong"/.test(h30.prompt));
 }
 /* ---------- each creature's own pronoun (0.30.1, R-2) ---------- */
 {
@@ -1999,7 +1999,7 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
       && Hi3.apiUseWords({ apiUse: { a: { model: "claude-opus-5-5", cost: 0.04 }, b: { model: "claude-new-6" } } }) === "Angel through the API this fight: 2 answers, 4¢ for the ones with a price (Opus 1, New 1)."; })());
   check("rt-8 a handed-on choice keeps its own number to answer with", /"seq": 41 }/.test(Br3.choiceOut({ seq: 77, choiceSeq: 41, kind: "choice", combatId: "c", requestId: "r" }, { round: 1, choice: { kind: "glimpse", words: "w", seq: 41 } }).choice.answerWith)
     && /"seq": 41 }/.test(Br3.choiceOut({ seq: 41, choiceSeq: 41, kind: "choice" }, { round: 1, choice: { kind: "glimpse", words: "w", seq: 41 } }).choice.answerWith) && Br3.cleanMeta({ by: "api", model: "claude-opus-5-5", usage: { in: 10, out: 5, seconds: 2, cost: 0.01 } }).usage.cost === 0.01);
-  check("rt-9 the hello tells the API route to answer with the JSON alone", /On the API route you answer each event with the JSON alone/.test(Br3.hello(1).prompt) && /on the API route the picture comes with the event/.test(Br3.hello(1).prompt) && Br3.hello(1).promptVersion === 32);
+  check("rt-9 the hello tells the API route to answer with the JSON alone", /On the API route you answer each event with the JSON alone/.test(Br3.hello(1).prompt) && /on the API route the picture comes with the event/.test(Br3.hello(1).prompt) && Br3.hello(1).promptVersion === 33);
 }
 /* ---------- her Speak / Yield box (0.32.0; sb-1) ---------- */
 { const Sp = await import("../../scripts/speech.mjs"), Pn = await import("../../scripts/pronoun.mjs"), Or = await import("../../scripts/orders.mjs");
@@ -2017,5 +2017,48 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
     && Sp.SPEECH_LOG.includes("said") && Sp.SPEECH_LOG.includes("gave") && Or.logWords({ k: "said", tok: "g", words: "Hm", langName: "Common" }, { nameOf: () => "G" }) === "G spoke to the party in Common (the GM's line): “Hm”");
   check("sb-1 the stored line of her speech is the safe one; a GM reads her words with no intent word", Sp.sayHtml({ words: "Hold!", lang: "common", langName: "Common", intent: "gm" }) === "<p>Shouts something in Common.</p>"
     && /Says<\/strong>.*“Hold!”/.test(Sp.sayHtml({ words: "Hold!", lang: "common", langName: "Common", intent: "gm" }, { gm: true, understood: [1, 2] })) && !/a threat|a bargain/.test(Sp.sayHtml({ words: "Hold!", langName: "Common", intent: "gm" }, { gm: true })));
+}
+/* ---------- monster minds release 4 (0.33.0): the fight-start look and the escaped monster's lines (lk-1 to lk-7) ---------- */
+{ const Lk = await import("../../scripts/look.mjs"), Rt4 = await import("../../scripts/route.mjs"), Br4 = await import("../../scripts/brain.mjs");
+  const ms = ["M1", "M2", "M3"], ok = Lk.cleanLook({ look: [{ for: "kind", monster: "M1", line: "givesUp", text: "Fall back when two are down.", why: "four came, not two" }, { for: "one", monster: "M2", line: "discipline", pick: "loose", text: "", why: "w" }, { for: "kind", monster: "M1", line: "givesUp", text: "again" }], fits: ["M3", "M9", 3], seq: 12 }, ms);
+  check("lk-1 a look cleaned: both kinds of suggestion, a pick, a second on the same line dropped, fits only of this look, the seq kept",
+    ok.ok && ok.items.length === 2 && ok.items[0].to === "kind" && ok.items[0].text === "Fall back when two are down." && ok.items[1].pick === "loose" && ok.items[1].text === "" && JSON.stringify(ok.fits) === '["M3"]' && ok.seq === 12
+    && Lk.cleanLook(JSON.stringify({ look: [] }), ms).ok && Lk.cleanLook({ look: [] }, ms).items.length === 0);
+  const no = x => { const r = Lk.cleanLook(x, ms); return !r.ok && typeof r.reason === "string" && r.reason.length > 5; };
+  check("lk-1 a look refused in words: not JSON, no list, a bad for, a bad label, a monster not in the look, a line it can't change, a pick missing, no words, too many",
+    no("{nope") && no({ steps: [] }) && no({ look: [{ for: "all", monster: "M1", line: "givesUp", text: "x" }] }) && no({ look: [{ for: "one", monster: "E1", line: "givesUp", text: "x" }] })
+    && no({ look: [{ for: "one", monster: "M7", line: "givesUp", text: "x" }] }) && no({ look: [{ for: "one", monster: "M1", line: "pronoun", text: "she" }] }) && no({ look: [{ for: "one", monster: "M1", line: "mind", text: "x" }] })
+    && no({ look: [{ for: "one", monster: "M1", line: "fightsBy", text: "  " }] }) && no({ look: Array.from({ length: Lk.LOOK_MAX + 1 }, () => ({ for: "one", monster: "M1", line: "notes", text: "x" })) })
+    && Lk.cleanLook({ look: [{ for: "one", monster: "M1", line: "fightsBy", text: "y ".repeat(400) }] }, ms).items[0].text.length <= 240);
+  check("lk-2 a look is told from a plan and a choice", Lk.isLook({ look: [] }) && Lk.isLook('{"look":[]}') && !Lk.isLook({ steps: [] }) && !Lk.isLook({ choice: "repent" }) && !Lk.isLook({ look: [], steps: [] }) && !Lk.isLook("x") && !Br4.cleanPlan({ look: [] }).ok);
+  const pk = Lk.lookPacket({ schema: 8, mind: { mind: "Cunning" }, band: { name: "b" }, you: { label: "M1", name: "Archer", square: [3, 4], hp: "10/10", conditions: [], spells: [1] }, ground: ["....."], allies: [{ label: "M2", name: "Soldier", square: [4, 4], healthWord: "unhurt" }], perceived: [{ label: "E1", state: "observed", square: [9, 9], distance: 30, size: "med", gear: ["shield"], cover: "none" }, { state: "undetected" }] });
+  check("lk-3 a look's packet: mind, band, its own state, allies and whom it perceives with where they are; no ground map, spells or a creature with no label",
+    !!pk.mind && !!pk.band && pk.you.label === "M1" && JSON.stringify(pk.you.square) === "[3,4]" && !pk.ground && !pk.you.spells && pk.allies[0].label === "M2" && pk.perceived.length === 1 && pk.perceived[0].distance === 30 && !("cover" in pk.perceived[0]) && Lk.lookPacket(null) === null);
+  const lo = Lk.lookOut({ seq: 55, monsters: { M1: { kindName: "Hobgoblin Archer" } }, packets: { M1: { you: { label: "M1" } } } }, { combatId: "c1", round: 1 });
+  check("lk-4 the look event: its kind, its own request id, each monster with its kind and packet, the lines it may change, the seq to answer with",
+    lo.kind === "look" && lo.requestId === Lk.LOOK_ID && lo.combatId === "c1" && lo.look.monsters[0].kind === "Hobgoblin Archer" && lo.look.monsters[0].packet.you.label === "M1" && lo.look.lines.includes("givesUp") && !lo.look.lines.includes("pronoun") && /"seq": 55 }/.test(lo.look.answerWith) && !("reason" in lo)
+    && /refused: bad label Send it again/.test(Lk.lookOut({ seq: 56, refused: "bad label", tries: 1, monsters: {} }, { combatId: "c1", round: 1 }).reason) && Lk.lookOut({ seq: 56, refused: "x", tries: 1, monsters: {} }, {}).triesLeft === 1);
+  check("lk-4 it waits until round 1 ends (R4-1), and the didn't-happen, off and failed words", Lk.lookWaiting({ state: "asked" }, 1) && !Lk.lookWaiting({ state: "asked" }, 2) && !Lk.lookWaiting({ state: "ready" }, 1) && !Lk.lookWaiting(null, 1)
+    && /didn't happen: Angel didn't answer before round 1 ended/.test(Lk.lookEndWords({ state: "missed" })) && /route is off/.test(Lk.lookEndWords({ state: "off" })) && /couldn't be made: x\./.test(Lk.lookEndWords({ state: "failed", reason: "x" })) && Lk.lookEndWords({ state: "ready" }) === ""
+    && Lk.lookWho({ to: "kind", count: 3 }) === "the kind: all 3 of them" && Lk.lookWho({ to: "one" }) === "this one" && Lk.changeWords({ line: "discipline", pick: "loose", text: "x" }) === "Loose. x" && Lk.openItems({ items: { 0: { answer: "accept" }, 1: {} } }).join() === "1");
+  const book = { a: { k: "block", a: "E1" }, b: { k: "heal", a: "E2" }, c: { k: "cast", a: "E3", w: "fire, in a 15-foot cone" }, d: { k: "hurt", a: "E1", s: 3 }, e: { k: "heal", a: "E2" }, f: { k: "cast", a: "E4", w: "cold", sure: 0 },
+    g: { k: "weak", t: "E1", d: "cold" }, h: { k: "reactive", a: "M2" }, i: { k: "hurt", a: "E3", s: 2 }, j: { k: "block", a: "E5", x: 1 }, k: { k: "resist", t: "E9", d: "fire" }, l: { k: "gm", text: "E1 is a coward" } };
+  const names = { E1: "Valeros", E2: "Test Hero", E3: "Claude Test Champion", E4: "Seoni" }, nameOf = l => names[l] ?? null;
+  const tac = Lk.escapeLines(book, { rung: 4, nameOf }), all = tac.map(x => x.text).join(" | ");
+  check("lk-5 what an escaped monster saw: sure lines about enemies, said once each, most telling first, at most four, names restored",
+    tac.length === Lk.ESCAPE_MAX && tac[0].text === "Test Hero heals the others." && tac[1].text === "Claude Test Champion casts spells: fire, in a 15-foot cone." && tac[2].text === "Valeros blocks blows with a shield."
+    && !/Seoni|M2|E9|coward/.test(all) && new Set(tac.map(x => x.id)).size === tac.length && !/\bit\b(?! should)/i.test(all.replace(/far more than it should/g, "")));
+  const animal = Lk.escapeLines(book, { rung: 1, nameOf }), cunning = Lk.escapeLines(book, { rung: 3, nameOf });
+  check("lk-5 by its Mind: an animal knows only who hit it hard, a cunning one healers and casters too but not the finer things, a mindless one nothing",
+    animal.map(x => x.text).join() === "Valeros hits hard." && cunning.some(x => /heals/.test(x.text)) && !cunning.some(x => /shield|far more/.test(x.text)) && Lk.escapeLines(book, { rung: 0, nameOf }).length === 0
+    && Lk.escapeLines({ a: { k: "cast", a: "E1", n: "fireball" } }, { rung: 4, nameOf })[0].text === "Valeros casts fireball." && Lk.escapeLines({ a: { k: "weak", t: "E1", d: "cold" } }, { rung: 4, nameOf })[0].text === "Cold hurts Valeros far more than it should."
+    && Lk.escapeLines(null, { rung: 4, nameOf }).length === 0);
+  check("lk-6 the Knows line after Accept: her words never replaced, Angel's kept with the new added once, cut to the cap",
+    Lk.knowsAfter({ text: "Mine.", by: "gm" }, ["A."]) === null && Lk.knowsAfter({ text: "Old.", by: "angel" }, ["A.", "Old.", "A."]) === "Old. A." && Lk.knowsAfter(null, ["A.", "B."]) === "A. B."
+    && Lk.knowsAfter({ text: "", by: "gm" }, ["A."]) === "A." && Lk.knowsAfter(null, ["x ".repeat(200)]).length <= 240);
+  check("lk-7 who gets the look: the API when it listens on the API route, else a listening chat; the chat on the chat route; nobody when off; a handed-on look goes to the chat",
+    Rt4.API_KINDS.includes("look") && Rt4.whoGets({ route: "api", kind: "look", api: true }) === "api" && Rt4.whoGets({ route: "api", kind: "look", api: false, chat: true }) === "chat" && Rt4.whoGets({ route: "chat", kind: "look", api: true }) === "chat"
+    && Rt4.whoGets({ route: "off", kind: "look" }) === null && Rt4.whoGets({ route: "api", kind: "look", api: true, handedOff: true }) === "chat");
+  check("lk-7 the hello (prompt version 33) explains the look event and how to answer it", Br4.hello(1).promptVersion === 33 && /A "look" event comes once, when a fight starts/.test(Br4.hello(1).prompt) && /requestId "look"/.test(Br4.hello(1).prompt) && /for a "look" event the look/.test(Br4.hello(1).prompt));
 }
 console.log(`${good} passed, ${bad} failed`); process.exit(bad ? 1 : 0);
