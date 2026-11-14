@@ -297,10 +297,11 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
       + `<div>Now: ${x.now ? `<s>${w(x.now)}</s>` : "<em>nothing written</em>"}</div><div>Change to: ${w(changeWords(x))}</div>${x.why ? `<div class="leb-mine">Why: ${w(x.why)}</div>` : ""}`
       + (x.answer ? `<div><b>${x.answer === "accept" ? "✓ Accepted" : "Kept as it was"}</b></div>` : `<div class="leb-btns"><button type="button" data-lookdo="accept"><i class="fa-solid fa-check"></i> Accept</button><button type="button" data-lookdo="keep"><i class="fa-solid fa-xmark"></i> Keep</button></div>`) + `</div>`;
     const fits = (l.fits ?? []).map(lb => l.monsters?.[lb]?.name).filter(Boolean);
+    /* nothing to change (seen live on the API route, 0.33.0): one line, not the reminder and a second "nothing to change" */
+    if (!items.length) return `<div class="leb-card leb-look"><b>Fight-start look</b> · from what the monsters perceive now<p>Angel found nothing to change${fits.length ? ` for ${escW(fits.join(", "))}` : ""}: the stored profiles fit what the monsters see.</p>${dismiss}</div>`;
     return `<div class="leb-card leb-look"><b>Fight-start look</b> · from what the monsters perceive now · ${items.length} suggestion${items.length === 1 ? "" : "s"}`
       + `<p class="leb-mine">Until you answer, the stored profiles are used as they are. What you accept lasts for this fight only; it never reaches the library.</p>`
       + items.map(box).join("") + (fits.length ? `<p class="leb-mine">Nothing to change for ${escW(fits.join(", "))}: the stored profile${fits.length === 1 ? " still fits" : "s still fit"} what the monsters see.</p>` : "")
-      + (!items.length ? `<p>Angel found nothing to change: the stored profiles fit what the monsters see.</p>` : "")
       + (open.length > 1 ? `<div class="leb-btns"><button type="button" data-lookdo="acceptall"><i class="fa-solid fa-check-double"></i> Accept all</button><button type="button" data-lookdo="keepall"><i class="fa-solid fa-xmark"></i> Keep all</button></div>` : "")
       + (!open.length ? dismiss : "") + `</div>`;
   }
