@@ -228,11 +228,17 @@ export function stampBrief(brief, by = "angel") {
 export function mergeBrief(old, next, { by = "angel", force = false } = {}) {
   const was = Array.isArray(old?.creatures) ? old.creatures : [], skipped = [];
   if (by === "gm" || force || !was.length) return { brief: next, skipped };
+  /* a row is matched once: the old row at its place when it is the same creature (uuid and adjustment, or name), else the first unused one that is
+     (review of 0.33.1: two rows of one creature, a Bandit and an Elite Bandit, both took the first old row) */
+  const same = (o, c) => o && (c.uuid ? o.uuid === c.uuid && (o.adjust ?? null) === (c.adjust ?? null) : !o.uuid && (o.name ?? "") === (c.name ?? "")), used = new Set();
+  /* a line the brief stamps as the GM's own words (she dictated them) is written as hers; the rest as `by` */
+  const lay = (cur, inc) => { const gm = {}, rest = {}; for (const [k, v] of Object.entries(inc ?? {})) (v && typeof v === "object" && v.by === "gm" ? gm : rest)[k] = v;
+    const a = applyLines(cur ?? {}, rest, { by }), b = applyLines(a.lines, gm, { by: "gm" }); return { lines: b.lines, skipped: a.skipped }; };
   const creatures = (next.creatures ?? []).map((c, g) => {
-    const o = (c.uuid ? was.find(x => x?.uuid === c.uuid) : null) ?? (was[g] && (was[g].name ?? "") === (c.name ?? "") ? was[g] : null); if (!o) return c;
-    const m = applyLines(o.mind ?? {}, c.mind ?? {}, { by }); if (m.skipped.length) skipped.push({ row: g, lines: m.skipped });
+    const at = same(was[g], c) && !used.has(g) ? g : was.findIndex((o, i) => !used.has(i) && same(o, c)); if (at < 0) return c; used.add(at); const o = was[at];
+    const m = lay(o.mind, c.mind); if (m.skipped.length) skipped.push({ row: g, lines: m.skipped });
     const own = { ...(o.own ?? {}) };
-    for (const [n, v] of Object.entries(c.own ?? {})) { const r = applyLines(own[n] ?? {}, v ?? {}, { by }); if (r.skipped.length) skipped.push({ row: g, n: +n, lines: r.skipped }); own[n] = r.lines; }
+    for (const [n, v] of Object.entries(c.own ?? {})) { const r = lay(own[n], v); if (r.skipped.length) skipped.push({ row: g, n: +n, lines: r.skipped }); own[n] = r.lines; }
     return { ...c, mind: m.lines, own };
   });
   return { brief: { ...next, creatures }, skipped };

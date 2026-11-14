@@ -2082,6 +2082,10 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
   check("0.33.1 a brief from Angel keeps the GM's own lines (this encounter's and a single monster's), and Angel's own lines change",
     nb.brief.creatures[0].mind.goesFor.text === "Hers." && nb.brief.creatures[0].mind.notes.text === "New note." && nb.brief.creatures[0].own[0].fightsBy.text === "Her own." && nb.skipped.length === 2
     && Mi.mergeBrief(old, { creatures: [{ uuid: "u1", name: "Bandit", mind: { goesFor: { text: "Gm.", by: "gm" } } }] }, { by: "gm" }).brief.creatures[0].mind.goesFor.text === "Gm.");
+  const twoRows = { creatures: [{ uuid: "u1", adjust: null, name: "Bandit", mind: { goesFor: { text: "Row0 GM.", by: "gm" } }, own: { 0: { notes: { text: "Row0 own.", by: "gm" } } } }, { uuid: "u1", adjust: "elite", name: "Elite Bandit", mind: { goesFor: { text: "Row1 GM.", by: "gm" } }, own: {} }] };
+  const nb2 = Mi.mergeBrief(twoRows, { creatures: [{ uuid: "u1", adjust: null, name: "Bandit", mind: {}, own: {} }, { uuid: "u1", adjust: "elite", name: "Elite Bandit", mind: { givesUp: { text: "Dictated.", by: "gm" } }, own: {} }] }, { by: "angel" });
+  check("0.33.1 a brief's rows are matched once each (a Bandit and an Elite Bandit keep their own GM lines), and a line stamped as hers stays hers",
+    nb2.brief.creatures[0].mind.goesFor.text === "Row0 GM." && nb2.brief.creatures[1].mind.goesFor.text === "Row1 GM." && !nb2.brief.creatures[1].own[0] && nb2.brief.creatures[1].mind.givesUp.by === "gm" && nb2.brief.creatures[0].own[0].notes.text === "Row0 own.");
   check("0.33.1 a kind's level as PF2e reports Elite and Weak: the base from the source when known, else turned back by PF2e's rule",
     Mi.baseLevel(1, "elite", -1) === -1 && Mi.baseLevel(2, "elite", 0) === 0 && Mi.baseLevel(-1, "weak", 1) === 1 && Mi.baseLevel(1, "elite") === -1 && Mi.baseLevel(4, "elite") === 3 && Mi.baseLevel(1, "weak") === 2 && Mi.baseLevel(-1, "weak") === 1 && Mi.baseLevel(5) === 5
     && adjustedLevel(-1, "elite") === 1 && adjustedLevel(1, "weak") === -1);

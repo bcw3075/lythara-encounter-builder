@@ -71,7 +71,7 @@ export function witnessLines(event, witnesses = [], stamp = {}) {
       if (w.actorIs === "ally" && sees(a)) put(w, { k: "deed", a: a.label, w: `${event.degree === 3 ? "critically hit" : event.degree === 2 ? "hit" : "missed"} ${w.isTarget ? "{them}" : sees(t) ? t.label : w.targetIs === "enemy" || w.targetIs === "ally" ? UNSEEN : "something"}` });
       continue;
     }
-    if (event.kind === "deed") { if (w.actorIs === "ally" && sees(a)) put(w, { k: "deed", a: a.label, w: `${event.pre ?? ""}${event.hasTarget ? ` ${w.isTarget ? "{them}" : sees(t) ? t.label : UNSEEN}` : ""}${event.post ?? ""}`.slice(0, DEED_MAX) }); continue; }
+    if (event.kind === "deed") { if (w.actorIs === "ally" && sees(a)) put(w, { k: "deed", a: a.label, w: `${event.pre ?? ""}${event.hasTarget ? ` ${w.isTarget ? "{them}" : sees(t) ? t.label : UNSEEN}` : ""}${event.post ?? ""}`.slice(0, DEED_MAX).replace(/\{[^}]*$/, "").trim() }); continue; }   /* a marker cut in half by the cap goes */
     if (event.kind === "saved") { if (w.isActor && sees(t)) put(w, { k: "saved", t: t.label, ...(event.item ? { i: String(event.item).slice(0, 40) } : {}) }); continue; }
     if (event.kind === "reactive" || event.kind === "block") { if (w.actorIs === "enemy" && sees(a)) put(w, { k: event.kind, a: a.label }); continue; }
   }
@@ -79,7 +79,7 @@ export function witnessLines(event, witnesses = [], stamp = {}) {
 }
 
 /** An ally's deed from the module's own step log, in the same words (`doneWords` is turn.mjs's line for the step, already in labels). */
-export const deedLine = (label, doneWords, stamp = {}) => ({ k: "deed", a: label, w: String(doneWords ?? "").replace(/\s+/g, " ").trim().slice(0, DEED_MAX), r: stamp.round ?? 0, at: stamp.at ?? 0 });
+export const deedLine = (label, doneWords, stamp = {}) => ({ k: "deed", a: label, w: String(doneWords ?? "").replace(/\s+/g, " ").trim().slice(0, DEED_MAX).replace(/\{[^}]*$/, "").trim(), r: stamp.round ?? 0, at: stamp.at ?? 0 });
 /** A GM's own line, already through the name gate (labels only). */
 export const gmLine = (text, stamp = {}) => ({ k: "gm", by: "gm", text: String(text ?? "").replace(/\s+/g, " ").trim().slice(0, GM_LINE_MAX), r: stamp.round ?? 0, at: stamp.at ?? 0 });
 
@@ -135,7 +135,7 @@ export function render(book, { rung = 3, since = 0, forms = IT } = {}) {   /* fo
   return { remembers, allies, unused, crossed };
 }
 /** One stored line in words, for a crossed-out line in the fold-out. */
-function wordsOf(l, forms = IT) { const r = render({ a: { ...l, x: undefined } }, { rung: 4, forms });   /* in the creature's own forms (0.33.1, review) */ return r.remembers[0]?.text ?? r.allies[0]?.text ?? (l.k === "deed" ? `${l.a}: ${l.w}.` : ""); }
+function wordsOf(l, forms = IT) { const r = render({ a: { ...l, x: undefined } }, { rung: 4, forms });   /* in the creature's own forms (0.33.1, review) */ return r.remembers[0]?.text ?? r.allies[0]?.text ?? (l.k === "deed" ? pro(`${l.a}: ${l.w}.`, forms) : ""); }
 
 /** Its side's tally, so "gives up when half are down" can be judged (design review 15). Counts only. */
 export function sideWords({ started = 0, standing = 0, down = 0, fled = 0, yielded = 0 } = {}, forms = IT) {
