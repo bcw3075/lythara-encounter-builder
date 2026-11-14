@@ -1968,7 +1968,7 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
 }
 /* ---------- the API route (0.31.0): route.mjs, and what brain.mjs and history.mjs gained ---------- */
 { const Rt = await import("../../scripts/route.mjs"), Br3 = await import("../../scripts/brain.mjs"), Hi3 = await import("../../scripts/history.mjs");
-  check("rt-1 the model rule (q-28-api)", Rt.modelFor({ leads: true }).model === "opus" && Rt.modelFor({ leads: true }).why === "leads its band"
+  check("rt-1 the model rule (q-28-api)", Rt.modelFor({ leads: true }).model === "opus" && Rt.modelFor({ leads: true }).why === "leads {their} band"
     && Rt.modelFor({ casts: true, level: 4, partyLevel: 2 }).model === "opus" && Rt.modelFor({ casts: true, level: 3, partyLevel: 2 }).model === "sonnet"
     && Rt.modelFor({ casts: false, level: 9, partyLevel: 2 }).model === "sonnet" && Rt.modelFor({ casts: true, level: null, partyLevel: 2 }).model === "sonnet"
     && Rt.modelFor({}).model === "sonnet" && Rt.modelFor({ casts: true, level: 1, partyLevel: 3 }).why === "casts spells, but is 2 below the party");
@@ -2000,5 +2000,22 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
   check("rt-8 a handed-on choice keeps its own number to answer with", /"seq": 41 }/.test(Br3.choiceOut({ seq: 77, choiceSeq: 41, kind: "choice", combatId: "c", requestId: "r" }, { round: 1, choice: { kind: "glimpse", words: "w", seq: 41 } }).choice.answerWith)
     && /"seq": 41 }/.test(Br3.choiceOut({ seq: 41, choiceSeq: 41, kind: "choice" }, { round: 1, choice: { kind: "glimpse", words: "w", seq: 41 } }).choice.answerWith) && Br3.cleanMeta({ by: "api", model: "claude-opus-5-5", usage: { in: 10, out: 5, seconds: 2, cost: 0.01 } }).usage.cost === 0.01);
   check("rt-9 the hello tells the API route to answer with the JSON alone", /On the API route you answer each event with the JSON alone/.test(Br3.hello(1).prompt) && /on the API route the picture comes with the event/.test(Br3.hello(1).prompt) && Br3.hello(1).promptVersion === 32);
+}
+/* ---------- her Speak / Yield box (0.32.0; sb-1) ---------- */
+{ const Sp = await import("../../scripts/speech.mjs"), Pn = await import("../../scripts/pronoun.mjs"), Or = await import("../../scripts/orders.mjs");
+  const she = Pn.formsOf("she"), they = Pn.formsOf("they"), party = [{ name: "A", langs: ["common", "elven"] }, { name: "B", langs: ["common"] }, { name: "C", langs: ["dwarven"] }];
+  check("sb-1 who will understand: for her eyes, by each character's languages", JSON.stringify(Sp.whoUnderstands(party, "common")) === '{"knows":["A","B"],"not":["C"]}'
+    && JSON.stringify(Sp.whoUnderstands(party, "goblin")) === '{"knows":[],"not":["A","B","C"]}' && JSON.stringify(Sp.whoUnderstands([], "common")) === '{"knows":[],"not":[]}' && Sp.whoUnderstands(party, null).knows.length === 0);
+  check("sb-1 her line cleaned: one sentence cut to the cap, the language one on its sheet, a yield without words, no words without a language",
+    (() => { const a = Sp.cleanGmSay({ words: "  Drop   your weapons! " }, ["goblin", "common"]), b = Sp.cleanGmSay({ words: "Run", lang: "goblin" }, ["goblin", "common"]), c = Sp.cleanGmSay({ words: "Run", lang: "elven" }, ["goblin"]);
+      const d = Sp.cleanGmSay({ yield: true }, []), e = Sp.cleanGmSay({ words: "" }, ["common"]), f = Sp.cleanGmSay({ words: "Hi" }, [], she), g = Sp.cleanGmSay({ words: "x ".repeat(200) }, ["common"]);
+      return a.ok && a.words === "Drop your weapons!" && a.lang === "common" && b.lang === "goblin" && c.lang === "goblin" && d.ok && d.words === "" && d.lang === null
+        && !e.ok && e.why === "Write the sentence first." && !f.ok && f.why === "She speaks no language: she can only yield, without words." && g.words.length <= Sp.SAY_CAP; })());
+  check("sb-1 the log's lines for her box, her words never read for markers", Sp.speechLogWords({ k: "said", tok: "g", words: "Leave {them} be!", langName: "Common" }, { nameOf: () => "Boss", formsOf: () => she }) === "Boss spoke to the party in Common (the GM's line): “Leave {\u200bthem} be!”" && !Pn.hasMarker(Sp.speechLogWords({ k: "said", tok: "g", words: "Leave {them} be!" }, {})) && !Pn.hasMarker(Sp.sayHtml({ words: "Go {their} way", langName: "Common", intent: "gm" }, { knows: true })) && Pn.pro(Sp.literal("a {they} b")) === "a {\u200bthey} b"
+    && Sp.speechLogWords({ k: "gave", tok: "g" }, { nameOf: () => "Wolf", formsOf: () => they }) === "Wolf gave themself up (the GM's yield): they stand down, and Accepted or Fight on is the GM's, without words."
+    && Sp.speechLogWords({ k: "gave", tok: "g", words: "Mercy!", langName: "Goblin" }, { nameOf: () => "G", formsOf: () => she }) === "G gave herself up (the GM's yield): she stands down, and Accepted or Fight on is the GM's. She said, in Goblin: “Mercy!”"
+    && Sp.SPEECH_LOG.includes("said") && Sp.SPEECH_LOG.includes("gave") && Or.logWords({ k: "said", tok: "g", words: "Hm", langName: "Common" }, { nameOf: () => "G" }) === "G spoke to the party in Common (the GM's line): “Hm”");
+  check("sb-1 the stored line of her speech is the safe one; a GM reads her words with no intent word", Sp.sayHtml({ words: "Hold!", lang: "common", langName: "Common", intent: "gm" }) === "<p>Shouts something in Common.</p>"
+    && /Says<\/strong>.*“Hold!”/.test(Sp.sayHtml({ words: "Hold!", lang: "common", langName: "Common", intent: "gm" }, { gm: true, understood: [1, 2] })) && !/a threat|a bargain/.test(Sp.sayHtml({ words: "Hold!", langName: "Common", intent: "gm" }, { gm: true })));
 }
 console.log(`${good} passed, ${bad} failed`); process.exit(bad ? 1 : 0);

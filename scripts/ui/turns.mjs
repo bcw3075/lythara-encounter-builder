@@ -4,13 +4,16 @@ import { BAND_GO, HELD_LABEL } from "../bands.mjs";
 import { CHANGEABLE, NOTE_MAX, SIDES, WORD, applyEdits, changeProblem, planPrint, describeChanges, describeStep, editableParts, isMove, listWords, stepLabels, tookTurn } from "../turn.mjs";
 import { tickGroups, groupChanges } from "./ticks.mjs";
 import { esc } from "../journal.mjs";
+/* her own words and names, never read for pronoun markers by the window's net (0.32.0 review 2): a brace as an HTML entity isn't a marker */
+const escW = s => esc(s).replace(/\{/g, "&#123;").replace(/\}/g, "&#125;");
 import { countingDown, offerWords } from "../react.mjs";
 import { describeKnows } from "../perceive.mjs";
 import { ID } from "../builder.mjs";
 import { notebookOf, previewRemember, rememberAdd, rememberCross } from "../fight.mjs";
 import { GM_LINE_MAX } from "../memory.mjs";
 import { giveOrder, orderCard, orderPreview, setHearCall } from "../fight.mjs";
-import { acceptYield, backInFight, prisonerList, refuseYield, yieldedList } from "../fight.mjs";
+import { acceptYield, backInFight, cancelSpeak, gmSpeak, prisonerList, refuseYield, speakPreview, yieldedList } from "../fight.mjs";
+import { SAY_CAP, whoUnderstands } from "../speech.mjs";
 import { answerCommand, commandList, commandResult, pointCard, sideList } from "../fight.mjs";
 import { ORDER_CAPS, QUICK, orderWords } from "../orders.mjs";
 import { askAngel, cancelChange, changePlan, previewNote, applySetting, partyMember, runnable, brainListening, bringBack, runnerName, escapedList, extendMap, extendProblem, letGo, letBandGo, bandStillFighting, notePress, brainSeenAt, clock, currentRequest, doIt, hold, lastNote, playMyself, rollFor, runnerProblem, answerReaction, continueReactions, otherReactions, doReaction, skipReaction, monsterReactionsLeft, partyReactors, setReactionUsed, chooseFor } from "../fight.mjs";
@@ -65,7 +68,7 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     /* yielding (0.29.0, Rhea's R3-7): a monster that stands down has Accepted and Fight on where its ticks were, and a card of its own */
     const standing = new Map(yieldedList(c).map(y => [y.id, y]));
     const yieldBtn = k => k === "accept" ? `<button type="button" data-yield="accept" title="{They} {is|are} a prisoner: out of the fight, left on the map."><i class="fa-solid fa-check"></i> Accepted</button>` : k === "fighton" ? `<button type="button" data-yield="fighton" title="The party refuses: {they} {goes|go} back to {their} own mind, and {doesn't|don't} yield again in this fight."><i class="fa-solid fa-hand-fist"></i> Fight on</button>` : `<button type="button" data-yield="own" title="{Their} yield is set aside and {their} Angel tick goes: you play {them}."><i class="fa-solid fa-user"></i> Play it myself</button>`;
-    const yieldCards = [...standing.values()].map(y => { const said = y.words ? `“${esc(y.words)}” (round ${y.round}${y.lang ? `, in ${esc(y.lang)}` : ""})` : null;   /* her own words are never read for markers */
+    const yieldCards = [...standing.values()].map(y => { const said = y.words ? `“${escW(y.words)}” (round ${y.round}${y.lang ? `, in ${esc(y.lang)}` : ""})` : null;   /* her own words are never read for markers */
       return pro(`<div class="leb-card leb-yc" data-ytoken="${esc(y.id)}"><b>${esc(y.name)}</b> has yielded: {they} {stands|stand} down, {takes|take} no hostile actions, and {their} turns pass on their own.<p class="leb-mine">`, formsFor(c, y.id)) + (said ?? pro(`{They} gave {themself} up without words (round ${y.round}).`, formsFor(c, y.id))) + pro(`</p><p class="leb-mine"><b>Accepted:</b> out of the fight, left on the map as a prisoner. <b>Fight on:</b> the party refuses; {they} {goes|go} back to {their} own mind ({fights|fight} or {runs|run}). If an enemy strikes {them} first, {they} {does|do} that anyway.</p><div class="leb-btns">${yieldBtn("accept")}${yieldBtn("fighton")}${yieldBtn("own")}</div></div>`, formsFor(c, y.id)); }).join("");
     const held = prisonerList(c), prisoners = held.length ? `<div class="leb-esc leb-pris"><b>Prisoners</b>${held.map(p => `<div class="leb-t" data-ytoken="${esc(p.id)}"><span>${esc(p.name)} (round ${p.round})</span><button type="button" data-yield="back" title="${pro("{They} {joins|join} the fight again where {they} {stands|stand} and {rolls|roll} initiative.", formsFor(c, p.id))}"><i class="fa-solid fa-rotate-left"></i> Back in the fight</button></div>`).join("")}</div>` : "";
     const groups = tickGroups(tickRows(c)).map(g => `<div class="leb-t leb-g" data-group="${esc(g.key)}" data-ids="${g.ids.join(",")}"><span>${esc(g.label)} (${g.ids.length})</span>${box(g, "run", "Angel runs all of these")}${box(g, "auto", "All of these act without waiting for Do it")}</div>`).join("");
@@ -174,7 +177,7 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     const history = `<p class="leb-btns"><button type="button" data-do="history"><i class="fa-solid fa-clock-rotate-left"></i> History</button></p>`;
     /* escaped monsters (Rhea, 2026-11-08): hidden on this scene, out of the fight; Bring back shows the token where it stands now and rolls initiative */
     const gone = escapedList(c), escaped = gone.length ? `<div class="leb-esc"><b>Escaped</b>${gone.map(e => `<div class="leb-t" data-token="${esc(e.id)}"><span>${esc(e.name)} (round ${e.round}${e.xp != null ? `, ${e.xp} XP not earned` : ""})</span><button type="button" data-do="bringback"><i class="fa-solid fa-rotate-left"></i> Bring back</button></div>`).join("")}</div>` : "";
-    return `<div>${listen}${rows || "<p>No monsters in this fight.</p>"}${problem ? `<p class="leb-warn">${esc(problem)}</p>` : ""}${party}${card}${cmdCards}${sideCards}${yieldCards}${this._orderBox(c)}${mreact}${notebooks}${escaped}${prisoners}${mOtherLine}${applySetting() ? "" : "<p><em>Damage is rolled, not applied: use the card's Damage button.</em></p>"}${history}</div>`;
+    return `<div>${listen}${rows || "<p>No monsters in this fight.</p>"}${problem ? `<p class="leb-warn">${esc(problem)}</p>` : ""}${party}${card}${cmdCards}${sideCards}${yieldCards}${this._speakBox(c)}${this._orderBox(c)}${mreact}${notebooks}${escaped}${prisoners}${mOtherLine}${applySetting() ? "" : "<p><em>Damage is rolled, not applied: use the card's Damage button.</em></p>"}${history}</div>`;
   }
   /** The Remembers fold-out for one creature (Rhea, 2026-11-11): what is sent to Angel, what it perceived and makes nothing of (greyed), her own
       lines, a cross on every line and a box to add one. The GM reads names beside the labels; what is stored and sent holds labels only. */
@@ -229,6 +232,39 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     const go = d.mode ? `<div class="leb-btns"><button type="button" data-ordgo><i class="fa-solid fa-bullhorn"></i> Give the order</button><button type="button" data-ord=""><i class="fa-solid fa-xmark"></i> Cancel</button></div>` : "";
     return mine(`<div class="leb-card leb-ob" data-ordtoken="${esc(cur.id)}">${head}<div class="leb-btns">${["fallBack", "on", "hold", "other"].map(btn).join("")}</div>${fields}${say}${prev}${d.mode ? this._hearHtml(p.hearers) : ""}${refused}${go}</div>`);
   }
+  /** The Speak / Yield box (0.32.0; Rhea's q-19, her two samples approved 2026-11-12): on the card whenever the creature whose turn it is is
+      one she plays (not ticked for Angel, or taken with Play it myself). One sentence to the party in a language on its sheet, shown to each
+      player by their character's languages, or Yield. Who of the party will understand is for her eyes only. The draft is this browser's. */
+  _speakBox(c) {
+    const cur = c.started ? c.combatant?.token : null, p = cur ? speakPreview(c, cur.id) : null; if (!p) return "";
+    if (!this._speak || this._speak.token !== cur.id || this._speak.round !== c.round) this._speak = { token: cur.id, round: c.round, words: "", lang: p.lang };
+    const d = this._speak; if (!p.langs.some(l => l.slug === d.lang)) d.lang = p.lang;
+    const f = formsFor(c, cur.id), mine = t => pro(t, f), langList = p.langs.map(l => l.name).join(", ");
+    const refused = p.refused ? `<p class="leb-warn">It wasn't said: ${esc(p.refused)}.</p>` : "";
+    const yieldBtn = (label, title) => p.can.yield.ok ? `<button type="button" data-sy="yield" title="${esc(title)}"><i class="fa-solid fa-flag"></i> ${label}</button>` : "";
+    const yieldWhy = p.can.yield.ok ? "" : `<p class="leb-mine">${esc(mine("{They} can't yield now: "))}${esc(p.can.yield.why)}.</p>`;
+    if (p.pending) return `<div class="leb-card leb-sy" data-sytoken="${esc(cur.id)}"><p><b>Speak or yield</b> <span class="leb-mine">${escW(p.name)}</span></p><p class="leb-mine">Saying it…</p><div class="leb-btns"><button type="button" data-sy="cancel" title="Take it back before it is said"><i class="fa-solid fa-xmark"></i> Cancel</button></div></div>`;
+    if (!p.langs.length) {   /* a creature with no language: only its sign */
+      if (!p.can.yield.ok && !refused) return "";
+      return `<div class="leb-card leb-sy" data-sytoken="${esc(cur.id)}"><p><b>Yield</b> <span class="leb-mine">· ${escW(p.name)} ${mine("{speaks|speak}")} no language</span></p>${p.can.yield.ok ? `<p class="leb-mine">${mine("{They} can't speak, but {they} can stand down. {Their} sign in chat:")} “${esc(p.sign)}”</p>` : yieldWhy}${refused}<div class="leb-btns">${yieldBtn("Yield", mine("{They} {stands|stand} down: {their} turn ends, and Accepted or Fight on is yours on {their} row."))}</div></div>`;
+    }
+    const head = `<p><b>Speak or yield</b> <span class="leb-mine">· ${escW(p.name)} ${mine("{knows|know}")} ${esc(langList)} · one sentence a round · speaking costs no action</span></p>`;
+    if (p.last) {   /* said (or yielded) this round: the box folds to what was said */
+      const said = p.last.words ? `Said in round ${p.last.r}${p.last.langName ? `, in ${esc(p.last.langName)}` : ""}: “${escW(p.last.words)}”` : `Said nothing in round ${p.last.r}.`;
+      return `<div class="leb-card leb-sy" data-sytoken="${esc(cur.id)}"><p><b>Speak or yield</b> <span class="leb-mine">· ${escW(p.name)}</span></p><div class="leb-box leb-box-info">${said} The next sentence can go out in round ${p.last.r + 1}.</div>${refused}${p.can.yield.ok ? `<div class="leb-btns">${yieldBtn("Yield", mine("{They} {stands|stand} down without another word: {their} turn ends."))}</div><p class="leb-mine">Yield stays available the same round: a monster can bargain and then give up.</p>` : yieldWhy}</div>`;
+    }
+    if (!p.can.say.ok && !p.can.yield.ok) return `<div class="leb-card leb-sy">${head}<p class="leb-mine">${esc(mine("{They} can't speak now: "))}${esc(p.can.say.why)}.</p>${refused}</div>`;
+    const ln = p.langs.find(l => l.slug === d.lang)?.name ?? d.lang, u = whoUnderstands(p.party, d.lang);
+    const knows = u.knows.length ? `<div class="leb-hr"><span class="leb-yes">✓</span><span>${escW(u.knows.join(" · "))} ${u.knows.length === 1 ? "knows" : "know"} ${esc(ln)}</span></div>` : "";
+    const not = `<div class="leb-hr"><span class="leb-no">✗</span><span>${u.not.length ? `${escW(u.not.join(" · "))} ${u.not.length === 1 ? "doesn't" : "don't"}` : u.knows.length ? "nobody else" : "nobody in the party knows it"}: anyone without ${esc(ln)} reads “${p.voice ? "A voice shouts" : "Shouts"} something in ${esc(ln)}.”</span></div>`;
+    const voice = p.voice ? `<p class="leb-mine">${mine("{They} {is|are} hidden from the party: players see the speaker as “A voice”, and speaking keeps {them} hidden.")}</p>` : "";
+    const form = p.can.say.ok ? `<div class="leb-of"><label>${mine("{They} {says|say}")}</label><input type="text" data-sy-f="words" maxlength="${SAY_CAP}" placeholder="One sentence to the party" value="${escW(d.words)}"></div>
+      <div class="leb-of"><label>In</label><select data-sy-f="lang">${p.langs.map(l => `<option value="${esc(l.slug)}" ${l.slug === d.lang ? "selected" : ""}>${esc(l.name)}</option>`).join("")}</select><span class="leb-oh" style="flex:0 1 auto">(${esc(p.langs.find(l => l.slug === p.lang)?.name ?? "")} when ${mine("{they} {knows|know}")} it; pick another)</span></div>
+      <div class="leb-hear"><p class="leb-mine">WHO WILL UNDERSTAND IT</p>${knows}${not}</div>${voice}` : `<p class="leb-mine">${esc(mine("{They} can't speak now: "))}${esc(p.can.say.why)}.</p>`;
+    const btns = `<div class="leb-btns">${p.can.say.ok ? `<button type="button" data-sy="speak" class="leb-first"><i class="fa-solid fa-comment"></i> Speak</button>` : ""}${yieldBtn(p.can.say.ok ? "Yield with these words" : "Yield", mine("{They} {stands|stand} down: {their} turn ends, and Accepted or Fight on is yours on {their} row. The words are optional."))}${p.can.say.ok ? `<button type="button" data-sy="clear"><i class="fa-solid fa-eraser"></i> Clear</button>` : ""}</div>`;
+    const foot = `<p class="leb-mine">Speak posts one public line and the box folds to “Said in round ${c.round}: …”. ${mine("Yield ends {their} turn and stands {them} down, with Accepted and Fight on on {their} row, the same as a yield Angel plans.")}</p>`;
+    return `<div class="leb-card leb-sy" data-sytoken="${esc(cur.id)}">${head}${form}${yieldWhy}${refused}${btns}${foot}</div>`;
+  }
   /** Hold here's square from a click on the map (as the Change panel's Pick). */
   _pickOrder() {
     const d = this._order; if (!d || !canvas.ready) return; this._endPick?.();
@@ -270,9 +306,9 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
   /** While she types in the Change panel, a redraw waits (the field would be replaced mid-word); it happens when the panel loses focus. In a notebook
       fold-out the same goes for its box and buttons, but not for the fold-out's own title: a click that opens or closes it leaves focus on that
       `<summary>`, and counting it held every redraw until she clicked elsewhere (0.29.1, bug B-2: a ready plan showed as "Waiting for a plan"). */
-  _typing() { if (this._pressing) return true; const a = document.activeElement; return !!a && !!this.element?.contains(a) && (!!a.closest?.(".leb-edit") || (!!a.closest?.(".leb-nb") && a.tagName !== "SUMMARY") || (!!a.closest?.(".leb-ob") && a.tagName === "INPUT" && a.type === "text")); }
+  _typing() { if (this._pressing) return true; const a = document.activeElement; return !!a && !!this.element?.contains(a) && (!!a.closest?.(".leb-edit") || (!!a.closest?.(".leb-nb") && a.tagName !== "SUMMARY") || (!!a.closest?.(".leb-ob") && a.tagName === "INPUT" && a.type === "text") || (!!a.closest?.(".leb-sy") && a.tagName === "INPUT" && a.type === "text")); }
   render(...args) { if (this.rendered && this._typing()) { this._deferred = true; return this; } return super.render(...args); }
-  async _onClose(options) { this._pressing = false; this._endPick?.(); this._draft = null; this._deferred = false; this._nbDraft = {}; this._nbPrev = {}; this._order = null; return super._onClose?.(options); }   /* the window object is reused when reopened: a draft must not come back with it */
+  async _onClose(options) { this._pressing = false; this._endPick?.(); this._draft = null; this._deferred = false; this._nbDraft = {}; this._nbPrev = {}; this._order = null; this._speak = null; return super._onClose?.(options); }   /* the window object is reused when reopened: a draft must not come back with it */
   /** The Change panel's buttons. Sending never waits for Angel: the card follows the request as usual. */
   async _change(a, c, id, r, el) {
     if (a === "change") { this._draft = { id, fp: planPrint(r), edits: [], note: "" }; return this.render(); }
@@ -364,6 +400,17 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     /* a redraw while she types would take the field away mid-word: wait until the panel loses focus (render is deferred, see render below) */
     root.querySelector(".leb-edit")?.addEventListener("focusout", () => setTimeout(() => { if (this._deferred && !this.element?.querySelector(".leb-edit")?.contains(document.activeElement)) { this._deferred = false; this.render(); } }, 0));
     root.querySelectorAll(".leb-edit [data-pick]").forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); this._pick(Number(el.closest("[data-k]").dataset.k), el.dataset.pick); }));
+    /* the Speak / Yield box (0.32.0): the draft is this browser's; a press goes to the runner like her orders */
+    root.querySelectorAll(".leb-sy [data-sy-f]").forEach(el => el.addEventListener(el.tagName === "SELECT" ? "change" : "input", () => { const d = this._speak; if (!d) return; d[el.dataset.syF] = el.value; if (el.tagName === "SELECT") { this._deferred = false; super.render(); } }));
+    root.querySelectorAll('.leb-sy input[type=text]').forEach(el => { el.addEventListener("focusout", ev => { if (ev.relatedTarget?.closest?.(".leb-sy")) return;   /* a press inside the box: as the orders box */
+        setTimeout(() => { if (!this._typing() && this.rendered && this._deferred) { this._deferred = false; super.render(); } }, 0); });
+      el.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); el.blur(); } }); });
+    root.querySelectorAll(".leb-sy [data-sy]").forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); const d = this._speak, a = el.dataset.sy; if (!d || this._speaking) return;
+      if (a === "clear") { d.words = ""; this._deferred = false; return super.render(); }
+      if (a === "cancel") return cancelSpeak(c, d.token).catch(e => ui.notifications.error(e.message));
+      if (a === "speak" && !d.words.trim()) return ui.notifications.warn("Write the sentence first.");
+      this._speaking = true; el.disabled = true;
+      gmSpeak(c, d.token, { words: d.words, lang: d.lang, yield: a === "yield" }).catch(e => ui.notifications.error(e.message)).finally(() => { this._speaking = false; this._deferred = false; if (this.rendered) super.render(); }); }));
     /* the Give orders box and the hearing calls (0.28.0) */
     root.querySelectorAll(".leb-ob [data-ord]").forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); const d = this._order; if (!d) return; d.mode = el.dataset.ord || null; if (!d.mode) Object.assign(d, { targetId: "", at: null, job: "", text: "", say: "" }); this._deferred = false; super.render(); }));
     root.querySelectorAll(".leb-ob [data-of]").forEach(el => el.addEventListener(el.tagName === "SELECT" ? "change" : "input", () => { const d = this._order; if (!d) return; d[el.dataset.of] = el.value; if (el.tagName === "SELECT") { this._deferred = false; super.render(); } }));

@@ -11,7 +11,7 @@ import { bandOf, bandViews, joinBand, removeBand, setBand } from "./bandlib.mjs"
 import { hasMarker, pro } from "./pronoun.mjs";
 import { dropLibraryCache, dropOwn, giveOwn, kindFacts, libraryEntries, libraryExport, libraryGet, libraryImport, libraryPut, libraryRemove, mindLayers, mindOf, mindRows, pronounOf, rowProfile, setLines } from "./library.mjs";
 import { bandLog, bandLogWords, giveOrder, onRenderOrder, orderCard, orderPreview, setHearCall } from "./fight.mjs";
-import { acceptYield, backInFight, onRenderSay, prisonerList, refuseYield, yieldedList } from "./fight.mjs";
+import { acceptYield, backInFight, gmSpeak, onRenderSay, prisonerList, refuseYield, speakPreview, yieldedList } from "./fight.mjs";
 import { answerCommand, checkSides, commandList, dropBeliefs, onSideChange, pointCard, sideList } from "./fight.mjs";
 import { apiAlive, apiSpend, apiWanted, fightRoute, fixRoute, handOff, modelOf, setApiNote, setModelPick, setRoute, wakeAngel } from "./fight.mjs";
 import { chooseFor, onReactionCard, partyReactors, setReactionUsed, doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCombatGone, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, onMemoryCard, onMemoryUpdate, onMemoryHp, notebookOf, previewRemember, rememberAdd, rememberCross, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
@@ -141,7 +141,7 @@ Hooks.once("ready", () => {
       orders: { preview: orderPreview, give: giveOrder, hear: setHearCall, card: orderCard, log: bandLog, words: bandLogWords },
       /* speech and yielding (0.29.0): who stands down and this fight's prisoners; `accept`, `fightOn` (`{ own: true }` is Play it myself) and
          `back` are the GM's buttons on Monster Turns: never Angel's door (a monster yields from its plan, with a "say" step) */
-      speech: { yielded: yieldedList, prisoners: prisonerList, accept: acceptYield, fightOn: refuseYield, back: backInFight },
+      speech: { yielded: yieldedList, prisoners: prisonerList, accept: acceptYield, fightOn: refuseYield, back: backInFight, box: speakPreview, say: gmSpeak },
       /* tier 3d (0.30.0): `commands.list` the commands in force (an animal's row and card) and `commands.answer(combat, tokenId, "own" | "angel")`,
          the GM's buttons after a failed command (never Angel's door: a handler commands from its plan, with a "command-animal" step);
          `pointOut.card` the GM's box under a Point Out step; `sides.list` who changed sides or became a player's, and `sides.check(combat)`,

@@ -11,6 +11,9 @@ export const SAY_CAP = 160;
 const str = v => String(v ?? "").replace(/\s+/g, " ").trim(), esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 /** A label in a sentence said aloud is nobody's name: the monster points ("that one"). The table never reads "E2", and a label is never turned
     into a party member's name the monster doesn't know (design review 11). */
+/** Words someone typed, kept from every pronoun pass (a window's net turns its whole page, 0.32.0 review 2): a zero-width space after each "{"
+    so no marker can match; it shows as nothing. */
+export const literal = s => String(s ?? "").replace(/\{/g, "{\u200b");
 export const spoken = s => str(s).replace(/\b[EM]\d{1,3}\b/g, "that one");
 
 /** A `say` step, cleaned: { intent, words }. A yield may come with no words (a creature that can't speak gives itself up by what it does). */
@@ -53,7 +56,7 @@ const INTENT = { yield: "a yield", bargain: "a bargain", threat: "a threat" };
     view: { gm, knows, understood: [n, m] | null }. With no view it is the text the message itself stores: what a player who doesn't know the
     language reads, so nothing more is on the screen of a browser the render hook never reached. "" when there is nothing a player may see. */
 export function sayHtml(flag = {}, view = {}, forms = IT) {
-  const lang = flag.langName ? ` in ${esc(flag.langName)}` : "", sign = flag.gesture && !flag.voice ? `<p><em>${esc(flag.gesture)}</em></p>` : "", words = spoken(flag.words);
+  const lang = flag.langName ? ` in ${esc(flag.langName)}` : "", sign = flag.gesture && !flag.voice ? `<p><em>${esc(flag.gesture)}</em></p>` : "", words = literal(spoken(flag.words));   /* typed words: never turned by the chat net */
   if (view.gm) {
     const small = [flag.voice ? `${esc(flag.who ?? "A hidden creature")} (hidden)` : "", flag.langName && words ? `In ${esc(flag.langName)}` : "", INTENT[flag.intent] ?? "",
       words && Array.isArray(view.understood) ? `understood by ${view.understood[0]} of the party's ${view.understood[1]}` : ""].filter(Boolean).join(" · ");
@@ -67,14 +70,17 @@ export function sayHtml(flag = {}, view = {}, forms = IT) {
     was one, else what it ordered, in words made for players (`pwords`: no creature the GM has hidden is named). */
 export function orderHtml(o = {}, forms = IT) {
   const lang = esc(o.lang ?? pro("{their} own tongue", forms));
-  return o.say ? `<p><em>In ${lang}:</em> “${esc(spoken(o.say))}”</p>` : o.pwords ? `<p><em>In ${lang}, to ${pro("{their}", forms)} band:</em> ${esc(o.pwords)}</p>` : "";
+  return o.say ? `<p><em>In ${lang}:</em> “${esc(literal(spoken(o.say)))}”</p>` : o.pwords ? `<p><em>In ${lang}, to ${pro("{their}", forms)} band:</em> ${esc(o.pwords)}</p>` : "";
 }
 /** Does damage end a yield (R3-7: "hit after it yields, it goes back to its own mind")? Only a blow from an enemy: healing, lasting damage and
     anything from its own side or from nobody the card names leave it standing down (design review 3). */
 export const breaksYield = ({ healing = false, lasting = false, enemy = false } = {}) => !healing && !lasting && enemy === true;
 /** Yielding in the fight's log, in the GM's words. Entries: { k: "accepted" | "fighton" | "struck" | "own" | "back", r, tok, by }. */
 export function speechLogWords(e, { nameOf = id => id, formsOf = () => IT } = {}) {
-  const who = nameOf(e?.tok); return pro(speechLogIt(e, who, nameOf), formsOf(e?.tok));   /* the creature's own pronoun */
+  const who = nameOf(e?.tok), line = pro(speechLogIt(e, who, nameOf), formsOf(e?.tok));   /* the creature's own pronoun */
+  /* her own words (the Speak / Yield box, 0.32.0) go after the turned line: what she typed is never read for markers */
+  const words = literal(spoken(e?.words));
+  return (e?.k === "said" || e?.k === "gave") && words ? `${line} “${words}”` : line;
 }
 function speechLogIt(e, who, nameOf) {
   if (e?.k === "accepted") return `${who}'s yield was accepted: a prisoner, out of the fight.`;
@@ -82,6 +88,24 @@ function speechLogIt(e, who, nameOf) {
   if (e?.k === "struck") return `${who} was struck${e.by ? ` by ${nameOf(e.by)}` : ""} after {they} yielded: {they} {goes|go} back to {their} own mind.`;
   if (e?.k === "own") return `${who}'s yield was set aside: the GM plays {them}.`;
   if (e?.k === "back") return `${who}, a prisoner, is back in the fight.`;
+  /* the Speak / Yield box (0.32.0): a monster the GM plays speaks or gives itself up; the words follow (speechLogWords) */
+  if (e?.k === "said") return `${who} spoke to the party${e.langName ? ` in ${e.langName}` : ""} (the GM's line):`;
+  if (e?.k === "gave") return `${who} gave {themself} up (the GM's yield): {they} {stands|stand} down, and Accepted or Fight on is the GM's${e.words ? `. {They} said${e.langName ? `, in ${e.langName}` : ""}:` : ", without words."}`;
   return "";
 }
-export const SPEECH_LOG = ["accepted", "fighton", "struck", "own", "back"];
+export const SPEECH_LOG = ["accepted", "fighton", "struck", "own", "back", "said", "gave"];
+/** The Speak / Yield box (Rhea's q-19, samples approved 2026-11-12): who of the party will understand a line in a language, for her eyes only.
+    party: [{ name, langs }] (the party's characters in the fight). Out: { knows: [names], not: [names] }. Never sent to a thinker. */
+export function whoUnderstands(party = [], lang = null) {
+  const knows = [], not = []; for (const p of party ?? []) (lang && (p?.langs ?? []).includes(lang) ? knows : not).push(p?.name ?? "someone");
+  return { knows, not };
+}
+/** Her line from the box, cleaned: { ok, words, lang } or { ok: false, why }. A yield may come with no words; a creature with no language says
+    nothing; the language must be one on its sheet (her pick; the module's own pick is `speechLanguage`). */
+export function cleanGmSay({ words = "", lang = null, yield: gives = false } = {}, langs = [], forms = IT) {
+  const w = cutWords(str(words), SAY_CAP);
+  if (!w) return gives ? { ok: true, words: "", lang: null } : { ok: false, why: "Write the sentence first." };
+  if (!(langs ?? []).length) return { ok: false, why: pro("{They} {speaks|speak} no language: {they} can only yield, without words.", forms) };
+  const l = lang && langs.includes(lang) ? lang : speechLanguage(langs);
+  return { ok: true, words: w, lang: l };
+}

@@ -2,7 +2,7 @@
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. It runs Strikes, Strides, Steps, Crawls, Fly, Swim, Climb, Release, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek, Interact, Delay and fleeing off the map; what is still to come is in the repo's docs/features and the project's plan doc. */
 import { handedOn, untouched, settleFrom, settleWait, CHANGEABLE, NOTE_MAX, changeProblem, describeStep, nameWords, noteForThinker, planPrint } from "./turn.mjs";
-import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, SAVE_MULT, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, shouldSink, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, nextCommand, nextPoint, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract, nextClimb, climbResult } from "./turn.mjs";
+import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, SAVE_MULT, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, shouldSink, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, nextCommand, nextPoint, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract, nextClimb, climbResult, tookTurn } from "./turn.mjs";
 import { BURROW_DEPTH, FT, distanceBetween, burrowWorld, crossesWalls, cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, heightWhenCut, rockSquares, routeWordsIt, routeWords, swimWorld, glideWorld, treeTop, treesBeside, wallSquares, waterKinds, waterUnder } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, visibleConditions } from "./perceive.mjs";
 import { mindOf, pronounOf } from "./library.mjs";
@@ -17,7 +17,7 @@ import { aimArea, aimWords, alliesCaught, burstReachable, caughtBy, shapeOf, squ
 import { AC_ROWS, CHOICES, GUILT, KNOWN, MONSTER_REACTIONS, answerWords, barrierWords, acAdds, canReact, castRank, coverInDc, choiceWords, earthLess, glimpseResistance, guiltLines, guiltWords, harmWords, missWords, notAskedWords, shieldGrantsBlock, spentRows, untilNextTurnEnds, readCard, cardTrigger, degreeAgainst, equipTrigger, finished, fits, gateWords, moveTrigger, proneOffTrigger, reactionStrike, reactionsOf, routeGates, squaresAlong, untilFor } from "./react.mjs";
 import { MAX_TRIES, choiceOut, cleanChoice, cleanMeta, cleanPlan, eventOut, hello, isChoice, listening, live, nextSeq, pickEvent, stale, stallOf, text, waitSeconds } from "./brain.mjs";
 import { esc } from "./journal.mjs";
-import { breaksYield, gestureWords, orderHtml, sayHtml, speechFor, speechForPacket, speechLanguage, understands } from "./speech.mjs";
+import { breaksYield, cleanGmSay, gestureWords, orderHtml, sayHtml, speechFor, speechForPacket, speechLanguage, understands } from "./speech.mjs";
 import { canCommand, commandForPacket, commandInForce, commandSpent, commandTag, commandWords, degreeOf, outcomeOf, resultWords } from "./command.mjs";
 import { allyGets, allyResult, canPointOut, hasLost, pointLines, previewLines, squareFeet, withBelief, wrongSquare } from "./pointout.mjs";
 import { changedForPacket, sideCardWords, sideChange, sideTag, sideWord } from "./sides.mjs";
@@ -549,6 +549,7 @@ async function leaveWaiting(combat) {
 function act(combat) {
   for (const [id, x] of Object.entries(turns(combat).requests ?? {})) if (x.reaction && x.go && x.state === "ready") doReaction(combat, id).catch(e => console.error(`${ID} | reaction`, e));   /* Do it on a monster's reaction, pressed in another GM's browser */
   if (Object.keys(ordersOf(combat).pending ?? {}).length) runPending(combat).catch(e => console.error(`${ID} | order`, e));   /* her Give orders box (0.28.0) */
+  if (Object.keys(turns(combat).speech?.pending ?? {}).length) runSpeech(combat).catch(e => console.error(`${ID} | speech`, e));   /* her Speak / Yield box (0.32.0) */
   /* Let Angel plan it, after a command critically failed (0.30.0): the turn that waited for her is asked for now */
   { const ct = combat.combatant?.token ?? null, cc = ct ? turns(combat).commands?.[ct.id] : null;
     if (cc?.angel && cc.used?.round === combat.round && !Object.values(turns(combat).requests ?? {}).some(x => !x.reaction && x.combatantId === combat.combatant.id && x.round === combat.round && !x.delayed && !x.passed)) onTurnChange(combat).catch(e => console.error(`${ID} | turn`, e)); }
@@ -1054,7 +1055,8 @@ export function modelOf(tok, combat = null) {
   /* the party's level: the brief's, else the sheets' most common; unknown (no party found) means the rule can't call anyone 2+ above (review 12) */
   const pl = scene?.getFlag(ID, "brief")?.partyLevel, partyLevel = Number.isFinite(pl) ? pl : partyLevels().length ? suggestedLevel() : null;
   const pick = tok.getFlag(ID, "modelPick");
-  return modelFor({ pick: pick === "opus" || pick === "sonnet" ? pick : null, leads, casts, level: Number.isFinite(actor.level) ? actor.level : null, partyLevel });
+  const m = modelFor({ pick: pick === "opus" || pick === "sonnet" ? pick : null, leads, casts, level: Number.isFinite(actor.level) ? actor.level : null, partyLevel });
+  return m.why ? { ...m, why: pro(m.why, P(tok, combat)) } : m;   /* "leads {their} band": its own pronoun (0.32.0, 0.31.0's known gap) */
 }
 /** Her tick on Monster Minds: "opus", "sonnet", or null to follow the rule again. On each token given. Any GM. */
 export async function setModelPick(scene, tokenIds, pick) {
@@ -3810,7 +3812,10 @@ async function passTurn(combat, combatant, tok, why = "yielded") {
   const still = () => why === "command" ? commandPasses(combat, tok) : !!yieldOf(tok);   /* 0.30.0: an animal whose handler's command failed does nothing too */
   const had = Object.entries(turns(combat).requests).filter(([, r]) => !r.reaction && r.combatantId === combatant.id && r.round === round && !r.delayed);
   /* this turn is already passing, or is the one it yielded on: the timer lives on this page only, so a reload starts it again (review 5) */
-  if (had.length) { const p = had.find(([, r]) => (r.passed || r.yielded) && r.state === "done"); if (p) passAfter(combat, p[0]); return; }
+  if (had.length) { const p = had.find(([, r]) => (r.passed || r.yielded) && r.state === "done"); if (p) passAfter(combat, p[0]);
+    /* she played this turn and yielded from her box (0.32.0, review 4): the runner's timer died with a reload, so the turn is ended here */
+    else if (why === "yielded" && bandLog(combat).some(e => e.k === "gave" && e.tok === tok.id && e.r === round)) endYieldTurn(combat, tok, combatant.id, round);
+    return; }
   starting.add(key); let again = false;
   try {
     const settled = await settle(combat, combatant);   /* its start-of-turn effects first, as for any turn */
@@ -3881,6 +3886,88 @@ export async function backInFight(combat, tokenId) {
   if (c) await combat.rollInitiative([c.id], { skipDialog: true });
   await saveTurns(combat, speechLog(combat, { k: "back", tok: tok.id }));
   return { name: tok.name, initiative: c?.initiative ?? null };
+}
+/* ---------- her Speak / Yield box (0.32.0; Rhea's q-19, samples approved 2026-11-12: "That looks ok") ---------- */
+/* On the card of a monster she plays herself: one sentence to the party, shown by languages as Angel's are, or Yield (it stands down with Accepted
+   and Fight on, the same as a yield Angel plans). Her press waits on the turns flag (`speech.pending.<token>`) for the runner, as her Give orders
+   box does, so the line, the yield, the allies' notebooks and the end of the turn are done on the page that does them for Angel's monsters. */
+const speakingNow = new Set();
+/** The box, on any GM's page: null when there is no box (no fight, not its turn, a creature Angel runs, the party's side, one that stands down).
+    Out: { id, name, can: { say, yield }, langs: [{ slug, name }], lang, party: [{ name, langs }], voice, pending, refused, last }. */
+export function speakPreview(combat, tokenId) {
+  const tok = combat?.scene?.tokens.get(tokenId); if (!tok || !combat.started || combat.combatant?.tokenId !== tok.id || !runnable(tok)) return null;
+  if (onParty(tok.actor) || partyMember(tok.actor) || yieldOf(tok)) return null;
+  if (tok.getFlag(ID, "run") && !tookTurn(turns(combat).requests, combat.round, combat.combatant?.id)) return null;   /* Angel's, until she takes the turn with Play it myself */
+  const ctx = speechCtx(combat, tok), langs = langsOf(tok.actor), sp = turns(combat).speech ?? {};
+  const party = [...new Set(combat.combatants.contents.map(c => c.actor).filter(a => a?.isOfType?.("character") && a.alliance === "party"))].map(a => ({ name: a.name, langs: langsOf(a) }));
+  const last = bandLog(combat).filter(e => (e.k === "said" || e.k === "gave") && e.tok === tok.id && e.r === combat.round).at(-1) ?? null;
+  const refused = sp.refused?.[tok.id]?.round === combat.round ? sp.refused[tok.id].why ?? null : null;
+  return { id: tok.id, name: tok.name, can: ctx, langs: langs.map(slug => ({ slug, name: langName(slug) })), lang: speechLanguage(langs), party, voice: unseenByParty(tok), pending: !!sp.pending?.[tok.id], refused, last,
+    sign: gestureWords({ armed: heldItems(tok.actor).length > 0, forms: P(tok, combat) }) };
+}
+/** Her press: Speak (words, lang) or Yield (words optional). Checked here so the box answers at once; the runner checks again when it says it. */
+export async function gmSpeak(combat, tokenId, { words = "", lang = null, yield: gives = false } = {}) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  const p = speakPreview(combat, tokenId); if (!p) throw new Error("That creature can't speak through this box now.");
+  const tok = combat.scene.tokens.get(tokenId), forms = P(tok, combat), gate = gives ? p.can.yield : p.can.say;
+  if (!gate.ok) throw new Error(`${tok.name} can't ${gives ? "yield" : "speak"} now: ${gate.why}.`);
+  const c = cleanGmSay({ words: gives && !p.can.say.ok ? "" : words, lang, yield: gives }, langsOf(tok.actor), forms); if (!c.ok) throw new Error(c.why);
+  if (p.pending) throw new Error("A line is already waiting to be said.");   /* review 5: a second press would wipe out the first */
+  const away = runnerProblem(); if (away) throw new Error(away);   /* nobody to say it: told now, as for her orders */
+  await saveTurns(combat, { [`speech.pending.${tok.id}`]: whole({ words: c.words, lang: c.lang, yield: !!gives, round: combat.round, ts: Date.now() }), [`speech.refused.${tok.id}`]: gone() });
+}
+/** Her press taken back while it waits for the runner (review 6: a runner that went away left the box with no buttons). */
+export async function cancelSpeak(combat, tokenId) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  await saveTurns(combat, { [`speech.pending.${tokenId}`]: gone() });
+}
+/** The runner says her line: the round's sentence and the log line in one write, the token marked for a yield, the chat line, the allies'
+    notebooks for a yield, and a yield ends the turn (waiting out the game's pause). A refusal is written where the box shows it. */
+async function runSpeech(combat) {
+  if (!isRunner()) return;
+  for (const [tokenId, p] of Object.entries(turns(combat).speech?.pending ?? {})) {
+    const lock = `${combat.id}.${tokenId}`; if (!p || speakingNow.has(lock)) continue; speakingNow.add(lock);
+    const refuse = why => saveTurns(combat, { [`speech.pending.${tokenId}`]: gone(), [`speech.refused.${tokenId}`]: whole({ why, round: combat.round, at: Date.now() }) });
+    try {
+      const tok = combat.scene.tokens.get(tokenId); if (!tok) { await refuse("its token is gone"); continue; }
+      if (p.round !== combat.round || combat.combatant?.tokenId !== tok.id) { await refuse("the turn moved on before it was said"); continue; }
+      const cid = combat.combatant.id;   /* whose turn a yield ends: read before anything waits (review 1) */
+      /* a yield cut off after its token mark (a reload): this press marked it, so it carries on from there (review 3) */
+      const resumed = p.yield && yieldOf(tok)?.combat === combat.id && (tok.getFlag(ID, "yielded")?.at ?? 0) >= (p.ts ?? Infinity);
+      const ctx = speechCtx(combat, tok), gate = p.yield ? ctx.yield : ctx.say; if (!gate.ok && !resumed) { await refuse(gate.why); continue; }
+      if (!await ensureScene(combat)) { await refuse(cantOpen()); continue; }
+      const words = p.words && (ctx.say.ok || resumed) ? String(p.words) : "", lang = words ? (langsOf(tok.actor).includes(p.lang) ? p.lang : speechLanguage(langsOf(tok.actor))) : null, ln = lang ? langName(lang) : null;
+      /* giving itself up shows it, as a planned yield does (0.29.0 review 10); speaking keeps it hidden */
+      let shown = ""; if (p.yield && !resumed) shown = await showYielder(combat, tok).catch(e => { console.warn(`${ID} | out of hiding`, e); return ""; });
+      /* the token first: cut off after it, the press is still waiting and `resumed` finishes it; the other way round left a logged yield that wasn't one */
+      if (p.yield && !resumed) await tok.setFlag(ID, "yielded", { round: combat.round, at: Date.now(), combat: combat.id, words: words || null, lang });
+      const key = lineKey(Date.now(), 0, foundry.utils.randomID(3)), entry = { r: combat.round, at: Date.now(), k: p.yield ? "gave" : "said", tok: tok.id, by: "gm", ...(words ? { words } : {}), ...(lang ? { lang, langName: ln } : {}), ...(shown ? { shown } : {}) };
+      await saveTurns(combat, { [`orders.log.${key}`]: entry, ...(words ? { [`speech.last.${tok.id}`]: combat.round } : {}), [`speech.pending.${tokenId}`]: gone(), [`speech.refused.${tokenId}`]: gone() });
+      if (p.yield) noteEvent(combat, { kind: "deed", pre: "gave itself up", hasTarget: false }, tok);
+      const gesture = p.yield ? gestureWords({ armed: heldItems(tok.actor).length > 0, forms: P(tok, combat) }) : null;
+      const msg = await sayChat(combat, tok, { words, lang, langName: ln, intent: p.yield ? "yield" : "gm", gesture, voice: unseenByParty(tok), who: tok.name }).catch(e => { console.warn(`${ID} | say chat`, e); return null; });
+      if (msg) await saveTurns(combat, { [`orders.log.${key}.msg`]: msg });
+      if (p.yield) endYieldTurn(combat, tok, cid);
+    } catch (e) { console.error(`${ID} | speech`, e); await refuse(`something went wrong (${e.message})`).catch(() => {}); }
+    finally { speakingNow.delete(lock); }
+  }
+}
+/** A yield from her box brings it out of hiding (Visioner), as any action but Hide, Sneak or Step does; out: a line for her, or "". */
+async function showYielder(combat, tok) {
+  if (turns(combat).stealth?.[tok.id]) await saveTurns(combat, { [`stealth.${tok.id}`]: gone() });
+  const who = hiddenFromWho(tok); if (!who.length) return "";
+  if (game.settings.get(VISIONER, "autoVisibilityEnabled")) return `${tok.name} ${pro("was hidden; Visioner's automatic visibility decides whether {they} still {is|are}.", P(tok, combat))}`;
+  const vis = visionerApi(); for (const t of who) await vis.setVisibility(t.id, tok.id, "observed");
+  return `${tok.name} was hidden from ${listWords(who.map(t => t.name))}; ${pro("giving {themself} up makes {them} observed by them.", P(tok, combat))}`;
+}
+/** Her Yield ends its turn ("Yield ends its turn", her sample), once the game is unpaused, if it is still its turn and it still stands down. */
+function endYieldTurn(combat, tok, cid, round = combat.round) {
+  const key = `${combat.id}.${round}.${cid}`; if (ending.has(key)) return; ending.add(key);   /* one end a turn, shared with passAfter */
+  setTimeout(async () => {
+    try { while (game.paused) await new Promise(r => setTimeout(r, 300));
+      if (combat.started && combat.round === round && combat.combatant?.id === cid && combat.combatant?.tokenId === tok.id && yieldOf(tok)) await combat.nextTurn();
+    } catch (e) { console.error(`${ID} | ending a yielded turn`, e); } finally { ending.delete(key); }
+  }, 300);
 }
 /** For the window: who stands down now ([{ id, name, round, words, lang }]) and this fight's prisoners ([{ id, name, round }]). */
 export function yieldedList(combat) {

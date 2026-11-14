@@ -6,7 +6,7 @@
    Pure: no Foundry globals, so the unit tests run it in Node. Rhea's decisions and the review's lines are in docs/features/orders.md. */
 import { PLANNED, nextInLine } from "./bands.mjs";
 import { cutWords } from "./minds.mjs";
-import { SPEECH_LOG, speechLogWords } from "./speech.mjs";
+import { SPEECH_LOG, literal, speechLogWords } from "./speech.mjs";
 import { COMMAND_LOG, commandLogWords } from "./command.mjs";
 import { SIDE_LOG, sideLogWords } from "./sides.mjs";
 import { IT, pro } from "./pronoun.mjs";
@@ -164,7 +164,7 @@ export function logWords(e, { nameOf = id => id, named = s => s, langName = l =>
   const list = xs => xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`, band = bandName ? ` (${bandName})` : "";
   if (e?.k === "order") {
     const heard = (e.heard ?? []).map(nameOf), missed = Object.entries(e.missed ?? {}).map(([id, why]) => `${nameOf(id)} (${why})`);
-    return `${nameOf(e.from)}${band} ordered: ${named(e.words ?? "")}${e.say ? `. Said${e.lang ? ` in ${langName(e.lang)}` : ""}: “${e.say}”` : e.lang ? ` (in ${langName(e.lang)})` : ""}. ${heard.length ? `Heard by ${list(heard)}.` : "Nobody heard it."}${missed.length ? ` Not by ${list(missed)}.` : ""}${e.by === "gm" ? " Given by the GM." : ""}`;
+    return `${nameOf(e.from)}${band} ordered: ${named(e.words ?? "")}${e.say ? `. Said${e.lang ? ` in ${langName(e.lang)}` : ""}: “${literal(e.say)}”` : e.lang ? ` (in ${langName(e.lang)})` : ""}. ${heard.length ? `Heard by ${list(heard)}.` : "Nobody heard it."}${missed.length ? ` Not by ${list(missed)}.` : ""}${e.by === "gm" ? " Given by the GM." : ""}`;
   }
   if (e?.k === "fell") {
     const who = pro(`${nameOf(e.was)}${band}, the leader, ${FELL[e.state] ?? "is down"}.`, formsOf(e.was));

@@ -6,7 +6,7 @@ import { ID, findCreatures } from "../builder.mjs";
 import { CAPS, LAYER_WORDS, LIBRARY_LINES, LINES, LINE_LABEL, PICKS, SUGGEST, assemble, cleanLine, libraryChanges, lineWarnings, lineWords, peopleKey } from "../minds.mjs";
 import { BAND_CAPS, FALL_BACK, NATURE, NATURE_LABEL, NATURE_PICKS, NATURE_SUGGEST, NATURE_LAYER_WORDS, PLANNED, bandId, cleanPart, natureWords } from "../bands.mjs";
 import { bandViews, joinBand, removeBand, setBand } from "../bandlib.mjs";
-import { dropOwn, giveOwn, kindFacts, libraryEntries, libraryExport, libraryGet, libraryImport, libraryPut, libraryRemove, mindRows, partyPeople, rowActor, rowProfile, setLines } from "../library.mjs";
+import { pronounOf, dropOwn, giveOwn, kindFacts, libraryEntries, libraryExport, libraryGet, libraryImport, libraryPut, libraryRemove, mindRows, partyPeople, rowActor, rowProfile, setLines } from "../library.mjs";
 import { formsOf, fromGender, pro } from "../pronoun.mjs";
 import { modelOf, setModelPick } from "../fight.mjs";
 import { modelName } from "../route.mjs";
@@ -65,7 +65,7 @@ export class MindsApp extends ApplicationV2 {
     let at = bandSel ? null : this.find(rows);
     if (!at && !bandSel && rows.length) { this.sel = refKey(rows[0].ref); this.draft = {}; at = this.find(rows); }
     const built = rows.filter(r => Number.isInteger(r.ref.row)), loose = rows.filter(r => r.ref.kind), party = rows.filter(r => r.party);
-    const item = r => `<div class="lm-it${refKey(r.ref) === this.sel ? " on" : ""}" data-sel="${esc(refKey(r.ref))}">${esc(r.name)} <small>${r.party ? (r.owned ? "a player's" : "Angel plays it") : `× ${r.count}`}</small></div>${r.own.map(o => `<div class="lm-it sub${refKey(o.ref) === this.sel ? " on" : ""}" data-sel="${esc(refKey(o.ref))}">${esc(o.name)} <small>own profile</small></div>`).join("")}`;
+    const item = r => `<div class="lm-it${refKey(r.ref) === this.sel ? " on" : ""}" data-sel="${esc(refKey(r.ref))}">${esc(r.name)} <small>${r.party ? (r.owned ? "a player's" : pro("Angel plays {them}", (() => { try { return pronounOf(scene?.tokens.get(r.tokens?.[0]), null); } catch { return undefined; } })())) : `× ${r.count}`}</small></div>${r.own.map(o => `<div class="lm-it sub${refKey(o.ref) === this.sel ? " on" : ""}" data-sel="${esc(refKey(o.ref))}">${esc(o.name)} <small>own profile</small></div>`).join("")}`;
     const side = `${built.length ? `<h4>In this encounter</h4>${built.map(item).join("")}` : ""}${loose.length ? `<h4>${built.length ? "Not placed by the build" : "On this map"}</h4>${loose.map(item).join("")}` : ""}${party.length ? `<h4>With the party</h4>${party.map(item).join("")}` : ""}<h4>Bands</h4>${bands.map(v => `<div class="lm-it${`band:${v.band.key}` === this.sel ? " on" : ""}" data-sel="band:${esc(v.band.key)}">${esc(v.band.name)} <small>${v.members} in it</small></div>`).join("")}<div class="lm-it" data-action="newBand"><span><i class="fa-solid fa-plus"></i> New band…</span></div>`;
     if (bandSel) return this.bandHtml(bandSel, side);
     if (!at) return `<div class="lm-body"><div class="lm-side">${side}</div><div class="lm-main"><p>No monsters on this map yet. Build an encounter or put monsters on it, then open this again.</p></div></div><div class="lm-foot"><button type="button" class="lm-left" data-action="library"><i class="fa-solid fa-book"></i> Minds Library…</button></div>`;

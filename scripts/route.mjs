@@ -25,7 +25,7 @@ export function modelFor({ pick = null, leads = false, casts = false, level = nu
   const above = Number.isFinite(level) && Number.isFinite(partyLevel) ? level - partyLevel : null;
   const boss = casts && above != null && above >= OPUS_LEVELS_ABOVE;
   const rule = leads || boss ? "opus" : "sonnet";
-  const why = leads ? "leads its band" : boss ? `casts spells and is level ${level}, ${above} above the party (${partyLevel})` : casts && above != null ? `casts spells, but is ${above >= 0 ? `only ${above} above` : `${-above} below`} the party` : "";
+  const why = leads ? "leads {their} band" : boss ? `casts spells and is level ${level}, ${above} above the party (${partyLevel})` : casts && above != null ? `casts spells, but is ${above >= 0 ? `only ${above} above` : `${-above} below`} the party` : "";
   if (MODELS.includes(pick)) return { model: pick, by: "gm", why, rule };
   return { model: rule, by: "rule", why, rule };
 }
