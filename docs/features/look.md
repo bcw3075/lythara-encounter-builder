@@ -1,7 +1,7 @@
 ---
 feature: look
 files: [scripts/look.mjs]
-functions: [fight.mjs:withPackets, fight.mjs:lookOf, fight.mjs:lookCheck, fight.mjs:lookTokens, fight.mjs:startLook, fight.mjs:lookModel, fight.mjs:lookEvent, fight.mjs:offLook, fight.mjs:submitLook, fight.mjs:answerLook, fight.mjs:dismissLook, fight.mjs:lookNow, fight.mjs:escapeOffers, fight.mjs:acceptEscapeLines]
+functions: [fight.mjs:withPackets, fight.mjs:lookOf, fight.mjs:lookCheck, fight.mjs:lookTokens, fight.mjs:startLook, fight.mjs:lookModel, fight.mjs:lookEvent, fight.mjs:offLook, fight.mjs:submitLook, fight.mjs:answerLook, fight.mjs:dismissLook, fight.mjs:lookNow, fight.mjs:escapeOffers, fight.mjs:acceptEscapeLines, fight.mjs:lookKinds]
 dependsOn: [minds, memory, brain, api-route, card-ui, history, fleeing, packet, turn-loop]
 since: 0.33.0
 ---
@@ -33,6 +33,7 @@ Settled by Angel at the build, told to Rhea, hers to change:
 - **Her answers** (`answerLook`, the card's buttons): an accepted "one" suggestion is `flags.<id>.minds.own.<tokenId>.<line>`; a "kind" one is the kind's entry in `flags.<id>.minds.kinds` (a list, replaced whole). `mindLayers` lays a monster's own fight lines over its kind's, line by line (before 0.33.0 one monster's fight lines hid its kind's).
 - **The card** (`_lookCard` in `ui/turns.mjs`) sits under the light on Monster Turns; Angel's words go through `escW` (never read for pronoun markers) and labels are turned into names for her (`namer`).
 - **End Encounter** (`onPreDeleteCombat`, `askOnEnd`): `escapeOffers` reads each monster in `escapedList` with its notebook (`escapeLines`, pure: sure lines about enemies, by its rung, at most `ESCAPE_MAX`, names through the fight's labels, only the party's side); her answers are kept in the window and written by `acceptEscapeLines` before the history is saved or discarded and the fight deleted: `giveOwn` when it has no own profile, then `setLines` on its own `knows` line as Angel's (`knowsAfter`: Angel's words kept, new ones added once, cut to the cap; null when the line is hers).
+- **0.33.1:** two "kind" suggestions for the same line of the same kind (made through two monsters of it) are one, the first; accepting a kind's line reads the fight's kinds list back after a moment and writes in again any accepted line another GM page's write took away (found while closing u-106); the look is also started from the runner's 10 s check, for a runner that was away when the fight began.
 
 ## Checks
 - (lk-1) {unit} A look cleaned and refused in words: both kinds of suggestion, a pick, duplicates dropped, fits of this look only, the seq kept; not JSON, a bad `for`, a bad label, a monster not in the look, a line it can't change, a pick missing, no words, too many, the cap.

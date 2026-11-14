@@ -94,8 +94,8 @@ Hooks.on("activateNote", note => {
 });
 /* the fight */
 Hooks.on("preCreateChatMessage", message => { onPreCreateMessage(message);
-  /* a net (0.30.1): a pronoun marker nothing turned reads as "it" in chat, never as a brace */
-  try { const fix = {}; for (const k of ["content", "flavor"]) if (hasMarker(message[k])) fix[k] = pro(message[k]); if (Object.keys(fix).length) message.updateSource(fix); } catch (e) { console.warn(`${ID} | pronoun`, e); } });
+  /* a net (0.30.1): a pronoun marker nothing turned reads as "it" in chat, never as a brace; only on a GM's page, where the module writes (0.33.1, review: a player's own words are theirs) */
+  if (game.user.isGM) try { const fix = {}; for (const k of ["content", "flavor"]) if (hasMarker(message[k])) fix[k] = pro(message[k]); if (Object.keys(fix).length) message.updateSource(fix); } catch (e) { console.warn(`${ID} | pronoun`, e); } });
 Hooks.on("createChatMessage", message => { onCreateMessage(message); noteReactionRoll(message); onActionCard(message).catch(e => console.warn(`${ID} | reactions`, e)); try { onReactionCard(message); } catch (e) { console.warn(`${ID} | reaction box`, e); } try { onMemoryCard(message); } catch (e) { console.warn(`${ID} | notebook`, e); } });
 /* monsters reacting on players' turns (0.21.0): the runner watches moves, cards, items changing hands and Prone coming off. Block bodies: no handler returns anything. */
 Hooks.on("moveToken", (doc, movement) => { onTokenMoved(doc, movement); try { dropBeliefs(doc); } catch (e) { console.warn(`${ID} | point out`, e); } });

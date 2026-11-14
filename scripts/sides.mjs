@@ -53,7 +53,9 @@ export function sideCardWords(entry, { bandName = "", forms = IT } = {}) {
 export function changedForPacket(entry, { bandName = "", heard = [], forms = IT } = {}) {
   if (entry?.changed == null) return null; const say = t => pro(t, forms);
   /* the band's name is the GM's own text and isn't sent (it has passed no name gate): "in a band" is enough */
-  return { since: entry.changed, was: say(`Until round ${entry.changed} {they} fought for the other side${bandName ? ", in a band" : ""}. {They} {has|have} changed sides: {their} old side are {their} enemies now and the creatures {they} fought are {their} allies.`),
+  /* set to nobody's side (0.33.1, review): nobody is an ally now, and its old side isn't its enemy */
+  const now = entry.side === "none" ? "{they} {is|are} on nobody's side now: {they} {has|have} no allies and no enemies in this fight" : "{their} old side are {their} enemies now and the creatures {they} fought are {their} allies";
+  return { since: entry.changed, was: say(`Until round ${entry.changed} {they} fought for the other side${bandName ? ", in a band" : ""}. {They} {has|have} changed sides: ${now}.`),
     ...(heard.length ? { lastHeard: heard.slice(0, 4), note: say("What {they} last heard from {their} old band, as something {they} {knows|know} about them. {They} no longer {follows|follow} any of it.") } : {}) };
 }
 /** The side lines the fight's log keeps. */

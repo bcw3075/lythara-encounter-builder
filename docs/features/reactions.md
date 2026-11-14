@@ -64,6 +64,7 @@ Player reactions during a monster's turn: Reactive Strike, Shield Block, Reactiv
 - **With automatic damage off** (`harmByHand`): the gate is asked after the damage roll, the card says what to apply ("apply it with resistance 5 to all damage") and a line for everyone says the same without the final numbers; the monster's condition is still given by the module. A question cut short there (Hold, the turn moving on) isn't asked again: the card says to finish it by hand.
 - **0.29.0:** a monster that has yielded or is a prisoner is offered no reaction (`monsterReactors` skips it).
 - **0.30.0:** a Point Out is a manipulate action: the party's reactions are asked before it, as before an Interact (`beforeKinds`).
+- **0.33.1:** a party-side creature isn't offered a monster's reaction for a trigger in a turn the module is running (its own reaction pass already asked it); a reactor who pressed React and was then passed over (Continue, Hold, the monster down) counts as having reacted; Hold pressed while the reactions before a monster's Reactive Strike are asked holds that Strike; a spell attack at touch range isn't a ranged attack for the party's Reactive Strike.
 
 ## Checks
 - (r-1) {unit} `reactionsOf` (known, unknown with trigger, one Reactive Strike for both slugs, actions left out), `fits` for every row and gate, `routeGates` (first square in reach, starting in reach, ending in reach, once per move, 10-ft reach, height, two reactors), `degreeAgainst` (each degree, natural 20 and 1), `gateWords`, `finished`, `answerWords`, the prompt's version and reaction text.
@@ -152,3 +153,4 @@ Player reactions during a monster's turn: Reactive Strike, Shield Block, Reactiv
 - A repent-or-refuse on a monster's Reactive Strike never turns its card amber (the stall check reads the turn in hand only), like any question left open on a monster's reaction.
 - `castReaction` waits 2 s for an Auto monster's Reactive Strike to the cast to be offered; one offered later is made when the turn's action has finished.
 - A reaction spell answered in the instant between its question closing and its cast, with the runner's page reloaded in that instant, is not cast (its +2 and its 2 off still apply): spend the slot by hand.
+- From the 0.33.1 review, not changed: a runner reload between an Interposing Earth question closing and its cast leaves the cast undone with no note.

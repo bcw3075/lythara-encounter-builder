@@ -1,7 +1,7 @@
 /* The Foundry side of a build: gathers the map, imports creatures, places tokens, treasure, journal and notes, and removes them again.
    Every document made here carries flags[ID].built = the build id, and Rebuild and Clear delete only those, by id. */
 import { cleanBrief, expandCreatures } from "./brief.mjs";
-import { stampBrief } from "./minds.mjs";
+import { mergeBrief, stampBrief } from "./minds.mjs";
 import { adjustedLevel, chooseTreasure, claimDiffers, ledgerLine, levelTotal, toGp, treasureFor } from "./budget.mjs";
 import { esc, journalPages } from "./journal.mjs";
 import { SIZE_SQUARES, buildModel, summarise } from "./mapread.mjs";
@@ -172,6 +172,8 @@ export async function place(prep) {
   const { scene, brief, info, plan, treasure, px, ox, oy, level, seed } = prep;
   await canvasSettled(scene); await clear(scene, { quiet: true }); await clearPreview(scene);
   const buildId = foundry.utils.randomID(8), flag = { [ID]: { built: buildId } }, actorFolder = await folderFor("Actor");
+  /* the build's id first (0.33.1, review): cut off half way, Clear still finds and removes what was made; the full record replaces it at the end */
+  await scene.update({ [`flags.${ID}.build`]: { id: buildId, partial: true, at: Date.now() } });
   /* one world actor per creature and adjustment, never the compendium's own */
   const actors = new Map();
   for (const c of brief.creatures) { const k = `${c.uuid}|${c.adjust}`; if (!actors.has(k)) actors.set(k, await importCreature(c.uuid, c.adjust, buildId, actorFolder)); }
@@ -207,7 +209,7 @@ export async function place(prep) {
   if (noteData.length) await scene.createEmbeddedDocuments("Note", noteData);
   /* records */
   const l = foundry.utils.deepClone(ledger()); l.builds[buildId] = { level, gp: treasure.value }; await game.settings.set(ID, "treasure", l);
-  const update = { [`flags.${ID}.build`]: { id: buildId, seed, threat, rev: prep.read?.rev ?? null, at: Date.now(), entry: entry.id }, [`flags.${ID}.brief`]: brief };
+  const update = { [`flags.${ID}.==build`]: { id: buildId, seed, threat, rev: prep.read?.rev ?? null, at: Date.now(), entry: entry.id }, [`flags.${ID}.brief`]: brief };
   if (!scene.journal) { update.journal = entry.id; update.journalEntryPage = entry.pages.contents.find(p => p.name === "Overview")?.id ?? null; }
   await scene.update(update);
   if (threat.rating !== prep.threat.rating) warnings.push(`Threat changed once the real tokens were counted: ${prep.threat.rating} became ${threat.rating}.`);
@@ -256,4 +258,7 @@ export async function applyReplace(prep) {
 }
 /** Store a brief on the map for the Build dialog to pick up, written in a chat. Nothing is placed. */
 /* a chat's door: mind lines in the brief are Angel's unless they say they are the GM's own words (minds.mjs `stampBrief`, 0.24.0) */
-export async function submitBrief(scene, brief, { by = "angel" } = {}) { gmOnly(); const clean = cleanBrief(stampBrief(brief, by)); await scene.setFlag(ID, "brief", clean); return clean; }
+export async function submitBrief(scene, brief, { by = "angel", force = false } = {}) {
+  gmOnly(); const { brief: merged, skipped } = mergeBrief(scene.getFlag(ID, "brief"), stampBrief(brief, by), { by, force });   /* the GM's own lines stay (0.33.1, review) */
+  const clean = cleanBrief(merged); await scene.setFlag(ID, "brief", clean); if (skipped.length) clean.skipped = skipped; return clean;
+}

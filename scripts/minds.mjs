@@ -83,12 +83,19 @@ export const bandKey = name => `band:${slug(name)}`;
 /** What kind of creature this is, as a key that holds across encounters and worlds (design review 8): its compendium source when it has one; otherwise
     its name and level. Elite and Weak are the same kind as the creature they adjust: the prefix PF2e adds to the name is taken off and the level is the
     base creature's. facts: { source, name, level, adjustment } (adjustment "elite" | "weak" | null, as PF2e or the builder marks it). */
-export function kindKey({ source = null, name = "", level = 0, adjustment = null } = {}) {
+export function kindKey({ source = null, name = "", level = 0, adjustment = null, base = null } = {}) {
   if (typeof source === "string" && source.startsWith("Compendium.")) return `src:${source}`;
-  return `name:${slug(baseName(name, adjustment))}|${baseLevel(level, adjustment)}`;
+  return `name:${slug(baseName(name, adjustment))}|${baseLevel(level, adjustment, base)}`;
 }
 export const baseName = (name, adjustment = null) => { const n = String(name ?? "").trim(); return adjustment === "elite" ? n.replace(/^elite\s+/i, "") : adjustment === "weak" ? n.replace(/^weak\s+/i, "") : n; };
-export const baseLevel = (level, adjustment = null) => (Number(level) || 0) - (adjustment === "elite" ? 1 : adjustment === "weak" ? -1 : 0);
+/* PF2e (8.7.0, seen 2026-11-13) reports the adjusted level, with Elite +2 at level -1 or 0 and Weak -2 at level 1, and keeps the base level in the
+   actor's source: `base` is that, when known (0.33.1, review). Without it the adjusted level is turned back as well as it can be: Elite 1 can only
+   be from -1, Weak -1 is taken as from 1 (from 0 it would be -1 too). */
+export const baseLevel = (level, adjustment = null, base = null) => {
+  if (adjustment && Number.isFinite(base)) return base;
+  const l = Number(level) || 0;
+  return adjustment === "elite" ? l - (l <= 1 ? 2 : 1) : adjustment === "weak" ? l + (l === -1 ? 2 : 1) : l;
+};
 
 /** A library entry, cleaned: { schema, type, key, name, people, lines }. A kind names its people explicitly (their key, or null): the module never
     guesses it. A people or a band has none. */
@@ -214,6 +221,21 @@ export function stampBrief(brief, by = "angel") {
     plan: { ...(b.plan ?? {}), ...(b.plan?.objective != null ? { objective: part(b.plan.objective) } : {}), jobs: (Array.isArray(b.plan?.jobs) ? b.plan.jobs : []).map(part), ...(b.plan?.fallBack && typeof b.plan.fallBack === "object" ? { fallBack: { ...part(b.plan.fallBack), ...(b.plan.fallBack.when != null ? { when: part(b.plan.fallBack.when) } : {}) } } : {}) } } : b);
   return { ...(brief ?? {}), ...(bands.length ? { bands } : {}), creatures: (Array.isArray(brief?.creatures) ? brief.creatures : []).map(c => { const mind = lines(c?.mind); if (String(c?.tactics ?? "").trim() && !mind.notes) mind.notes = { text: c.tactics, by };
     const { tactics, ...rest } = c ?? {}; return { ...rest, mind, own: c?.own && typeof c.own === "object" ? Object.fromEntries(Object.entries(c.own).map(([n, v]) => [n, lines(v)])) : {} }; }) };
+}
+/** A brief handed in by Angel over one that is there (0.33.1, review: it replaced the GM's own lines in this encounter and in single monsters'
+    profiles): each row's lines are laid over the row it matches (same uuid, else same place and name) with `applyLines`, so a line whose words are
+    the GM's stays. Both briefs stamped. Out: { brief, skipped: [{ row, n?, lines }] }. Pure. */
+export function mergeBrief(old, next, { by = "angel", force = false } = {}) {
+  const was = Array.isArray(old?.creatures) ? old.creatures : [], skipped = [];
+  if (by === "gm" || force || !was.length) return { brief: next, skipped };
+  const creatures = (next.creatures ?? []).map((c, g) => {
+    const o = (c.uuid ? was.find(x => x?.uuid === c.uuid) : null) ?? (was[g] && (was[g].name ?? "") === (c.name ?? "") ? was[g] : null); if (!o) return c;
+    const m = applyLines(o.mind ?? {}, c.mind ?? {}, { by }); if (m.skipped.length) skipped.push({ row: g, lines: m.skipped });
+    const own = { ...(o.own ?? {}) };
+    for (const [n, v] of Object.entries(c.own ?? {})) { const r = applyLines(own[n] ?? {}, v ?? {}, { by }); if (r.skipped.length) skipped.push({ row: g, n: +n, lines: r.skipped }); own[n] = r.lines; }
+    return { ...c, mind: m.lines, own };
+  });
+  return { brief: { ...next, creatures }, skipped };
 }
 /** A brief row's encounter mind (decision 11: profiles replace the Tactics page). A row's old `tactics` text is that kind's notes for the encounter
     when the row has no notes of its own. Out: lines. */

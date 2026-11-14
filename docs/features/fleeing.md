@@ -77,3 +77,4 @@ Build choices (Angel, 2026-11-08, within the design; Rhea can change them):
 - Each escaped token's flag names its combat, so a later fight doesn't list it (the window shows no fight after End Encounter, so Bring back is unreachable then).
 - Players' reactions as it flees are asked like any Stride's (0.20.0, `docs/features/reactions.md`).
 - A Stride's diagonal count for the rest of the turn is lost when an extension's shift was recorded as movement (the history is cleared): a 5 ft difference at most.
+- From the 0.33.1 review, not changed: after the Survey Sheet's 180 s timeout the squares' shift is read from the map's size, so a map that grows after that point moves remembered squares by nothing; two GM pages pressing Let it get away in the same moment can both pass the guard (the second gets an error when its combatant is already gone).

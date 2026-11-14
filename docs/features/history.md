@@ -64,3 +64,4 @@ Record every id below in the release's change record when this feature, or a fea
 
 ## Open items
 - 0.10.0, not tested live: spell, area, ability-save and stall lines in the history (unit tests only); Rhea's own browser (local time and date on the saved page); deleting a scene with a fight on it (the fight may go without the Save question); a long fight's redraw speed.
+- From the 0.33.1 review, not changed: a monster that died in an earlier round is listed "played by the GM" in every round after (the window and the saved page).

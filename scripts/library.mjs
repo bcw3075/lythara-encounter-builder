@@ -92,8 +92,9 @@ export function kindFacts(actor) {
   let source = flagged?.startsWith("Compendium.") ? flagged : actor.pack ? actor.uuid : null;
   if (!source) { const cs = base._stats?.compendiumSource ?? null, stock = typeof cs === "string" && cs.startsWith("Compendium.") ? fromUuidSync(cs) : null;
     if (stock && String(stock.name ?? "").trim().toLowerCase() === baseName(name, adjustment).trim().toLowerCase()) source = cs; }
-  const facts = { source: typeof source === "string" && source.startsWith("Compendium.") ? source : null, name, level, adjustment };
-  return { ...facts, key: kindKey(facts), kindName: baseName(facts.name, facts.adjustment), baseLevel: baseLevel(facts.level, facts.adjustment) };
+  const src = from ? null : Number(actor._source?.system?.details?.level?.value), lv0 = Number.isFinite(src) ? src : null;   /* PF2e keeps the unadjusted level in the source */
+  const facts = { source: typeof source === "string" && source.startsWith("Compendium.") ? source : null, name, level, adjustment, base: lv0 };
+  return { ...facts, key: kindKey(facts), kindName: baseName(facts.name, facts.adjustment), baseLevel: baseLevel(facts.level, facts.adjustment, facts.base) };
 }
 const statFacts = actor => ({ traits: actor?.system?.traits?.value ?? [], int: actor?.system?.abilities?.int?.mod ?? null });
 
@@ -163,16 +164,21 @@ export const writeBrief = (scene, brief) => scene.update({ [`flags.${ID}.==brief
 /** Change lines of a profile on a scene. ref says whose: { row } a build row's kind for this encounter; { row, n } one built monster's own;
     { kind } a kind the build didn't place, for this scene; { token } one such monster's own. lines: key → words, { pick, text }, or null to take the
     line away. Angel never replaces the GM's words unless `force`. Out: { lines, skipped }. */
-export async function setLines(scene, ref, lines, { by = "gm", force = false, keepBy = false } = {}) {
+export async function setLines(scene, ref, lines, { by = "gm", force = false, keepBy = false, seeded = false } = {}) {
   gmOnly(); const opts = { by, force, keepBy, now: Date.now() };
   if (Number.isInteger(ref?.row)) {
     const brief = briefOf(scene), row = brief?.creatures[ref.row]; if (!row) throw new Error("This map's build has no such row.");
-    if (Number.isInteger(ref.n)) { if (ref.n < 0 || ref.n >= row.count) throw new Error("That row has no such monster."); const r = applyLines(row.own[String(ref.n)] ?? {}, lines, opts);
+    if (Number.isInteger(ref.n)) { if (ref.n < 0 || ref.n >= row.count) throw new Error("That row has no such monster.");
+      /* its first own line starts its own profile as a copy of what it follows now (decision 6; 0.33.1, review: a profile of that one line alone
+         dropped every line of its kind and this encounter) */
+      if (!seeded && !row.own[String(ref.n)]) { const tok = scene.tokens.find(t => { const b = builtRef(scene, t); return b?.row === ref.row && b?.n === ref.n; }); if (tok) { await giveOwn(scene, tok); return setLines(scene, ref, lines, { by, force, keepBy, seeded: true }); } }
+      const r = applyLines(row.own[String(ref.n)] ?? {}, lines, opts);
       if (Object.keys(r.lines).length) row.own[String(ref.n)] = r.lines; else delete row.own[String(ref.n)]; await writeBrief(scene, brief); return r; }
     const r = applyLines(row.mind, lines, opts); row.mind = r.lines; await writeBrief(scene, brief); return r;
   }
   if (ref?.token) { const tok = scene.tokens.get(ref.token); if (!tok) throw new Error("That token isn't on this scene.");
     const at = builtRef(scene, tok); if (at) return setLines(scene, at, lines, { by, force, keepBy });
+    if (!Object.keys(cleanLines(tok.getFlag(ID, "mind"))).length) await giveOwn(scene, tok);   /* the same for a monster the build didn't place */
     const r = applyLines(tok.getFlag(ID, "mind") ?? {}, lines, opts); await tok.update({ [`flags.${ID}.==mind`]: Object.keys(r.lines).length ? r.lines : null }); return r; }
   if (typeof ref?.kind === "string") { const list = looseOf(scene), had = list.find(x => x.kind === ref.kind), r = applyLines(had?.lines ?? {}, lines, opts);
     const next = [...list.filter(x => x.kind !== ref.kind), ...(Object.keys(r.lines).length ? [{ kind: ref.kind, lines: r.lines }] : [])];

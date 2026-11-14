@@ -36,6 +36,7 @@ Settled by Angel, told to Rhea in the release note, hers to change:
 - **The step** (`checkPlan`; `pointCtx`, `runPointOut`): `{ do: "point-out", target }`, one action. `pointCtx` answers per label only when a plan asks (it runs every ally's senses). `runPointOut` checks that the pointer still sees the creature, works out each ally's result (`pointHearers`), rolls for those that only saw the gesture, posts the action's line, and writes the step's record and every belief in one update.
 - **Ending** (`dropBeliefs` on `moveToken`; `packetExtras`): the creature moved, or the observer's own senses gave it a square when its packet was built. A Strike at a wrong square (`runBlindMiss`) leaves the belief standing. The belief holds `{ square, height, round, by, wrong? }`; the plan check and the packet read the square and height from it, never from the token.
 - **The window** (`pointCard`): the box under the step, a preview before it runs (on a page with the fight's map open) and the results after.
+- **0.33.1:** the result the thinker reads leaves out allies the GM has hidden.
 
 ## Checks
 - (pt-1) {unit} The rules: a belief counts only while its own senses give no square; who can point out; what an ally gets; a wrong square; an ally's result; the GM's box as the sample has it; the thinker's result never says whether a square is right; the step through the plan check with its refusals; the step's record, done step and History line; the packet's `alliesLost` and `pointed`.

@@ -68,10 +68,10 @@ export function witnessLines(event, witnesses = [], stamp = {}) {
     if (event.kind === "attack") {
       if (w.isActor) { if (event.degree < 2 && sees(t)) put(w, { k: "miss", t: t.label }); continue; }
       /* an ally's deed, for those of its side that perceived it (review 2: the ally passes the same test an enemy would) */
-      if (w.actorIs === "ally" && sees(a)) put(w, { k: "deed", a: a.label, w: `${event.degree === 3 ? "critically hit" : event.degree === 2 ? "hit" : "missed"} ${w.isTarget ? "it" : sees(t) ? t.label : w.targetIs === "enemy" || w.targetIs === "ally" ? UNSEEN : "something"}` });
+      if (w.actorIs === "ally" && sees(a)) put(w, { k: "deed", a: a.label, w: `${event.degree === 3 ? "critically hit" : event.degree === 2 ? "hit" : "missed"} ${w.isTarget ? "{them}" : sees(t) ? t.label : w.targetIs === "enemy" || w.targetIs === "ally" ? UNSEEN : "something"}` });
       continue;
     }
-    if (event.kind === "deed") { if (w.actorIs === "ally" && sees(a)) put(w, { k: "deed", a: a.label, w: `${event.pre ?? ""}${event.hasTarget ? ` ${w.isTarget ? "it" : sees(t) ? t.label : UNSEEN}` : ""}${event.post ?? ""}`.slice(0, DEED_MAX) }); continue; }
+    if (event.kind === "deed") { if (w.actorIs === "ally" && sees(a)) put(w, { k: "deed", a: a.label, w: `${event.pre ?? ""}${event.hasTarget ? ` ${w.isTarget ? "{them}" : sees(t) ? t.label : UNSEEN}` : ""}${event.post ?? ""}`.slice(0, DEED_MAX) }); continue; }
     if (event.kind === "saved") { if (w.isActor && sees(t)) put(w, { k: "saved", t: t.label, ...(event.item ? { i: String(event.item).slice(0, 40) } : {}) }); continue; }
     if (event.kind === "reactive" || event.kind === "block") { if (w.actorIs === "enemy" && sees(a)) put(w, { k: event.kind, a: a.label }); continue; }
   }
@@ -91,7 +91,7 @@ const sorted = book => Object.entries(book ?? {}).filter(([, l]) => l && typeof 
     `remembers` is what its Mind can use, most important first, capped; `unused` is what it perceived and makes nothing of (the fold-out greys it).
     Tallies, not a log: several hits by one creature are one line. Nothing here reads anything but the lines. */
 export function render(book, { rung = 3, since = 0, forms = IT } = {}) {   /* forms: the creature's own pronoun (pronoun.mjs); "it" when none is given */
-  const all = sorted(book), live = all.filter(([, l]) => !l.x), crossed = all.filter(([, l]) => l.x).map(([key, l]) => ({ text: wordsOf(l), keys: [key], kind: l.k, by: l.by ?? "module" }));
+  const all = sorted(book), live = all.filter(([, l]) => !l.x), crossed = all.filter(([, l]) => l.x).map(([key, l]) => ({ text: wordsOf(l, forms), keys: [key], kind: l.k, by: l.by ?? "module" }));
   const groups = [], group = (kind, id, key, l) => { let g = groups.find(x => x.kind === kind && x.id === id); if (!g) { g = { kind, id, keys: [], lines: [] }; groups.push(g); } g.keys.push(key); g.lines.push(l); };
   let lastHurt = null; const hurters = new Set();
   for (const [key, l] of live) {
@@ -116,7 +116,7 @@ export function render(book, { rung = 3, since = 0, forms = IT } = {}) {   /* fo
       case "miss": return n === 1 ? `{They} missed ${l.t}.` : `{They} {keeps|keep} missing ${l.t}.`;
       case "saved": return n === 1 ? `${l.t} shrugged off {their} ${l.i ?? "magic"}.` : `${l.t} keeps shrugging off {their} ${l.i ?? "magic"}.`;
       case "nothing": return n === 1 ? `{Their} attack did nothing to ${l.t}.` : `{Their} attacks keep doing nothing to ${l.t}.`;
-      case "heal": return n === 1 ? `${l.a} healed ${l.t && l.t !== l.a ? l.t : l.t ? "itself" : "itself or someone beside it"}.` : `${l.a} keeps healing its side.`;   /* "M5 healed M5." read badly (0.28.0) */
+      case "heal": return n === 1 ? `${l.a} healed ${l.t && l.t !== l.a ? l.t : l.t ? "themself" : "{them}"}.` : `${l.a} keeps healing {their} enemies.`;   /* no t: it was the one healed (0.33.1, review) */   /* "M5 healed M5." read badly (0.28.0) */
       case "cast": return `${l.a} cast ${l.n ? `the spell {they} {knows|know} as ${l.n.replace(/-/g, " ")}` : `a spell: ${l.w}`}${n > 1 ? ` (${times(n)})` : ""}.`;
       case "reactive": return `${l.a} strikes at those who move away from it or lower their guard beside it.`;
       case "block": return `${l.a} blocks blows with a shield.`;
@@ -131,11 +131,11 @@ export function render(book, { rung = 3, since = 0, forms = IT } = {}) {   /* fo
   const usable = ranked.filter(g => canUse(g.kind, rung)), remembers = usable.slice(0, SEND_MAX), unused = [...ranked.filter(g => !canUse(g.kind, rung)), ...usable.slice(SEND_MAX)];
   /* allies' deeds since its last turn: the latest of each ally, oldest ally first */
   const deeds = new Map(); if (rung > 0) for (const [key, l] of live) if (l.k === "deed" && (l.at ?? 0) > since) { const d = deeds.get(l.a) ?? { keys: [], words: [] }; d.keys.push(key); d.words.push(l.w); deeds.set(l.a, d); }
-  const allies = [...deeds.entries()].slice(-DEEDS_MAX).map(([a, d]) => ({ text: `${a}: ${d.words.slice(-2).join("; ")}.`, keys: d.keys }));
+  const allies = [...deeds.entries()].slice(-DEEDS_MAX).map(([a, d]) => ({ text: pro(`${a}: ${d.words.slice(-2).join("; ")}.`, forms), keys: d.keys }));   /* "hit {them}" is the keeper */
   return { remembers, allies, unused, crossed };
 }
 /** One stored line in words, for a crossed-out line in the fold-out. */
-function wordsOf(l) { const r = render({ a: { ...l, x: undefined } }, { rung: 4 }); return r.remembers[0]?.text ?? r.allies[0]?.text ?? (l.k === "deed" ? `${l.a}: ${l.w}.` : ""); }
+function wordsOf(l, forms = IT) { const r = render({ a: { ...l, x: undefined } }, { rung: 4, forms });   /* in the creature's own forms (0.33.1, review) */ return r.remembers[0]?.text ?? r.allies[0]?.text ?? (l.k === "deed" ? `${l.a}: ${l.w}.` : ""); }
 
 /** Its side's tally, so "gives up when half are down" can be judged (design review 15). Counts only. */
 export function sideWords({ started = 0, standing = 0, down = 0, fled = 0, yielded = 0 } = {}, forms = IT) {

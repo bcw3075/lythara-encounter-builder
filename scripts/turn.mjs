@@ -645,11 +645,19 @@ export function shouldFall({ requests = [], height = 0, flies = false, dead = fa
   if (!(height > 0) || !flies || !forward || !requests.length) return null;
   if (clinging && !dead) return null;   /* up a tree it climbed, it holds on: a flier there isn't airborne (0.15.0); a dead one's body still drops */
   if (requests.some(r => r.fell)) return null;
-  if (requests.some(r => (r.steps ?? []).some((s, k) => s?.do === "delay" && (r.log?.[k]?.ended || r.log?.[k]?.moved)) || r.delayed)) return null;
+  requests = sinceDelay(requests); if (!requests) return null;
   if (dead) return "drop";
   if (!requests.every(r => r.state === "done")) return null;
   if (requests.some(r => (r.steps ?? []).some((s, k) => s?.do === "fly" && (r.log?.[k]?.started || r.log?.[k]?.moved)))) return null;
   return "fall";
+}
+/* The requests of the turn that just ended (in time order): none when that turn was ended by a Delay (it hasn't really ended), and only those after
+   the Delay when the monster came back from one in the same round (0.33.1, review: the delayed request stopped the fall and the sink note for the
+   returned turn too). */
+const delayedReq = r => r.delayed || (r.steps ?? []).some((s, k) => s?.do === "delay" && (r.log?.[k]?.ended || r.log?.[k]?.moved));
+function sinceDelay(requests) {
+  const last = requests.findLastIndex(delayedReq); if (last < 0) return requests;
+  const after = requests.slice(last + 1); return after.length ? after : null;
 }
 /** Whether a ticked monster that ended its turn in deep water needs the GM's sink-or-drift note (Player Core Swim, Actions ID 2381: ending a turn in water
     without having succeeded at a Swim action that turn, it sinks 10 ft or the current moves it, as the GM decides; not when its last action was
@@ -660,7 +668,7 @@ export function shouldFall({ requests = [], height = 0, flies = false, dead = fa
 export function shouldSink({ requests = [], wet = false, dead = false, forward = true } = {}) {
   if (!wet || dead || !forward || !requests.length) return null;
   if (requests.some(r => r.sank)) return null;
-  if (requests.some(r => (r.steps ?? []).some((s, k) => s?.do === "delay" && (r.log?.[k]?.ended || r.log?.[k]?.moved)) || r.delayed)) return null;
+  requests = sinceDelay(requests); if (!requests) return null;
   if (!requests.every(r => r.state === "done")) return null;
   if (requests.some(r => (r.steps ?? []).some((s, k) => s?.do === "swim" && r.log?.[k]?.swum))) return null;
   /* "if your last action was entering the water": a Fly that landed it there (the last step it began this round) */
@@ -743,7 +751,7 @@ export function changesSince(was, now) {
   for (const [label, w] of Object.entries(was.others)) {
     const n = now.others[label];
     if (!n) { out.push({ who: label, what: "gone" }); continue; }
-    if (w.down !== n.down) out.push({ who: label, what: n.down ? "down" : "up" });
+    if (w.down != null && n.down != null && w.down !== n.down) out.push({ who: label, what: n.down ? "down" : "up" });   /* unknown (hidden) on either side: nothing to tell */
     if (w.state !== n.state) out.push({ who: label, what: "state", now: n.state });
     if (!same(w.square, n.square)) out.push({ who: label, what: "moved" });
   }
@@ -753,7 +761,7 @@ export function changesSince(was, now) {
 export function describeChange(c, nameOf = l => l, self = "It", forms = IT) {
   if (c.who === "plan") return String(c.reason ?? "").replace(/^Step \d+: /, "");
   if (c.who === "gm" && c.what === "notebook") return pro("The GM changed what {they} {remembers|remember}: read {their} notebook afresh.", forms);   /* her notebook edit (0.25.0) */
-  if (c.what === "sawHeal" || c.what === "sawCast") { const w = String(nameOf(c.who) ?? c.who ?? "Someone"); return pro(`${w[0].toUpperCase()}${w.slice(1)} ${c.what === "sawHeal" ? "healed one of its own side" : "cast a spell"}: {their} notebook has it.`, forms); }   /* fight memory (0.25.0) */
+  if (c.what === "sawHeal" || c.what === "sawCast") { const w = String(nameOf(c.who) ?? c.who ?? "Someone"); return pro(`${w[0].toUpperCase()}${w.slice(1)} ${c.what === "sawHeal" ? "healed one of their own side" : "cast a spell"}: {their} notebook has it.`, forms); }   /* fight memory (0.25.0) */
   if (c.who === "gm") return `The GM asks for the rest of this turn: "${c.text ?? ""}"`;   /* the Change button's note (0.19.0), already in labels */
   /* the monster itself is written by its pronoun (0.30.1) unless the caller names it; another creature keeps "it", since its pronoun isn't known here */
   const me = c.who === "me", it = me && self === "It", f = me ? forms : IT;

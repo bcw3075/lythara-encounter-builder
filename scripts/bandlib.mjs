@@ -83,10 +83,14 @@ export function bandPacket(scene, tok, combat, { labelOf = () => null, fallen = 
   const nature = natureOf(natureLayers(scene, band, combat)), members = membersOf(scene, band.key);
   const nameOf = j => j.row != null ? rows[j.row]?.name ?? "" : (() => { const t = members.find(m => !builtRef(scene, m) && kindFacts(m.actor)?.key === j.kind); return t ? kindFacts(t.actor).kindName : ""; })();
   /* a leader the GM has hidden isn't there for the thinker, fallen or not (0.26.0 review 9); one that got away is hidden too, and that is told */
-  const unseen = t => !!t?.hidden && !t.getFlag(ID, "escaped"), state = lead.gone ? "gone" : lead.tok && !unseen(lead.tok) ? fallen(lead.tok) : null, leads = !!lead.tok && lead.tok.id === tok.id;
-  const { band: out, held } = bandForPacket({ discipline: mine, nature, plan: planOf(scene, band, combat), me: { row: ref?.row, kind: ref ? null : kindFacts(tok.actor)?.key, leads: leads && !state }, leader: lead.tok && !leads ? labelOf(lead.tok.id) : null, nameOf, people: partyPeople(scene, labelOf) });
+  /* a leader that changed sides, acted on by the module with any pick but "Next in line" (0.33.1, review): the band is told it turned, for good, and
+     a member the guess would now make leader doesn't lead (for "Next in line" the one who took over leads, below) */
+  const fell0 = fightBand(combat, band.key)?.fell, turnedAway = fell0?.state === "turned" && !lead.took && lead.tok?.id !== fell0.was;   /* back on its side, it leads again */
+  const unseen = t => !!t?.hidden && !t.getFlag(ID, "escaped"), state = turnedAway ? "turned" : lead.gone ? "gone" : lead.tok && !unseen(lead.tok) ? fallen(lead.tok) : null, leads = !turnedAway && !!lead.tok && lead.tok.id === tok.id;
+  const { band: out, held } = bandForPacket({ discipline: mine, nature, plan: planOf(scene, band, combat), me: { row: ref?.row, kind: ref ? null : kindFacts(tok.actor)?.key, leads: leads && !state }, leader: lead.tok && !leads && !turnedAway ? labelOf(lead.tok.id) : null, nameOf, people: partyPeople(scene, labelOf) });
   let bandNow = null;
-  if (state && (lead.tok || lead.gone) && !leads) { const facts = members.filter(t => !unseen(t)).map(t => ({ ...fact(scene, t, combat), standing: !fallen(t) })), sec = secondOf(scene, band);
+  if (turnedAway) bandNow = leaderFell({ discipline: mine, state: "turned", falls: fell0.pick ?? null, next: null });
+  else if (state && (lead.tok || lead.gone) && !leads) { const facts = members.filter(t => !unseen(t)).map(t => ({ ...fact(scene, t, combat), standing: !fallen(t) })), sec = secondOf(scene, band);
     /* until the module has acted on the fall, the same answer it will give: the named second first (0.28.0 review 13) */
     const next = nature.ifLeaderFalls?.pick !== "next" ? null : facts.some(m => m.id === sec?.id && m.id !== lead.tok?.id && m.standing && PLANNED.includes(m.discipline)) ? sec.id : nextInLine(facts, lead.tok?.id ?? null);
     bandNow = leaderFell({ discipline: mine, state, falls: nature.ifLeaderFalls?.pick ?? null, next: next ? (next === tok.id ? "you" : labelOf(next) ?? "another of its band") : null }); }

@@ -70,7 +70,8 @@ export function previewLines(list = [], { target = "it", pointer = "it", lang = 
 /** The step's result for the thinker: how many allies it reached, never whether a believed square is right. */
 export function pointResult(rec = {}) {
   const p = rec.pointed; if (!p) return rec.skipped ? `not pointed out (${rec.skipped})` : "unknown";
-  const got = (p.list ?? []).filter(x => x.square).length, lost = (p.list ?? []).filter(x => x.how !== "knows").length;
+  /* allies the GM has hidden aren't the pointer's to count (0.33.1, review) */
+  const seen = (p.list ?? []).filter(x => !x.hidden), got = seen.filter(x => x.square).length, lost = seen.filter(x => x.how !== "knows").length;
   return `pointed out: ${got} of the ${lost} who had lost it now ha${got === 1 ? "s" : "ve"} a square for it`;
 }
 /** How far a believed square is from where the observer stands, in feet, as PF2e counts squares (every second diagonal 10 ft). */

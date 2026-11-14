@@ -119,6 +119,7 @@ One JournalEntry per build, in a mod-owned folder, default ownership none, linke
 - Survey Sheet's redraw removes only its own `enc` documents, and Extend shifts everything else [DOC], so builder documents move with the map.
 - **Never create placeables right after an update that redraws clients** (the pale-patch bug, section 8.3). If Build follows Fight Here, wait for `canvasReady` on the active GM. (Building stays in the browser of the GM who clicks Build.)
 **Step 1 is done when:** from a real click on a real map, a brief makes tokens, journal and loot; the threat matches `calculateXP`; a player sees only what they should; a hand-placed token survives Rebuild and Clear; Extend keeps tokens and notes on their spots.
+- **0.33.1:** a build writes its id on the scene before making anything, so Clear removes what a build cut off half way had made; `submitBrief` lays Angel's brief over the one there with `mergeBrief` (minds.md).
 
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.
@@ -143,3 +144,4 @@ Record every id below in the release's change record when this feature, or a fea
 - A real encounter from Notion.
 - Visioner's per-token Stealth DC on a cache.
 - Hazards.
+- From the 0.33.1 review, not changed: Place it in the preview dialog places the brief as it was when the dialog opened, so a mind line saved in Monster Minds while it is open is written back over.

@@ -72,8 +72,8 @@ export function commandForPacket(cmd, { from = null, sees = true, forms = IT } =
   if (!cmd) return null;
   const words = commandWords(cmd, forms), say = text => pro(text, forms);   /* the animal's own pronoun */
   if (cmd.degree <= 0) return { from, went: "wrong", told: words, must: say(`{Their} handler's command went badly wrong: this turn {they} {does|do} something else, by {their} own animal mind, and not what {they} {was|were} told (${words}).`) };
-  return { from, told: words, must: say(`{Their} handler commanded {them} and {they} {obeys|obey}: {they} {spends|spend} this turn doing that as well as {they} can (${cmd.instruction === "attack" ? "close with that creature and attack it; nothing else comes first" : cmd.instruction === "go" ? "move to that square, or as near as {they} can get, before anything else" : "{they} {doesn't|don't} leave {their} square; {they} may still attack what comes into reach"}).`),
-    ...(cmd.instruction === "attack" && !sees ? { unseen: say(`{They} {doesn't|don't} perceive ${cmd.foe} {themself}: {they} can't target it yet. {They} {moves|move} toward where {their} handler is facing the enemy, or {Seeks|Seek}, and {attacks|attack} once {they} {perceives|perceive} it.`) } : {}) };
+  return { from, told: words, must: say(`{Their} handler commanded {them} and {they} {obeys|obey}: {they} {spends|spend} this turn doing that as well as {they} can (${cmd.instruction === "attack" ? "close with that creature and attack; nothing else comes first" : cmd.instruction === "go" ? "move to that square, or as near as {they} can get, before anything else" : "{they} {doesn't|don't} leave {their} square; {they} may still attack what comes into reach"}).`),
+    ...(cmd.instruction === "attack" && !sees ? { unseen: say(`{They} {doesn't|don't} perceive ${cmd.foe} {themself}: {they} can't target that creature yet. {They} {moves|move} toward where {their} handler is facing the enemy, or {Seeks|Seek}, and {attacks|attack} once {they} {perceives|perceive} it.`) } : {}) };
 }
 /** The tag on the animal's row of Monster Turns, in labels. */
 export function commandTag(cmd, round, isTurn = false, forms = IT) {

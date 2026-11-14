@@ -68,6 +68,7 @@ So the rule the code follows: **a card is the event; an HP drop with no card for
 - **0.28.0:** a creature healing itself reads "E5 healed itself." (it read "E5 healed E5."). A band that fights harder finds who struck its leader down in the blow's own card first (`onMemoryCard` keeps the origin of a damage card that leaves its creature at 0 hit points on the turns flag, `dropped`: the creature is down by then and writes nothing itself), and only then in the fallen leader's notebook (orders.mjs `dropperOf`, `lastHurtBy`: the last sure "hurt" line by an enemy).
 - **Yielding (0.29.0):** the side's tally counts members that stand down or are prisoners as "yielded", apart from down and fled (`sideOf`, `sideWords`), and a yield is a deed its allies see ("gave itself up", `noteDeed`). An enemy's damage-taken card on a yielded monster ends the yield from `onMemoryCard` (`docs/features/speech.md`).
 - **0.30.0:** two more deeds an ally may see: "gave an animal a command" (with whether it took) and "pointed out" a creature.
+- **0.33.1:** the side's tally leaves out allies the GM has hidden and counts one built asleep as standing; an enemy healing the keeper reads "E1 healed her" (it read "itself or someone beside it"); a healer healing itself reads "themself"; an ally's deed on the keeper reads in the keeper's own forms, and so does a crossed-out line. `someone it couldn't see` stays as it is: the hello's words match it.
 
 ## Checks
 - (me-1) {unit} The rules: lines for each kind of event and witness (seen, heard, unseen; enemy, ally, itself), no number or name kept, the ladder by rung, tallies and their words, unsure marked, allies' deeds since its last turn, the side's tally, the packet's notebook and its size, crossing out, eviction order, what makes it think again, keys, the packet's key order (schema 3), the change words, the prompt.
@@ -98,3 +99,4 @@ So the rule the code follows: **a card is the event; an HP drop with no card for
 - Allies' deeds don't include plain moves ("moved beside the one in robes" was in the design's examples): the ally's square is already in the packet.
 - Private castings (Workbench) are not treated differently.
 - "What frightened it" has no source: a condition records no origin. Until players' buttons or a known card give one, it is Rhea's line to add.
+- From the 0.33.1 review, not changed: the hold on notebook writes while a packet is built is released by a 4 s timer, not when the packet's labels are saved.

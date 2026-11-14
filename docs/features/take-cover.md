@@ -22,6 +22,7 @@ Take Cover: rule B for when it is allowed, Visioner's per-creature cover, when i
   - **Reload:** `nextCover`: one begun and not recorded goes to the GM, because cover is set creature by creature; not begun and already Taking Cover is done with nothing posted.
   - **Not done:** Visioner's own Take Cover also deletes PF2e's Effect: Cover from the creature and writes an apply cache for its Revert button; this doesn't. Becoming unconscious ends it by Visioner's own hook.
 - **Take Cover in the packet (0.9.0):** the ground map marks a square holding a wall Take Cover can use (`takeCoverSquares`: the same walls as `nearCoverFor`, a segment through the square's inside) `T`, anything else blocked `#` (a thin trunk). While it is Taking Cover, `takeCover.standardCoverFrom` is empty (the stealth part keeps the real list, since Taking Cover allows a Hide) and `why` says the cover it has comes from that, because the first run's thinker read its Take Cover's own cover as a reason to take it again.
+- **0.33.1:** a Climb after Take Cover ends it as movement, not as an attack.
 
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.

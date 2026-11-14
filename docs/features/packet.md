@@ -107,3 +107,4 @@ Record every id below in the release's change record when this feature, or a fea
 ## Open items
 - Attacking undetected by picking a square.
 - **Allies:** by default a monster knows where its allies are. A brief marking a group "no shared knowledge" for mindless things [ASSUMPTION] isn't built.
+- From the 0.33.1 review, not changed: a perceived creature's visible gear goes by the item's own name, which for a character is whatever the player typed (a weapon named after a person would reach the thinker).

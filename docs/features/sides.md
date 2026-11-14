@@ -29,6 +29,7 @@ Settled by Angel, told to Rhea in the release note, hers to change:
 - **A player's creature** (`runnable`): an NPC a player owns isn't played; its open requests are closed with a note.
 - **The mind** (`library.mjs` `mindLayers`): an NPC on the party's side whose books say it began on the opposition's keeps its layers.
 - **The window** (`sideList`): tags, "(party)", the greyed row, the card.
+- **0.33.1:** a creature set to nobody's side is told it has no allies and no enemies now, not that its old enemies are its allies.
 
 ## Checks
 - (sc-1) {unit} The books: first seen, turned, back, to nobody's side, a second change, a player's ownership, a band joined late; the tag and the card as the sample has them; the History's lines; a turned leader in the band log's words, in `fallOutcome` and in a member's packet words; a turncoat's own packet block.
@@ -53,3 +54,4 @@ Settled by Angel, told to Rhea in the release note, hers to change:
 - Why it changed (a charm, a bribe) isn't known to the module; the card doesn't say.
 - A monster set to nobody's side is still asked for turns when ticked: with no enemies and no allies its packet is nearly empty.
 - The turncoat's notebook still speaks of its old enemies as enemies in past lines; the packet's `changedSides` tells the thinker how to read that.
+- From the 0.33.1 review, not changed: who leads a band is refreshed for the side check only at a look, so an heir that takes over and changes sides before the next look isn't seen as the leader.

@@ -154,12 +154,13 @@ export const flyWorld = w => ({ ...w, terrain: () => 0 });
     square is deep water. The bank square keeps its own terrain cost. */
 export const swimWorld = (w, wet) => ({ ...w, terrain: (i, j) => wet(i, j) ? 0 : w.terrain(i, j) ?? 2, wet });   /* the part of a footprint on the bank keeps its own cost */
 /** How far a Swim action goes without a swim Speed (Player Core Swim, Actions ID 2381): up to 10 ft, plus 5 ft for every 20 ft of land Speed above 20
-    once the land Speed is 40 or more; a critical success adds 5 ft (most calm water is an automatic critical success). degree: 0 critical failure,
+    once the land Speed is 40 or more, and 5 ft less below a land Speed of 20 (Table 4-4); a critical success adds 5 ft (most calm water is an automatic critical success). degree: 0 critical failure,
     1 failure, 2 success, 3 critical success; no progress below a success. */
 export function swimDistance(landSpeed = 25, degree = 2) {
   if (degree < 2) return 0;
-  const fast = landSpeed >= 40 ? FT * Math.floor((landSpeed - 20) / 20) : 0;
-  return 2 * FT + fast + (degree >= 3 ? FT : 0);
+  /* Player Core's Climb and Swim Distance table (Table 4-4): a land Speed of 5 to 15 ft swims 5 ft on a success, 10 on a critical (0.33.1, review) */
+  const fast = landSpeed >= 40 ? FT * Math.floor((landSpeed - 20) / 20) : 0, slow = landSpeed < 20 ? FT : 0;
+  return 2 * FT + fast - slow + (degree >= 3 ? FT : 0);
 }
 /** Which kind of deep water each square is, for a Swim: "calm" (a pond or lake: Player Core's "most calm water", an automatic critical success) or
     "flowing" (a river or creek channel: a trained task, so an Athletics check), or null when the square isn't deep water. deep(i, j): the square is

@@ -35,6 +35,7 @@ Settled by Angel, told to Rhea in the release note, hers to change:
 - **The packet** (schema 7): `command` after `speech`: `{ from, told, must, unseen? }`, or with `went: "wrong"` after a critical failure handed to Angel.
 - **The window** (`ui/turns.mjs`, `commandList`, `commandResult`): the result box under the handler's step (and the same words on the request's note, which is what the card still shows when the command was the plan's last step), the tag on the animal's row, the command on the animal's own card, and a card of its own for a failed command on the animal's turn with the buttons.
 - **API** (`commands` under `api.fight`): `list(combat)`, `answer(combat, tokenId, "own" | "angel")`: the GM's buttons, never Angel's door.
+- **0.33.1:** the words for an attack command and an unseen foe name "that creature" instead of "it".
 
 ## Checks
 - (ca-1) {unit} The rules: a command cleaned and in words, who can be commanded and why not, the degrees, what a result means, a command in force for one turn only, the animal's packet block, the row's tag, the handler's result line, the log's lines; the `command-animal` step through the plan check (each refusal, a deafened handler's flat check, one command an animal), `cleanPlan`, the step's record, the done step, the History's line, the prompt.

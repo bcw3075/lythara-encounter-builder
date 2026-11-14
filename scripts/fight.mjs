@@ -5,7 +5,7 @@ import { handedOn, untouched, settleFrom, settleWait, CHANGEABLE, NOTE_MAX, chan
 import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, SAVE_MULT, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, shouldSink, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, nextCommand, nextPoint, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract, nextClimb, climbResult, tookTurn } from "./turn.mjs";
 import { BURROW_DEPTH, FT, distanceBetween, burrowWorld, crossesWalls, cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, heightWhenCut, rockSquares, routeWordsIt, routeWords, swimWorld, glideWorld, treeTop, treesBeside, wallSquares, waterKinds, waterUnder } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, visibleConditions } from "./perceive.mjs";
-import { giveOwn, kindFacts, mindLayers, mindOf, pronounOf, setLines } from "./library.mjs";
+import { giveOwn, kindFacts, mindLayers, mindOf, partyPeople, pronounOf, setLines } from "./library.mjs";
 import { LOOK_ID, LOOK_TRIES, cleanLook, escapeLines, isLook, knowsAfter, lookOut, lookPacket, lookWaiting, openItems } from "./look.mjs";
 import { lineWords } from "./minds.mjs";
 import { IT, pro } from "./pronoun.mjs";
@@ -446,7 +446,7 @@ function situationNow(combat, tok, labels = {}, others = null) {
   const a = tok.actor, h = a.hitPoints ?? {};
   others ??= sense(combat, tok, turns(combat).memory?.[tok.id] ?? {});
   const byId = new Map(others.map(o => [o.id, o])), seen = {};
-  for (const [label, id] of Object.entries(labels)) { const o = byId.get(id); if (o) seen[label] = { square: o.square, state: o.state, down: isDown(o.token.actor) }; }
+  for (const [label, id] of Object.entries(labels)) { const o = byId.get(id); if (o) seen[label] = { square: o.square, state: o.state, down: ["observed", "concealed"].includes(o.state) ? isDown(o.token.actor) : null }; }   /* a hidden one shows its square only: whether it went down isn't the monster's to know (0.33.1, review) */
   return situationOf({ me: { square: squareOf(tok, combat.scene), hp: (h.value ?? 0) + (h.temp ?? 0), actions: actionsOf(a, combat), conditions: conditionWords(a) }, others: seen });
 }
 /** The runner's answer to any change on the Combat. */
@@ -497,10 +497,11 @@ async function fallIfAloft(combat, prev) {
   const what = shouldFall({ requests: mine.map(([, r]) => r), height: fall, flies: flySpeedOf(tok.actor) > 0, dead: !!tok.actor?.isDead, forward: movedOn(prev, { round: combat.round, turn: combat.turn }), clinging: !!treeUp(tok, combat.scene) });
   if (!what) return;
   const lastId = mine.at(-1)[0];
+  const before = request(combat, lastId)?.note ?? null, kept = w => [before, w].filter(Boolean).join(" ");   /* the turn's own note stays (0.33.1, review) */
   /* first, so a second turn change can't make it fall twice; the note says what is under way in case a reload cuts it short */
-  await save(combat, lastId, { fell: { from: fall }, note: `${tok.name} didn't Fly this round and is falling ${fall} ft. If {they} still {shows|show} in the air, move {them} to the ground and check {their} HP.` });
-  if (!(await ensureScene(combat) && tok.object)) { await save(combat, lastId, { note: `${tok.name} didn't Fly this round and falls ${fall} ft. I couldn't open the map, so move {them} down yourself${what === "fall" ? `; {they} may Arrest the Fall (DC 15), or else {they} {takes|take} ${Math.floor(fall / 2)} bludgeoning damage and {lands|land} prone` : ""}.` }); return; }
-  if (what === "drop") { await watched(() => tok.update({ elevation: 0 })); await save(combat, lastId, { fell: { from: fall, dead: true }, note: `${tok.name}'s body fell ${fall} ft to the ground.` }); return; }
+  await save(combat, lastId, { fell: { from: fall }, note: kept(`${tok.name} didn't Fly this round and is falling ${fall} ft. If {they} still {shows|show} in the air, move {them} to the ground and check {their} HP.`) });
+  if (!(await ensureScene(combat) && tok.object)) { await save(combat, lastId, { note: kept(`${tok.name} didn't Fly this round and falls ${fall} ft. I couldn't open the map, so move {them} down yourself${what === "fall" ? `; {they} may Arrest the Fall (DC 15), or else {they} {takes|take} ${Math.floor(fall / 2)} bludgeoning damage and {lands|land} prone` : ""}.`) }); return; }
+  if (what === "drop") { await watched(() => tok.update({ elevation: 0 })); await save(combat, lastId, { fell: { from: fall, dead: true }, note: kept(`${tok.name}'s body fell ${fall} ft to the ground.`) }); return; }
   const actor = tok.actor, stats = [actor.skills?.acrobatics, actor.saves?.reflex].filter(Boolean).sort((a, b) => (b.mod ?? 0) - (a.mod ?? 0));
   let saved = false;
   if (stats[0] && !cantAct(actor)) {   /* Arrest a Fall is a reaction: not while it can't act. Reactions used earlier aren't tracked yet. */
@@ -512,7 +513,7 @@ async function fallIfAloft(combat, prev) {
   const dmg = saved ? 0 : await fallDamage(tok, fall);
   if (dmg > 0) words += `, took ${dmg} bludgeoning damage and landed prone.`;
   else words += saved ? `; {they} Arrested the Fall and took no damage.` : `${fall <= 5 ? " (no damage from 5 ft or less)" : ""}.`;
-  await save(combat, lastId, { fell: { from: fall, saved, damage: saved ? 0 : dmg }, note: words });
+  await save(combat, lastId, { fell: { from: fall, saved, damage: saved ? 0 : dmg }, note: kept(words) });
 }
 /** Falling damage (Player Core, Falling, Rules ID 2352): a fall of more than 5 ft deals bludgeoning damage of half the distance (at most 750), and a
     creature that takes any lands prone. It is the monster's own, so it is applied whatever the monster-damage setting says. Returns the damage taken.
@@ -534,7 +535,7 @@ async function sinkNote(combat, prev) {
   const mine = Object.entries(turns(combat).requests ?? {}).filter(([, r]) => !r.reaction && r.combatantId === c.id && r.round === prev.round).sort((a, b) => (a[1].at ?? 0) - (b[1].at ?? 0));
   const wet = await stillInWater(combat, tok);
   if (!shouldSink({ requests: mine.map(([, r]) => r), wet: !!wet, dead: !!tok.actor?.isDead, forward: movedOn(prev, { round: combat.round, turn: combat.turn }) })) return;
-  await save(combat, mine.at(-1)[0], { sank: true, note: joinNote(combat, mine.at(-1)[0], `${tok.name} ended {their} turn in deep ${wet} water without a successful Swim, so by the rules {they} {sinks|sink} 10 ft or the current carries {them}, as you decide. The module keeps swimmers at the surface for now, so {they} {hasn't|haven't} moved {them}.`) });
+  await save(combat, mine.at(-1)[0], { sank: true, note: joinNote(combat, mine.at(-1)[0], `${tok.name} ended {their} turn in deep ${wet} water without a successful Swim, so by the rules {they} {sinks|sink} 10 ft or the current carries {them}, as you decide. The module keeps swimmers at the surface for now, so it hasn't moved {them}.`) });
 }
 /** The deep water under a token now ("calm", "flowing" or null), read from the scene's own documents (no canvas needed). */
 async function stillInWater(combat, tok) {
@@ -594,6 +595,9 @@ export async function onRunnerReady() {
   for (const combat of game.combats.filter(c => c.started)) {
     const r = currentRequest(combat);
     if (r?.state === "running" && !running.has(r.id)) await save(combat, r.id, { state: "stopped", go: false, note: `${game.user.name}'s page reloaded during this turn. Check the chat and HP, then Do it carries on from where it stopped.` });
+    /* a reload after the extension was recorded and before the new ask (0.33.1, review): the squares are already moved, so it only asks again */
+    if (r?.state === "extending" && !r.extending && r.extended && !running.has(r.id)) { const tok = combat.scene?.tokens.get(r.tokenId);
+      if (tok && await ensureScene(combat)) await replan(combat, { ...r, id: r.id }, r.pos ?? r.steps?.length ?? 0, [{ who: "me", what: "extended", side: r.extended }], tok, { counted: false }).catch(e => console.error(`${ID} | extend`, e)); }
     /* a reload while the map was extending: whether or not it grew, asking again from a fresh packet is right (the monster can flee to the same edge again) */
     if (r?.state === "extending" && r.extending && !running.has(r.id)) { const tok = combat.scene?.tokens.get(r.tokenId);
       /* the Survey Sheet's job ran on this page and went with it (0.25.0, seen live: the map hadn't grown, and the card said it had): only a map
@@ -688,6 +692,9 @@ const hasSpell = steps => (steps ?? []).some(s => s?.do === "spell");
 function knownTo(combat, tok, others) {
   const known = new Set(others.filter(o => canTarget(o.state)).map(o => o.id));
   for (const a of alliesOf(combat.scene, tok)) if (!a.hidden) known.add(a.id);
+  /* a creature on nobody's side in plain view (a bystander): not in the packet, but in the way like anyone else (0.33.1, review: unknown, it cut
+     every Stride short with no reason the thinker could act on) */
+  for (const t of combat.scene.tokens) if (t.id !== tok.id && !t.hidden && t.actor?.isOfType?.("creature") && !t.actor.isEnemyOf?.(tok.actor) && !t.actor.isAllyOf?.(tok.actor) && !t.getFlag(ID, "escaped")) known.add(t.id);
   return known;
 }
 /* Foundry has no pathfinding, so move.mjs finds the route; Foundry's own measurement then says what it costs, because that is what a real move charges
@@ -939,7 +946,14 @@ const answer = r => ({ state: r.state, ...(["ready", "running", "done"].includes
 const judging = new Set(), running = new Set();
 export async function judge(combat, requestId) {
   if (!isRunner() || judging.has(requestId) || request(combat, requestId)?.state !== "submitted") return null;
-  judging.add(requestId); try { return await judgeNow(combat, requestId); } finally { judging.delete(requestId); }
+  judging.add(requestId);
+  try { return await judgeNow(combat, requestId); }
+  catch (e) {   /* a throw while checking left the turn "Checking the plan" for good (0.33.1, review): it stops with the reason on the card */
+    console.error(`${ID} | judge`, e);
+    if (request(combat, requestId)?.state === "submitted") await save(combat, requestId, { state: "manual", note: `I couldn't check Angel's plan (${e.message}). Play the turn yourself.` }).catch(() => {});
+    return { state: "manual", reason: `The plan couldn't be checked (${e.message}).` };
+  }
+  finally { judging.delete(requestId); }
 }
 async function judgeNow(combat, requestId) {
   if (!await ensureScene(combat)) { await save(combat, requestId, { state: "requested", verdict: cantOpen() }); return { state: "requested", reason: cantOpen() }; }
@@ -959,6 +973,8 @@ async function judgeNow(combat, requestId) {
   const c = checkPlan(clean.plan, await gather(combat, r, undefined, { moves: hasMove(clean.plan.steps), spells: hasSpell(clean.plan.steps) }));
   if (!c.ok) return reject(combat, requestId, c.reason);
   const tok = combat.scene.tokens.get(r.tokenId);
+  /* Play it myself pressed while the plan was being checked (0.33.1, review): her press stands; the plan is kept for the card */
+  if (request(combat, requestId)?.state === "manual") { await save(combat, requestId, { plan: whole(clean.plan), steps: c.steps, verdict: null }); return { state: "manual", reason: "The GM took this turn over." }; }
   /* unticked while the plan was being checked, or the untick's save landed under the hand-in (0.29.1 review 1): hers, as an untick on the turn is */
   if (tok && !tok.getFlag(ID, "run") && !r.reaction) { await save(combat, requestId, { state: "manual", plan: whole(clean.plan), steps: c.steps, verdict: null }); return { state: "manual", reason: "The GM took this turn over (Angel was unticked)." }; }
   await save(combat, requestId, { state: "ready", plan: whole(clean.plan), steps: c.steps, verdict: null });
@@ -970,6 +986,7 @@ async function judgeNow(combat, requestId) {
 }
 /* The reason goes back to the thinker once, as a retry event. A second refusal goes to the GM. */
 async function reject(combat, requestId, reason) {
+  if (request(combat, requestId)?.state === "manual") return { state: "manual", reason: "The GM took this turn over." };   /* her Play it myself stands (0.33.1, review) */
   const tries = (request(combat, requestId).tries ?? 0) + 1, last = tries >= MAX_TRIES, at = `requests.${requestId}`;
   await saveTurns(combat, { [`${at}.state`]: "requested", [`${at}.since`]: clock(), [`${at}.tries`]: tries, [`${at}.steps`]: null, [`${at}.verdict`]: last ? `Couldn't do: ${reason}` : reason, [`${at}.refused.${tries}`]: { reason, plan: cleanPlan(request(combat, requestId).plan).plan ?? null, at: Date.now(), by: request(combat, requestId).by ?? null }, ...(last ? {} : eventChange("retry", requestId, tries)) });   /* an earlier plan's steps go: they'd read as this one's */
   return { state: "requested", reason, triesLeft: Math.max(0, MAX_TRIES - tries) };
@@ -1006,7 +1023,7 @@ function endLeftOver(combat) {
   const [id, r] = Object.entries(turns(combat).requests ?? {}).filter(([, x]) => !x.reaction && x.combatantId === combat.combatant.id && x.round === combat.round).sort((a, b) => (b[1].at ?? 0) - (a[1].at ?? 0))[0] ?? [];
   /* never a delayed request (the monster is back for a new turn), and never one whose last step left a card for the GM to apply (Rhea: Auto ends a turn
      after its last action, never after a card the GM must apply; found by the 0.12.0 review) */
-  if (r?.state === "done" && !r.delayed && !r.gmEnded && Number.isFinite(r.since) && clock() - r.since > END_MS + 3000) endAfter(combat, id);
+  if (r?.state === "done" && r.autoEnd && !r.delayed && !r.gmEnded && Number.isFinite(r.since) && clock() - r.since > END_MS + 3000) endAfter(combat, id);
 }
 /** The stall check, on the runner every 10 s (Rhea, 2026-11-08): a turn that has sat past its limit (brain.mjs's stallOf) is marked on its request,
     which turns the GM's card amber, and Angel gets a "stall" event to look into it. Card only, no chat (her rule: no whispered cards). Anything the
@@ -1015,7 +1032,7 @@ let stallTimer = null;
 export function watchStalls() { clearInterval(stallTimer); stallTimer = setInterval(() => { if (isRunner()) checkStalls().catch(e => console.warn(`${ID} | stalls`, e)); }, 10000); }
 async function checkStalls() {
   for (const combat of fights()) {
-    if (lookOf(combat)?.state === "asked" && combat.round >= 2) await saveTurns(combat, { "look.state": "missed", "look.endedAt": Date.now() }).catch(e => console.warn(`${ID} | look`, e));   /* a look still waiting when round 1 is over is dropped (R4-1), even with no turn change seen here */
+    await lookCheck(combat).catch(e => console.warn(`${ID} | look`, e));   /* started here too, for a runner that was away at the fight's start (0.33.1, review), and dropped once round 1 is over (R4-1) */   /* a look still waiting when round 1 is over is dropped (R4-1), even with no turn change seen here */
     const r = currentRequest(combat);
     if (!r) { endLeftOver(combat); continue; }
     if (!Number.isFinite(r.since)) { await saveTurns(combat, { [`requests.${r.id}.since`]: clock() }); continue; }   /* a request from before 0.9.0 */
@@ -1152,7 +1169,7 @@ export async function fixRoute(combat) { if (!game.user.isGM || !combat || comba
 /** Legality only: what the runner would say, with nothing written. Needs the fight open on this page. */
 export async function checkOnly(combat, requestId, plan) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
-  if (requestId === LOOK_ID) { const c = cleanLook(plan, Object.keys(lookOf(combat)?.monsters ?? {})); return c.ok ? { ok: true, suggestions: c.items.length } : c; }
+  if (requestId === LOOK_ID) { const c = cleanLook(plan, Object.keys(lookOf(combat)?.monsters ?? {}), lookKinds(lookOf(combat))); return c.ok ? { ok: true, suggestions: c.items.length } : c; }
   const r = request(combat, requestId); if (!r) throw new Error("No such request.");
   if (isChoice(plan)) { const c = cleanChoice(plan); return c.ok ? { ok: true, choice: c.choice } : c; }
   if (!onFightScene(combat)) throw new Error("This page doesn't have the fight's map open, so it can't tell.");
@@ -1244,7 +1261,7 @@ async function runStrike(combat, id, i, step, tok, target) {
   const strike = strikesWithIds(tok.actor).find(x => x.id === step.item)?.strike; if (!strike) throw new Error(`${tok.name} has no ${step.itemName} now.`);
   /* no shot left: before anything is rolled (a flat check first would be a free reroll on the re-plan; found by the 0.9.0 review) */
   const ammo = await ammoOf(tok.actor, strike).catch(() => null), own = !!ammo?.stack;
-  if (ammo && !Object.keys(get()).length && shotsFor(combat, tok, step.item, ammo) < 1) return "noShot";
+  if (ammo && !ammo.unreadable && !Object.keys(get()).length && (shotsFor(combat, tok, step.item, ammo) ?? 1) < 1) return "noShot";   /* unreadable: Ranged Combat counts the shot, the card says so (0.33.1, review: null < 1 refused every shot) */
   for (let guard = 0; guard < 8; guard++) {
     const now = nextAction(get(), { apply: applySetting(), flat: step.flat ?? 0 });
     if (now === "next") return "next";
@@ -1622,8 +1639,8 @@ async function runInteract(combat, id, i, step, tok) {
       } else if (now === "post") {
         stopAiming(); await record({ started: true });
         /* the thinker writes labels; the card is read by people, so labels become token names (only names the fight already shows in its tracker) */
-        const labels = turns(combat).labels ?? {}, nameOf = l => { const a = Object.entries(labels).find(([, v]) => v === l); return a ? combat.scene.tokens.get(a[0])?.name ?? null : null; };
-        const what = foundry.utils.escapeHTML(String(step.what ?? "").replace(/\b[EM]\d{1,3}\b/g, l => nameOf(l) ?? l));
+        /* as players may read them (0.33.1, review): a hidden creature is "someone", a name kept from players "a creature" */
+        const what = foundry.utils.escapeHTML(playerNamer(combat).named(String(step.what ?? "")));
         const message = await watched(() => ChatMessage.implementation.create({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), content: `<p><strong>Interact</strong> <span class="action-glyph">1</span>: ${what}</p>` }));
         /* the record and the GM's instruction in one save, so a reload can't keep one without the other */
         await save(combat, id, { log: { [i]: { posted: { message: message?.id ?? null } } }, note: joinNote(combat, id, `Apply what {they} {does|do} from the Interact card.`) });
@@ -1700,8 +1717,8 @@ async function endTakeCover(tok, reason) {
     add the note twice. Run like a stage: a time limit, and a window it opens is closed. */
 async function settleCover(combat, id, upto, tok, from = request(combat, id)?.coverSettled ?? 0) {
   const r = request(combat, id); if (!r?.steps || !endsCover(r.steps, r.log, upto, from) || !(takingCover(tok) || ownCover(tok).length)) return;
-  let last = null; for (let k = upto - 1; k >= 0 && !last; k--) if (r.steps[k]?.do === "strike" || (["ability", "spell"].includes(r.steps[k]?.do) && r.steps[k].attack) || isMove(r.steps[k])) last = r.steps[k];
-  let note; try { note = await watched(() => endTakeCover(tok, isMove(last) ? "movement" : "attack")); } catch (e) { console.error(`${ID} | take cover`, e); note = `I couldn't end ${tok.name}'s Take Cover (${e.message}): check Visioner's card.`; }
+  let last = null; for (let k = upto - 1; k >= 0 && !last; k--) if (r.steps[k]?.do === "strike" || (["ability", "spell"].includes(r.steps[k]?.do) && r.steps[k].attack) || isMove(r.steps[k]) || r.steps[k]?.do === "climb") last = r.steps[k];   /* a Climb leaves its space too (0.33.1, review) */
+  let note; try { note = await watched(() => endTakeCover(tok, isMove(last) || last?.do === "climb" ? "movement" : "attack")); } catch (e) { console.error(`${ID} | take cover`, e); note = `I couldn't end ${tok.name}'s Take Cover (${e.message}): check Visioner's card.`; }
   await save(combat, id, { coverSettled: upto, ...(note ? { note: [request(combat, id).note, note].filter(Boolean).join(" ") } : {}) });
 }
 /* ---------- abilities ---------- */
@@ -1727,7 +1744,7 @@ async function runAbility(combat, id, i, step, tok, target) {
         if (target) aimAt(target); else stopAiming();
         await record({ started: true });
         /* PF2e's own use: its card, a frequency use, a self-effect button. A Grab with no item of its own (a Strike's attack effect) gets a plain card. */
-        const message = await watched(() => ab.item ? game.pf2e.rollItemMacro(ab.item.uuid, null) : ChatMessage.implementation.create({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), content: `<p><strong>${ab.name}</strong>: keeps hold of ${target?.name ?? "its target"}.</p>` }));
+        const message = await watched(() => ab.item ? game.pf2e.rollItemMacro(ab.item.uuid, null) : ChatMessage.implementation.create({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), content: `<p><strong>${esc(ab.name)}</strong>: keeps hold of ${esc(target?.name ?? "the creature held")}.</p>` }));   /* names escaped (0.33.1, review) */
         /* the record and the GM's instruction in one save, so a reload can't keep one without the other */
         await save(combat, id, { log: { [i]: { posted: { message: message?.id ?? null } } }, ...(step.mode === "card" ? { note: joinNote(combat, id, `Apply ${step.itemName}${step.target ? ` at ${step.target}` : ""} from its card.`) } : {}) });
       } else if (now === "flat") {
@@ -2265,6 +2282,9 @@ function endAfter(combat, requestId) {
   const r = request(combat, requestId), tok = combat.scene?.tokens.get(r?.tokenId), key = `${combat.id}.${r?.round}.${r?.combatantId}`;
   if (!r || !tok?.getFlag(ID, "auto") || ending.has(key)) return;
   ending.add(key);
+  /* marked so the runner's 10 s check ends only a turn Auto was ending (0.33.1, review): never one finished by Next step and ticked Auto later,
+     nor one handed to the GM after too many re-plans */
+  if (!r.autoEnd) save(combat, requestId, { autoEnd: true }).catch(() => {});
   setTimeout(async () => {
     try {
       while (game.paused) await new Promise(r => setTimeout(r, 300));   /* paused: the turn ends once the GM unpauses, if it is still this monster's */
@@ -2289,7 +2309,13 @@ async function pausedAuto(combat, requestId, tok) {
 /* Auto's pause between actions, so each roll can be followed. Hold and Play it myself end it at once. */
 async function pauseBetween(combat, id) {
   const end = Date.now() + autoPause() * 1000;
-  while (Date.now() < end) { await new Promise(r => setTimeout(r, Math.min(200, end - Date.now()))); const n = request(combat, id); if (n?.hold || n?.state === "manual") return; }
+  while (Date.now() < end) { await new Promise(r => setTimeout(r, Math.min(200, end - Date.now()))); const n = request(combat, id); if (n?.hold || n?.state === "manual" || turnMovedOn(combat, n)) return; }
+}
+/** The turn a request belongs to is no longer the one running (the GM pressed next turn, or the fight ended): a monster's reaction belongs to the
+    turn it was made on. */
+function turnMovedOn(combat, r) {
+  if (!r) return true;
+  return !game.combats.has(combat.id) || !combat.started || combat.round !== r.round || combat.combatant?.id !== (r.reaction ? r.turnOf : r.combatantId);
 }
 async function runTurn(combat, requestId) {
   const r = request(combat, requestId); if (!RESUMABLE.includes(r?.state)) throw new Error("That turn isn't ready.");
@@ -2305,6 +2331,8 @@ async function runTurn(combat, requestId) {
     let step = r.steps[i];
     if (now.state === "manual") return;
     if (now.hold) return save(combat, requestId, { state: "held", hold: false, note: "Held before the next step." });
+    /* the turn moved on while Auto waited between steps (0.33.1, review): nothing more is done on another creature's turn */
+    if (i > (r.pos ?? 0) && turnMovedOn(combat, now)) return save(combat, requestId, { state: "stopped", pos: i, note: joinNote(combat, requestId, `The turn moved on before step ${i + 1}, so the rest of the plan wasn't done.`) });
     /* look again before an action that hasn't begun. One begun before a reload carries on, never re-planned halfway. */
     if (!Object.keys(now.log?.[i] ?? {}).length) {
       let look; try { look = await lookAgain(combat, now, i, tok); } catch (e) { console.error(`${ID} | look again`, e); return save(combat, requestId, { state: "stopped", note: `I couldn't check step ${i + 1} before doing it (${e.message}). Play the rest yourself.` }); }
@@ -2445,6 +2473,7 @@ async function replan(combat, r, i, changes, tok, { counted = true } = {}) {
   return withPackets(async () => {
   let built; try { built = await buildPacket(combat, tok, { spent, attacks, done, note: `Asked again mid-turn: ${why}` }); }
   catch (e) { console.error(`${ID} | packet`, e); return save(combat, r.id, { state: "stopped", note: `Something changed (${why}) and I couldn't work out what ${tok.name} perceives now (${e.message}). Play the rest yourself.` }); }
+  if (request(combat, r.id)?.state === "manual") return;   /* Play it myself pressed while the packet was built (0.33.1, review): no new ask */
   const id = foundry.utils.randomID(8);
   await saveTurns(combat, { [`${at}.state`]: "done", [`${at}.pos`]: i, [`${at}.replanned`]: id,
     [`requests.${id}`]: { state: "requested", combatantId: r.combatantId, tokenId: r.tokenId, round: r.round, turn: r.turn, at: Date.now(), since: clock(), log: {}, labels: built.labels, packet: built.packet, ...(built.mindHeld.length ? { mindHeld: built.mindHeld } : {}), seen: situationNow(combat, tok, built.labels, built.others), nbAt: Date.now(), note: null, tries: 0, pos: 0, spent, attacks, done, replans, why: changes, parent: r.id },
@@ -2869,7 +2898,7 @@ async function askReactions(combat, id, i, key, gate, tok, list, kind = "") {
   rxWatch.set(watchKey, rolls);
   emitSocket({ t: "ask", combat: combat.id, request: id, key, until, list: asked.filter(x => x.to === "player") });
   let out = "done", held = false; const marked = new Set();
-  const skip = async (n, as) => { for (const x of asked) if (!n?.react?.answers?.[x.id] || n.react.answers[x.id] === "react") await save(combat, id, { [`react.answers.${x.id}`]: as }); };   /* one key each, so an answer arriving now isn't overwritten (review finding 12) */
+  const skip = async (n, as) => { for (const x of asked) if (!n?.react?.answers?.[x.id] || n.react.answers[x.id] === "react") await save(combat, id, { [`react.answers.${x.id}`]: n?.react?.answers?.[x.id] === "react" ? "done" : as }); };   /* a reactor who pressed React used it (0.33.1, review): "done", not skipped */   /* one key each, so an answer arriving now isn't overwritten (review finding 12) */
   try {
     for (;;) {
       await sleep(REACT_POLL);
@@ -2946,7 +2975,7 @@ function beforeKinds(actor, step, target) {
   if (step.do === "strike") { const s = strikesWithIds(actor).find(x => x.id === step.item)?.strike; return { ranged: !!s?.item?.isRanged, attack: pc, kind: "Strike" }; }
   if (step.do === "ability") { const ab = abilityList(actor).find(a => a.id === step.item), tr = ab?.traits ?? []; if (ab?.followUp) return {}; return { manipulate: tr.includes("manipulate"), kind: ab?.name ?? "" }; }
   if (step.do === "spell") { const sp = spellFor(actor, step)?.spell, tr = [...(sp?.system?.traits?.value ?? [])];
-    return { manipulate: tr.includes("manipulate"), ranged: tr.includes("attack"), area: !!step.area?.aim && !!step.damaging && sp?.system?.defense?.save?.statistic === "reflex", kind: sp?.name ? `casting ${sp.name}` : "" }; }
+    return { manipulate: tr.includes("manipulate"), ranged: tr.includes("attack") && !/touch/i.test(String(sp?.system?.range?.value ?? "")), area: !!step.area?.aim && !!step.damaging && sp?.system?.defense?.save?.statistic === "reflex", kind: sp?.name ? `casting ${sp.name}` : "" }; }
   return {};
 }
 /** What the target's reactions before this step's Strike add to its AC against it (Nimble Dodge; Interposing Earth's standard cover), from the answers
@@ -3203,8 +3232,12 @@ function meleeOf(actor) {
     it, their reaction unspent and no offer open. [{ c, t, a, melee }] */
 function monsterReactors(combat, by) {
   const t0 = turns(combat), open = new Set(openReactions(combat).map(r => r.tokenId)), out = [];
+  /* a monster the module is running right now: the party's side was already asked in its own reaction pass (0.33.1, review: a party-side NPC was
+     offered the same trigger twice) */
+  const modulesTurn = !!by.getFlag?.(ID, "run") && currentRequest(combat)?.tokenId === by.id;
   for (const c of combat.combatants) {
     const t = c.token, a = t?.actor;
+    if (modulesTurn && a && onParty(a)) continue;
     if (!t || t.id === by.id || c.defeated || t.hidden || !a?.isOfType?.("npc") || !a.isEnemyOf?.(by.actor) || t.getFlag(ID, "escaped") || stoodDown(t) || isBelow(t) || isDown(a)) continue;   /* a GM-hidden monster stays hidden (review finding 6) */   /* one that has yielded takes no reactions (0.29.0, design review 3) */
     if (cantAct(a) || cantAttack(a) || ["stunned", "confused"].some(k => a.hasCondition?.(k))) continue;
     if (t0.reacted?.[t.id] || t0.rx?.[t.id] || open.has(t.id) || offering.has(t.id)) continue;   /* `rx`: a party-side creature's reaction box (0.27.0, review 12) */   /* `offering`: two triggers in the same moment make one offer (review finding 3) */
@@ -3286,7 +3319,9 @@ async function runReaction(combat, id) {
   if (pre === "manual") return;
   /* nothing was rolled: the monster keeps its reaction, and Interposing Earth's cover doesn't linger (review 10) */
   if (pre === "gone" || pre === "down") { await saveTurns(combat, { [`reacted.${tok.id}`]: null }); await dropEarthCover(combat).catch(e => console.warn(`${ID} | cover`, e));
-    return end(pre === "gone" ? "The turn moved on while reactions to it were being asked." : `${tok.name} went down before it could strike.`); }
+    return end(pre === "gone" ? "The turn moved on while reactions to it were being asked." : `${tok.name} went down before {they} could strike.`); }
+  /* Hold pressed while the reactions to it were asked (0.33.1, review): it waits for Do it, as a turn's step does */
+  if (pre === "held") return save(combat, id, { state: "held", hold: false, note: "Held before {their} Reactive Strike, after the reactions to it." });
   let result; try { result = await runStrike(combat, id, 0, r.steps[0], tok, target); } catch (e) { console.error(e); result = "ask"; await save(combat, id, { note: e.message }); }
   await dropEarthCover(combat).catch(e => console.warn(`${ID} | cover`, e));
   if (request(combat, id)?.state === "manual") return;
@@ -3386,9 +3421,11 @@ const deedsSince = (combat, tokenId) => { const m = turns(combat).nbTurn?.[token
 async function markTurn(combat) { hpBaseline(combat); const id = combat.combatant?.tokenId; if (!id || !combat.started) return; const was = turns(combat).nbTurn?.[id] ?? [0, 0]; await saveTurns(combat, { [`nbTurn.${id}`]: [was[1] ?? 0, Date.now()] }); }
 /** Its side's tally: itself and its allies in this fight, counted as standing, down, or fled (an escaped monster no longer in the tracker). */
 function sideOf(combat, tok) {
-  const mine = t => t.id === tok.id || !!t.actor?.isAllyOf?.(tok.actor), inFight = combat.combatants.filter(c => c.token && mine(c.token));
-  const fled = (combat.scene?.tokens.contents ?? []).filter(t => mine(t) && t.getFlag(ID, "escaped")?.combat === combat.id && !inFight.some(c => c.tokenId === t.id)).length;
-  const isOut = c => c.defeated || isDown(c.token.actor) || isDeadNow(c.token.actor), down = inFight.filter(isOut).length;
+  /* a GM-hidden ally isn't counted (it never reaches the thinker), and one asleep isn't down: the builder puts Unconscious on a monster built asleep
+     (0.33.1, review, as fallenWord has it) */
+  const mine = t => t.id === tok.id || (!!t.actor?.isAllyOf?.(tok.actor) && !t.hidden), inFight = combat.combatants.filter(c => c.token && mine(c.token));
+  const fled = (combat.scene?.tokens.contents ?? []).filter(t => (t.id === tok.id || !!t.actor?.isAllyOf?.(tok.actor)) && t.getFlag(ID, "escaped")?.combat === combat.id && !inFight.some(c => c.tokenId === t.id)).length;
+  const isOut = c => c.defeated || fallenWord(c.token) === "down" || isDeadNow(c.token.actor), down = inFight.filter(isOut).length;
   /* yielded (0.29.0): standing down in the tracker, or a prisoner out of it */
   const prisoners = (combat.scene?.tokens.contents ?? []).filter(t => mine(t) && prisonerOf(t)?.combat === combat.id && !inFight.some(c => c.tokenId === t.id)).length, yielding = inFight.filter(c => !isOut(c) && !!yieldOf(c.token)).length;
   return { started: inFight.length + fled + prisoners, standing: inFight.length - down - yielding, down, fled, yielded: yielding + prisoners };
@@ -3537,8 +3574,12 @@ export const bandLog = combat => Object.entries(ordersOf(combat).log ?? {}).filt
 function orderFacts(combat, tok) {
   const scene = combat.scene, band = tok ? bandOf(scene, tok) : null; if (!band) return null;
   const lead = leaderOf(scene, band, combat), members = membersOf(scene, band.key).filter(t => t.id !== tok.id), follows = t => PLANNED.includes(disciplineOf(scene, t, combat)) && !fellWord(t);
-  return { band, leads: lead.tok?.id === tok.id && follows(tok), members, followers: members.filter(follows), groups: jobGroups(scene, band) };
+  const fell = fightBand(combat, band.key)?.fell, turnedAway = fell?.state === "turned" && !lead.took && lead.tok?.id !== fell.was;   /* its leader changed sides: nobody leads by the guess now (0.33.1, review) */
+  return { band, leads: !turnedAway && lead.tok?.id === tok.id && follows(tok), members, followers: members.filter(follows), groups: jobGroups(scene, band) };
 }
+/** A kind's name as the thinker may read it: a brief row's name is typed by someone, so one that names a party member is left out (0.33.1, review,
+    as the band's jobs are gated in bands.mjs). */
+const kindWord = (scene, name) => { const g = noteForThinker(String(name ?? ""), partyPeople(scene, () => null)); return g.unknown.length || g.ambiguous.length ? "" : String(name ?? ""); };
 /** For the plan check and the packet: null when it leads no band, else { ok, why, jobs: [{ id, name }], fallBack }. */
 function orderCtx(combat, tok) {
   const f = orderFacts(combat, tok); if (!f?.leads) return null;
@@ -3546,7 +3587,7 @@ function orderCtx(combat, tok) {
   /* a kind's job can be ordered only when someone of that kind besides the leader takes spoken orders (0.28.0 live test: the list offered the
      leader's own kind when it was alone in it, and a wolf's) */
   const told = new Set(f.followers.map(t => t.id));
-  return { ...can, jobs: f.groups.filter(g => g.tokens.some(id => told.has(id))).map(g => ({ id: g.id, name: g.name })), fallBack: fallBackWords(planOf(combat.scene, f.band, combat).fallBack) };
+  return { ...can, jobs: f.groups.filter(g => g.tokens.some(id => told.has(id))).map(g => ({ id: g.id, name: kindWord(combat.scene, g.name) || "some of its band" })), fallBack: fallBackWords(planOf(combat.scene, f.band, combat).fallBack) };
 }
 /** Who of its band gets an order from this leader as things stand: { lang, canTest, list: [{ id, name, hears, why, called, listens }] }. The sound
     test needs the fight on this page's canvas (`canTest`); without it only the conditions, the language and the GM's calls decide. Membership is
@@ -3582,9 +3623,11 @@ function orderOut(combat, lead, order, { by = "angel" } = {}) {
 async function orderChat(combat, lead, entry) {
   if (lead.hidden) return null;
   const lang = entry.lang ? langName(entry.lang) : null, n = namer(turns(combat).labels ?? {}, Object.fromEntries(combat.scene.tokens.contents.map(x => [x.id, x.name])));
-  const m = await ChatMessage.implementation.create({ speaker: ChatMessage.implementation.getSpeaker({ token: lead }), whisper: [], blind: false, content: `<p>Shouts something${lang ? ` in ${esc(lang)}` : ""}.</p>`,
+  /* a leader every character has hidden or undetected (Visioner) shouts as "A voice", as its spoken lines do (0.33.1, review) */
+  const voice = unseenByParty(lead), speaker = voice ? { scene: combat.scene.id, actor: null, token: null, alias: "A voice" } : ChatMessage.implementation.getSpeaker({ token: lead });
+  const m = await ChatMessage.implementation.create({ speaker, whisper: [], blind: false, content: `<p>Shouts something${lang ? ` in ${esc(lang)}` : ""}.</p>`,
     /* slug and pwords (0.29.0, R3-4): a player whose character knows the language reads the sentence, or the order in names made for players */
-    flags: { [ID]: { order: { say: entry.say ?? null, lang, slug: entry.lang ?? null, words: n.named(entry.words), pwords: playerWords(combat, lead, entry), heard: entry.heard.length, of: entry.heard.length + Object.keys(entry.missed ?? {}).length } } } });
+    flags: { [ID]: { order: { say: entry.say ?? null, lang, slug: entry.lang ?? null, words: n.named(entry.words), pwords: playerWords(combat, lead, entry), heard: entry.heard.length, of: entry.heard.length + Object.keys(entry.missed ?? {}).length, ...(voice ? { voice: true, who: lead.name } : {}) } } } });
   return m?.id ?? null;
 }
 /** On a GM's page, an order's chat line shows what was said and ordered; players keep the line as it is stored. */
@@ -3592,7 +3635,7 @@ export function onRenderOrder(message, html) {
   const o = message.getFlag?.(ID, "order"); if (!o || !message.author?.isGM) return;   /* only a GM's own message is an order's line (review 9) */
   const body = html.querySelector?.(".message-content"); if (!body) return;
   if (!game.user.isGM) { const h = understands(myLanguages(), o.slug) ? orderHtml(o, P(game.scenes.get(message.speaker?.scene)?.tokens.get(message.speaker?.token))) : ""; if (h) body.innerHTML = h; return; }   /* 0.29.0: by the player's own languages */
-  body.innerHTML = `<p><strong>Order</strong> <span class="action-glyph">F</span> ${o.say ? `“${esc(o.say)}”` : esc(o.words ?? "")}</p><p style="font-size:var(--font-size-12);opacity:.75;border-top:1px solid #8884;margin-top:4px;padding-top:3px">${[o.lang ? `In ${esc(o.lang)}` : "", o.say ? esc(o.words ?? "") : "", `heard by ${Number(o.heard) || 0} of its ${Number(o.of) || 0}`].filter(Boolean).join(" · ")}</p>`;
+  body.innerHTML = `<p><strong>Order</strong>${o.voice ? ` (${esc(o.who ?? "")}, unseen)` : ""} <span class="action-glyph">F</span> ${o.say ? `“${esc(o.say)}”` : esc(o.words ?? "")}</p><p style="font-size:var(--font-size-12);opacity:.75;border-top:1px solid #8884;margin-top:4px;padding-top:3px">${[o.lang ? `In ${esc(o.lang)}` : "", o.say ? esc(o.words ?? "") : "", `heard by ${Number(o.heard) || 0} of its ${Number(o.of) || 0}`].filter(Boolean).join(" · ")}</p>`;
 }
 /** The `order` step of a leader's plan: speech, so no roll and no card of PF2e's. One write gives the order to every hearer, logs it and marks
     the step, so a reload can't give it twice or leave it half given. */
@@ -3612,7 +3655,7 @@ function ordersBlock(combat, tok, { labels = {}, nameable = new Set(), memory = 
   const standing = ordersOf(combat).heard?.[tok.id] ?? {}, groups = jobGroups(scene, band), mine = groups.find(g => g.tokens.includes(tok.id))?.id ?? null;
   const byLabel = Object.fromEntries(Object.entries(labels).map(([id, l]) => [l, id])), fb = fallBackWords(planOf(scene, band, combat).fallBack);
   const wordsOf = o => { const t = o.target ? scene.tokens.get(byLabel[o.target]) : null, self = !!t && t.id === tok.id;
-    return orderWords(self ? { ...o, target: "itself" } : o, { ally: self || !!t?.actor?.isAllyOf?.(tok.actor), mine: !!o.job && o.job === mine, jobName: groups.find(g => g.id === o.job)?.name ?? "", fallBack: fb }); };
+    return orderWords(self ? { ...o, target: "yourself" } : o, { ally: self || !!t?.actor?.isAllyOf?.(tok.actor), mine: !!o.job && o.job === mine, jobName: kindWord(scene, groups.find(g => g.id === o.job)?.name ?? ""), fallBack: fb }); };
   /* told of, not seen (Rhea, R3-14): a creature an order names that it neither perceives nor remembers: it exists for it, with no square */
   const named = [...labelsIn(standing), ...(String(fightBand(combat, band.key)?.objective ?? "").match(/\b[EM]\d{1,3}\b/g) ?? [])];
   const unseen = [...new Set(named)].filter(l => { const id = byLabel[l]; return !!id && !nameable.has(id) && !memory[id]; });
@@ -3637,11 +3680,12 @@ async function settleBandsNow(combat) {
     /* a leader that changed sides (0.30.0, R3-15): "If the leader falls" fires once, as for any fall; it no longer counts as a member, so the
        marked leader reads as gone and a guessed one is silently passed over: the books (`turned`) say who it was */
     const tn = turns(combat).turned?.[band.key] ?? null, lead0 = leaderOf(scene, band, combat), useTurned = !!tn && !tn.done;   /* `done` is written with the fall itself: a later fall of the heir rewrites `fell.was`, which so can't say (0.30.0 review 1) */
-    if (tn && !useTurned && lead0.gone) continue;   /* already acted on: the mark still points at the one that left */
+    const heir0 = fightBand(combat, band.key)?.leader?.token;
+    if (tn && !useTurned && lead0.gone && !(heir0 && !scene.tokens.get(heir0))) continue;   /* already acted on: the mark still points at the one that left; unless the heir has left the map since (0.33.1, review) */
     const lead = useTurned ? { tok: scene.tokens.get(tn.token) ?? null, gone: false } : lead0, state = useTurned ? "turned" : lead.gone ? "gone" : lead.tok ? fellWord(lead.tok) : null; if (!state) continue;
     if (!useTurned && lead.tok?.hidden && !lead.tok.getFlag(ID, "escaped")) continue;
     /* acted on already, unless the one who took over has since left the map: then the next in line is found again (review 13) */
-    const was = useTurned ? tn.token : lead.tok?.id ?? "gone", now = fightBand(combat, band.key), heirGone = !!now?.leader?.token && !scene.tokens.get(now.leader.token); if (now?.fell?.was === was && !heirGone && !(["yielded", "turned"].includes(now.fell.state) && state !== now.fell.state)) continue;   /* one that gave itself up and was later struck down has fallen again (0.29.0 review 2) */
+    const was = useTurned ? tn.token : lead.tok?.id ?? "gone", now = fightBand(combat, band.key), heirGone = !!now?.leader?.token && !scene.tokens.get(now.leader.token); if (now?.fell?.was === was && !heirGone && !((["yielded", "turned"].includes(now.fell.state) || state === "turned") && state !== now.fell.state)) continue;   /* one that gave itself up and was later struck down has fallen again (0.29.0 review 2) */
     const members = membersOf(scene, band.key), pick = natureOf(natureLayers(scene, band, combat)).ifLeaderFalls?.pick ?? null;
     /* who struck it down: the blow that took it to 0 hit points, else the last sure blow in its notebook; an enemy of the leader only. One that
        has no label yet gets one here, so the new objective can name it */
@@ -3765,7 +3809,7 @@ function speechCtx(combat, tok) {
   return speechFor({ forms: P(tok, combat), party: onParty(a), cantAct: cantAct(a), langs: langsOf(a), below: isBelow(tok), round: combat.round, last: turns(combat).speech?.last?.[tok.id] ?? null, yielded: !!yieldOf(tok), over: over?.combat === combat.id ? over : null });
 }
 /** Names for a line players read: a creature the GM has hidden is "someone", one whose name doesn't show is "a creature". */
-const playerNamer = combat => namer(turns(combat).labels ?? {}, Object.fromEntries(combat.scene.tokens.contents.map(x => [x.id, x.hidden ? "someone" : moverName(x) === "A creature" ? "a creature" : x.name])));
+const playerNamer = combat => namer(turns(combat).labels ?? {}, Object.fromEntries(combat.scene.tokens.contents.map(x => [x.id, x.hidden || (!x.actor?.hasPlayerOwner && unseenByParty(x)) ? "someone" : moverName(x) === "A creature" ? "a creature" : x.name])));
 /** An order in words a player may read (review 3): labels as players' names, the kind it names as "some of its band" (a kind's name can be a
     hidden creature's), and nothing at all for an order in the GM's own words. */
 function playerWords(combat, lead, entry) {
@@ -3955,7 +3999,7 @@ async function runSpeech(combat) {
       if (p.round !== combat.round || combat.combatant?.tokenId !== tok.id) { await refuse("the turn moved on before it was said"); continue; }
       const cid = combat.combatant.id;   /* whose turn a yield ends: read before anything waits (review 1) */
       /* a yield cut off after its token mark (a reload): this press marked it, so it carries on from there (review 3) */
-      const resumed = p.yield && yieldOf(tok)?.combat === combat.id && (tok.getFlag(ID, "yielded")?.at ?? 0) >= (p.ts ?? Infinity);
+      const y0 = tok.getFlag(ID, "yielded"), resumed = p.yield && yieldOf(tok)?.combat === combat.id && y0?.round === p.round && (y0?.at ?? 0) >= (p.ts ?? Infinity) - 30000;   /* p.ts is the pressing page's clock, y0.at the runner's: 30 s of leeway (0.33.1, review); her box can't press over a yield already standing */
       const ctx = speechCtx(combat, tok), gate = p.yield ? ctx.yield : ctx.say; if (!gate.ok && !resumed) { await refuse(gate.why); continue; }
       if (!await ensureScene(combat)) { await refuse(cantOpen()); continue; }
       const words = p.words && (ctx.say.ok || resumed) ? String(p.words) : "", lang = words ? (langsOf(tok.actor).includes(p.lang) ? p.lang : speechLanguage(langsOf(tok.actor))) : null, ln = lang ? langName(lang) : null;
@@ -4180,7 +4224,7 @@ function pointHearers(combat, tok, target) {
   const scene = combat.scene, memory = turns(combat).memory ?? {}, mine = langsOf(tok.actor), list = [];
   for (const a of alliesOf(scene, tok)) { if (!a.object || !runnable(a) || fellWord(a)) continue;
     const one = senser(combat, a, memory[a.id] ?? {}), act = a.actor, me = one(tok), it = one(target);
-    list.push({ id: a.id, name: a.name, pro: P(a, combat), how: allyGets({ asleep: !!act.hasCondition?.("unconscious"), knows: canTarget(it.state), seesPointer: SEES.includes(me.state),
+    list.push({ id: a.id, name: a.name, pro: P(a, combat), ...(a.hidden ? { hidden: true } : {}), how: allyGets({ asleep: !!act.hasCondition?.("unconscious"), knows: canTarget(it.state), seesPointer: SEES.includes(me.state),
       hears: !act.hasCondition?.("deafened") && !isBelow(a) && !soundBlocked(tok.object.center, a.object.center), sharesLanguage: langsOf(act).some(l => mine.includes(l)) }) }); }
   return { list, lang: mine.length ? langName(speechLanguage(mine)) : null };
 }
@@ -4360,6 +4404,8 @@ async function startLook(combat) {
   } catch (e) { console.error(`${ID} | look`, e); await saveTurns(combat, { look: whole({ state: "failed", at: Date.now(), reason: text(e.message, 120) }) }).catch(() => {}); }
   finally { lookStarting.delete(combat.id); }
 }
+/** label → kind key, for telling two suggestions about one kind apart from two about two kinds. */
+const lookKinds = l => Object.fromEntries(Object.entries(l?.monsters ?? {}).map(([label, m]) => [label, m.kind ?? m.kindName ?? label]));
 /** The model a look goes with: Opus when any of its monsters is thought for by Opus (`modelOf`), else Sonnet. */
 function lookModel(combat, l) {
   const ms = Object.values(l.monsters ?? {}).map(m => combat.scene?.tokens.get(m.tokenId)).filter(Boolean).map(t => modelOf(t, combat));
@@ -4395,7 +4441,7 @@ async function submitLook(combat, raw, meta = {}) {
   if (stale(brainNow(routeOfMeta(meta)), cleanMeta(meta).generation)) return { state: l.state, ignored: true, reason: SUPERSEDED };
   const off = offLook(combat, l, meta); if (off) return { state: l.state, ignored: true, reason: off };
   if (JSON.stringify(raw ?? null).length > PLAN_BYTES) return { state: l.state, reason: "That look is far too long." };
-  const c = cleanLook(raw, Object.keys(l.monsters ?? {}));
+  const c = cleanLook(raw, Object.keys(l.monsters ?? {}), lookKinds(l));
   if (c.ok && c.seq != null && c.seq !== l.seq) return { state: l.state, ignored: true, reason: "That look answers another fight's look." };
   /* refused: once more, as a new event (a fresh number: the API worker answers each number once) with the reason, to the same thinker; a second refusal fails it.
      The answer reads "requested" with the tries left, as a turn's refusal does, so the worker counts it as landed (0.33.0 review 1) */
@@ -4430,6 +4476,15 @@ export async function answerLook(combat, which, answer) {
   }
   for (const i of ids) { change[`flags.${ID}.turns.look.items.${i}.answer`] = answer; change[`flags.${ID}.turns.look.items.${i}.by`] = game.user.name; }
   await combat.update(change);
+  /* the kinds list is written whole: a second GM page accepting another kind's line at the same moment can write over this one (found 0.33.1).
+     Read it back and put any accepted kind line that went missing in again, keeping what the other page wrote. */
+  if (answer === "accept" && Object.keys(change).some(k => k.endsWith(".minds.kinds"))) for (let tries = 0; tries < 3; tries++) {
+    await new Promise(r => setTimeout(r, 300 + Math.random() * 300));   /* time for the other page's write to arrive */
+    const want = ids.map(i => l.items[i]).filter(x => x.to !== "one"), now = [...(combat.getFlag(ID, "minds")?.kinds ?? [])].map(x => ({ ...x, lines: { ...(x.lines ?? {}) } }));
+    const lost = want.filter(x => !now.find(e => e.kind === x.kind)?.lines?.[x.line]); if (!lost.length) break;
+    for (const x of lost) { let k = now.find(e => e.kind === x.kind); if (!k) { k = { kind: x.kind, lines: {} }; now.push(k); } k.lines[x.line] = { ...(x.pick ? { pick: x.pick } : {}), text: x.text ?? "", by: "angel", at }; }
+    await combat.update({ [`flags.${ID}.minds.kinds`]: now });
+  }
   return ids.length;
 }
 /** Dismiss on the look's card (any state but asked). */

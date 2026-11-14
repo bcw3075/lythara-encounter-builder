@@ -153,7 +153,7 @@ export function fallOutcome({ pick = null, state = null, members = [], leaderId 
   return out;
 }
 /** The line a member who no longer gives up carries in this fight's layer of its mind. */
-export const NEVER_GIVES_UP = "Never, now: its leader was struck down and it fights on to the end.";
+export const NEVER_GIVES_UP = "Never, now: the band's leader was struck down, and this one fights on to the end.";
 
 /* ---------- the band log, in words (the History, the cards) ---------- */
 const FELL = { down: "is down", dead: "is dead", fled: "has fled the fight", gone: "is gone", yielded: "has given {themself} up", turned: "has changed sides" };

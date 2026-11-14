@@ -33,7 +33,7 @@ export const isLook = raw => { let p = raw; if (typeof p === "string") { try { p
 /** A look as it arrives (an object or JSON text), cleaned. monsters: the labels the look was asked about. Out: { ok, items, fits, seq } or a
     refusal in words. Each item: { to: "kind" | "one", label, line, pick?, text, why }. A second suggestion for the same line of the same monster
     (or its kind) is dropped; so is one about a monster the look didn't name. */
-export function cleanLook(raw, monsters = []) {
+export function cleanLook(raw, monsters = [], kindOf = {}) {
   let p = raw;
   if (typeof p === "string") { try { p = JSON.parse(p); } catch { return bad("The look isn't valid JSON."); } }
   if (!p || typeof p !== "object" || Array.isArray(p) || !Array.isArray(p.look)) return bad(`A look is { "look": [suggestions], "fits": [labels], "seq": the event's seq }.`);
@@ -50,7 +50,7 @@ export function cleanLook(raw, monsters = []) {
     if (picks && !pick) return bad(`${at}: a "${s.line}" suggestion needs "pick", one of ${Object.keys(picks).map(k => `"${k}"`).join(", ")}.`);
     const words = cutWords(text(s.text, 2000), s.line === "notes" ? CAPS.storeNotes : CAPS.store);
     if (!words && !pick) return bad(`${at}: "text" holds the new words for the line.`);
-    const key = `${s.for}|${s.monster}|${s.line}`; if (seen.has(key)) continue; seen.add(key);
+    const key = s.for === "kind" ? `kind|${kindOf[s.monster] ?? s.monster}|${s.line}` : `one|${s.monster}|${s.line}`;   /* two of one kind name one kind (0.33.1, review) */ if (seen.has(key)) continue; seen.add(key);
     items.push({ to: s.for, label: s.monster, line: s.line, ...(pick ? { pick } : {}), text: words, why: text(s.why, WHY_MAX) });
   }
   const fits = Array.isArray(p.fits) ? [...new Set(p.fits.filter(l => typeof l === "string" && known.has(l)))] : [];
