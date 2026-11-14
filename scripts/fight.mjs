@@ -2322,8 +2322,10 @@ function turnMovedOn(combat, r) {
   return !game.combats.has(combat.id) || !combat.started || combat.round !== r.round || combat.combatant?.id !== (r.reaction ? r.turnOf : r.combatantId);
 }
 async function runTurn(combat, requestId) {
-  const started = clock(), r = request(combat, requestId); if (!RESUMABLE.includes(r?.state)) throw new Error("That turn isn't ready.");
+  const r = request(combat, requestId); if (!RESUMABLE.includes(r?.state)) throw new Error("That turn isn't ready.");
+  const took = r.tookAt ?? null;   /* her last Play it myself as this run read the turn: a newer one stops the run (found live in 0.33.1's test builds) */
   if (!await ensureScene(combat)) return save(combat, requestId, { state: "stopped", go: false, note: cantOpen() });
+  { const n = request(combat, requestId); if ((n?.state === "manual" && r.state !== "manual") || (n?.tookAt ?? null) !== took) return; }   /* pressed while the map opened: hers */
   /* pressing Do it means go, whatever was held. A note about why it stopped goes; one from an earlier step (a PC at 0 HP) stays with the turn. */
   await save(combat, requestId, { state: "running", go: false, hold: false, gmWait: false, changeVerdict: null, ...(r.state === "held" || r.state === "stopped" ? { note: null } : {}) });
   const tok = combat.scene.tokens.get(r.tokenId);
@@ -2334,7 +2336,7 @@ async function runTurn(combat, requestId) {
     const now = { ...request(combat, requestId), id: requestId };   /* a stored request doesn't carry its own id; replan needs it */
     let step = r.steps[i];
     if (now.state === "manual") return;
-    if (Number.isFinite(now.tookAt) && now.tookAt >= started) return save(combat, requestId, { state: "manual" });   /* Play it myself pressed as this run began */
+    if ((now.tookAt ?? null) !== took) return save(combat, requestId, { state: "manual" });   /* Play it myself pressed since this run read the turn */
     if (now.hold) return save(combat, requestId, { state: "held", hold: false, note: "Held before the next step." });
     /* the turn moved on while Auto waited between steps (0.33.1, review): nothing more is done on another creature's turn */
     if (i > (r.pos ?? 0) && turnMovedOn(combat, now)) return save(combat, requestId, { state: "stopped", pos: i, note: joinNote(combat, requestId, `The turn moved on before step ${i + 1}, so the rest of the plan wasn't done.`) });
@@ -2639,8 +2641,8 @@ export function saveTurn(combatant, options, userId) {
 }
 export const busy = () => starting.size > 0 || judging.size > 0 || running.size > 0 || game.combats.filter(c => c.started).some(c => requestBusy(currentRequest(c)));
 export const hold = (combat, id) => save(combat, id, { hold: true });
-/* `tookAt` (0.33.1, found live): a run that read the turn just before her press would write it back to "running"; the run's own steps read this
-   stamp, which no run writes, and stop when it is newer than the run's start */
+/* `tookAt` (0.33.1, found live): a run that read the turn just before her press would write it back to "running"; no run writes this stamp, so a
+   run that finds it changed since it read the turn stops before its next step */
 export const playMyself = (combat, id) => save(combat, id, { state: "manual", tookAt: clock() });
 /* ---------- the Change button (Rhea, 2026-11-09: "Note and step edits") ---------- */
 /** Who a GM's note can name, for noteForThinker: every token on the scene by its token and actor names (and, for a character, each long word of
@@ -3819,7 +3821,7 @@ function speechCtx(combat, tok) {
   return speechFor({ forms: P(tok, combat), party: onParty(a), cantAct: cantAct(a), langs: langsOf(a), below: isBelow(tok), round: combat.round, last: turns(combat).speech?.last?.[tok.id] ?? null, yielded: !!yieldOf(tok), over: over?.combat === combat.id ? over : null });
 }
 /** Names for a line players read: a creature the GM has hidden is "someone", one whose name doesn't show is "a creature". */
-const playerNamer = combat => namer(turns(combat).labels ?? {}, Object.fromEntries(combat.scene.tokens.contents.map(x => [x.id, x.hidden || (!x.actor?.hasPlayerOwner && unseenByParty(x)) ? "someone" : moverName(x) === "A creature" ? "a creature" : x.name])));
+const playerNamer = combat => namer(turns(combat).labels ?? {}, Object.fromEntries(combat.scene.tokens.contents.map(x => [x.id, x.hidden || (!x.actor?.hasPlayerOwner && unseenByParty(x)) ? "someone" : x.actor?.hasPlayerOwner ? x.name : moverName(x) === "A creature" ? "a creature" : x.name])));
 /** An order in words a player may read (review 3): labels as players' names, the kind it names as "some of its band" (a kind's name can be a
     hidden creature's), and nothing at all for an order in the GM's own words. */
 function playerWords(combat, lead, entry) {
