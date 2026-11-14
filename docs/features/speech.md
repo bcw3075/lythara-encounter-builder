@@ -82,6 +82,7 @@ Settled by Angel for the box, hers to change (told in the release note):
 - (sy-12) {live} The languages as PF2e holds them: a character's and an NPC's list read by `langsOf` on the live server match their sheets.
 
 ## Traps
+- **The box's rows share the orders box's styles** (`.leb-of`, `.leb-hr` in `ui/turns.mjs` STYLE, scoped to `.leb-ob` and `.leb-sy` both): a selector scoped to one box left the other stacked on 0.32.0's test build 1.
 - **The stored text is the safe one.** A browser the render hook never reaches (a popped-out message, an export, a page with the module off) shows the message's own content, so that must be what a player without the language may read. Never store the words as the content and hide them in the hook.
 - **A yield is two documents** (the Combat's record and the token's flag): the record is written first, and `runSay` marks the token again when a reload fell between them. Accepted and Back in the fight are ordered so that a cut-off press leaves a monster that reads as yielded, with its buttons: a prisoner still in the tracker is one that stands down (`yieldOf`), which is also what the GM gets when she puts a prisoner back in the tracker by hand.
 - **The pass timer lives on the runner's page only:** `passTurn` starts it again for a turn that is already passing, so a reload or a pause doesn't leave the turn sitting.

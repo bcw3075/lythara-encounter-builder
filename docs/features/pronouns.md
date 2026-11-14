@@ -42,6 +42,7 @@ Settled by Angel, told to Rhea, hers to change:
 - (pn-8) {live} No marker left anywhere after the fight: the Combat's flags, the chat log and the saved History page hold no `{they}`-style text.
 
 ## Traps
+- **A verb after a creature's name is never a marker** (0.32.0, seen on test build 1: "Goblin Warrior know Goblin, Common" for a "they" creature): `{knows|know}` follows the pronoun, so it may only follow `{they}`; after the name the verb is always singular ("knows", "speaks").
 - **A sentence has more than one verb.** "{They} {has|have} yielded and stands down" read "They have yielded and stands down": every verb the subject governs needs both forms, not only the one after the pronoun (found by this release's own unit tests; the search that found the rest is in the change record).
 - **"it" is often a thing.** "its card", "apply it", "nobody heard it", "Strike with it", "the turn it was made", "end it yourself": a card, a spell, an order, a weapon, a yield, a turn. Only a creature gets a marker, and only the creature whose forms will be used: a second creature in the sentence is named ("find ${target.name}"), not given the first one's pronoun (the independent review found two of each).
 - **Code that matches wording.** `orderWords`' "some of its band" is matched by text elsewhere, and `actWords` strips a leading "its ": both were left as they are.
