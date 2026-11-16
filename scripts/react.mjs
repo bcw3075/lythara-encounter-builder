@@ -133,7 +133,7 @@ export const MONSTER_REACTIONS = ["reactive-strike", "attack-of-opportunity"];
 const MOVE_ACTIONS = ["walk", "crawl", "climb", "swim", "fly", "burrow", "jump"], TELEPORTS = ["blink", "displace"];
 /** A token move as a trigger. action: Foundry's movement action; squares: how many squares it left; ownTurn: it is the mover's turn; stepped: the mover
     posted a Step card just before; strode: a Stride card just before; difficult: a square it entered is difficult terrain; landSpeed: its land Speed
-    in feet (null when unknown); keyboard: moved by the arrow keys; script: moved by a script or another module. Returns null (no trigger) or { gate: "move", sure, kind, why } (and `steps`: how many Steps it could have been).
+    in feet (null when unknown); keyboard: moved by the movement keys; script: moved by a script or another module. Returns null (no trigger) or { gate: "move", sure, kind, why } (and `steps`: how many Steps it could have been).
     Rhea, 2026-11-15 (q-33): "a step is 5ft anf a stride is anything more then 5ft. Can't you use that as your guide?": one walked square on its own
     turn is a Step, unless a Step can't go there (difficult terrain, a Speed other than land, a land Speed under 10: Player Core pg. 418, checked on
     Archives of Nethys 2026-11-15) or a Stride card says otherwise. And "they couild go 2 or 3 steps in a row": one walk of 10 or 15 ft could be
@@ -144,9 +144,9 @@ export function moveTrigger({ action = "walk", squares = 0, ownTurn = true, step
   if (!MOVE_ACTIONS.includes(action)) return { gate: "move", sure: false, kind: "moved", why: `Its move was made as "${action}", which may not be a move action.` };
   if (!ownTurn) return { gate: "move", sure: false, kind: "moved", why: "It moved outside its own turn: being pushed or pulled doesn't trigger this." };
   const canStep = action === "walk" && !strode && !difficult && !(landSpeed != null && landSpeed < 10);
-  /* the arrow keys move one square a press, so a Stride by keys is a row of one-square moves: those stay the GM's to judge, as before q-33 */
+  /* the movement keys move one square a press, so a Stride by keys is a row of one-square moves: those stay the GM's to judge, as before q-33 */
   if (canStep && squares <= 3 && script) return { gate: "move", sure: false, kind: `moved ${squares * 5} feet`, why: "It was moved by a script or another module, which may not be its own move action." };   /* never the player's to answer for */
-  if (canStep && squares === 1 && keyboard) return { gate: "move", sure: false, kind: "moved one square", why: "It moved one square with the arrow keys: a Step doesn't trigger this, a Stride does." };
+  if (canStep && squares === 1 && keyboard) return { gate: "move", sure: false, kind: "moved one square", why: "It moved one square with the movement keys: a Step doesn't trigger this, a Stride does." };
   if (canStep && squares === 1) return null;   /* a Step */
   if (canStep && squares <= 3) return { gate: "move", sure: false, kind: `moved ${squares * 5} feet`, steps: squares, why: `It moved ${squares * 5} feet: ${STEPS_WORDS[squares]} Steps don't trigger this, a Stride does.` };
   const kind = action !== "walk" || squares > 3 ? "left a square" : strode ? "strode" : difficult ? "strode into difficult terrain (a Step can't go there)" : landSpeed != null && landSpeed < 10 ? "strode (with a Speed under 10 feet it can't Step)" : "left a square";
