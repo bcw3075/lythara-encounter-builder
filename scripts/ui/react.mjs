@@ -5,7 +5,8 @@
    buttons and its own lines (Weight of Guilt: Stupefied 2 or Enfeebled 2, with what each does). Answers go to the runner by the module's socket.
    Foundry's DialogV2 runs `submit` before it closes (checked in foundry.mjs, 14.370), so a React is never sent as a Pass. */
 import { esc } from "../journal.mjs";
-import { answerReaction } from "../fight.mjs";
+import { answerReaction, answerStepsQuestion } from "../fight.mjs";
+import { stepsQuestion } from "../react.mjs";
 
 const ROLLS = ["reactive-strike", "attack-of-opportunity"], open = new Map();
 /* a group's buttons are one under the other: three names side by side wrapped inside their buttons (seen live, 2026-11-11) */
@@ -14,6 +15,8 @@ const STYLE = ".leb-rx .leb-count{opacity:.8}.leb-rx .form-footer{flex-wrap:wrap
 export function onReactionPrompt(data) {
   if (!data || game.user.isGM) return;
   if (data.t === "close") { for (const [k, w] of open) if (k.startsWith(`${data.request}.${data.key}.`) && (!data.row || w.rows.includes(data.row))) { open.delete(k); w.quiet(); w.dlg.close().catch(() => {}); } return; }   /* closed by the runner: no answer sent (review finding 19) */
+  if (data.t === "steps") return askSteps(data).catch(e => console.warn("steps question", e));
+  if (data.t === "stepsClose") { const w = open.get(`steps.${data.key}`); if (w) { open.delete(`steps.${data.key}`); w.quiet(); w.dlg.close().catch(() => {}); } return; }
   if (data.t !== "ask") return;
   const groups = new Map();
   for (const x of data.list ?? []) if ((x.users ?? []).includes(game.user.id)) { const g = x.group ?? x.id; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(x); }
@@ -50,4 +53,23 @@ async function show(data, group, rows) {
   ask.addEventListener?.("close", () => { if (open.get(k)?.dlg === ask) open.delete(k); if (!answered) { answered = true; for (const id of ids) send(id, "pass"); } });
   open.set(k, { dlg: ask, rows: ids, quiet }); await ask.render({ force: true });
   if (data.until) { const tick = setInterval(() => { const n = left(), b = ask.element?.querySelector(".leb-count b"); if (b) b.textContent = n; if (!ask.rendered || n <= 0) { clearInterval(tick); if (ask.rendered && !answered) { answered = true; open.delete(k); ask.close(); } } }, 500); }
+}
+
+/* "Two Steps, or a Stride?" (0.34.0; Rhea, 2026-11-15, q-33): one walk of 10 or 15 ft on the player's own turn left a monster's reach, and the
+   module can't tell Steps from a Stride. Asked only of the player who owns the mover; closing it or no answer in time leaves it to the GM. */
+async function askSteps(data) {
+  if (!(data.users ?? []).includes(game.user.id)) return;
+  const k = `steps.${data.key}`; if (open.has(k)) return;
+  if (!document.getElementById("leb-rx-style")) document.head.insertAdjacentHTML("beforeend", `<style id="leb-rx-style">${STYLE}</style>`);
+  const q = stepsQuestion(data.n, data.monsters ?? []), name = canvas.scene?.tokens.get(data.token)?.name ?? game.scenes.find(s => s.tokens.has(data.token))?.tokens.get(data.token)?.name ?? "";
+  const left = () => data.until ? Math.max(0, Math.ceil((data.until - game.time.serverTime) / 1000)) : null;
+  let answered = false; const D = foundry.applications.api.DialogV2;
+  const dlg = new D({ window: { title: name ? `${q.title}: ${name}` : q.title }, classes: ["leb-rx", "leb-steps"], position: { width: 400 },
+    content: `${q.lines.map(l => `<p>${esc(l)}</p>`).join("")}${data.until ? `<p class="leb-count">No answer in <b>${left()}</b> s: the GM decides.</p>` : `<p class="leb-count">If you don't answer, the GM decides.</p>`}`,
+    /* no default button: an Enter or Space meant for something else must not answer it (review 3) */
+    buttons: [{ action: "steps", label: q.steps, icon: "fa-solid fa-shoe-prints" }, { action: "stride", label: q.stride, icon: "fa-solid fa-person-running" }],
+    submit: async result => { answered = true; open.delete(k); if (["steps", "stride"].includes(result)) await answerStepsQuestion(data.key, result); } });
+  dlg.addEventListener?.("close", () => { answered = true; if (open.get(k)?.dlg === dlg) open.delete(k); });   /* closing it sends nothing: the GM decides */
+  open.set(k, { dlg, rows: [], quiet: () => { answered = true; } }); await dlg.render({ force: true });
+  if (data.until) { const tick = setInterval(() => { const n = left(), b = dlg.element?.querySelector(".leb-count b"); if (b) b.textContent = n; if (!dlg.rendered || n <= 0) { clearInterval(tick); if (dlg.rendered && !answered) { answered = true; open.delete(k); dlg.close(); } } }, 500); }
 }

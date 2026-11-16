@@ -16,7 +16,7 @@ import { namer } from "./history.mjs";
 import { RUNGS, STORE_MAX, GM_LINE_MAX, evict, forPacket, gmLine, lineKey, render, rethinkFor, rungOf, severity, sideWords, spellWords, witnessLines } from "./memory.mjs";
 import { readMap, partyLevels, partySize, suggestedLevel } from "./builder.mjs";
 import { aimArea, aimWords, alliesCaught, burstReachable, caughtBy, shapeOf, squaresNear } from "./area.mjs";
-import { AC_ROWS, CHOICES, GUILT, KNOWN, MONSTER_REACTIONS, answerWords, barrierWords, acAdds, canReact, castRank, coverInDc, choiceWords, earthLess, glimpseResistance, guiltLines, guiltWords, harmWords, missWords, notAskedWords, shieldGrantsBlock, spentRows, untilNextTurnEnds, readCard, cardTrigger, degreeAgainst, equipTrigger, finished, fits, gateWords, moveTrigger, proneOffTrigger, reactionStrike, reactionsOf, routeGates, squaresAlong, untilFor } from "./react.mjs";
+import { AC_ROWS, CHOICES, GUILT, KNOWN, MONSTER_REACTIONS, answerWords, barrierWords, acAdds, canReact, castRank, coverInDc, choiceWords, earthLess, glimpseResistance, guiltLines, guiltWords, harmWords, missWords, notAskedWords, shieldGrantsBlock, spentRows, untilNextTurnEnds, readCard, cardTrigger, degreeAgainst, equipTrigger, finished, fits, gateWords, moveTrigger, proneOffTrigger, stepsAnswerWords, reactionStrike, reactionsOf, routeGates, squaresAlong, untilFor } from "./react.mjs";
 import { MAX_TRIES, choiceOut, cleanChoice, cleanMeta, cleanPlan, eventOut, hello, isChoice, listening, live, nextSeq, pickEvent, stale, stallOf, text, waitSeconds } from "./brain.mjs";
 import { esc } from "./journal.mjs";
 import { breaksYield, cleanGmSay, gestureWords, orderHtml, sayHtml, speechFor, speechForPacket, speechLanguage, understands } from "./speech.mjs";
@@ -3115,9 +3115,22 @@ export function onSocket(data, senderId) {
     writeUsed(combat, t.id, data.used ? { by: "hand", user: from.name } : null).catch(e => console.warn(`${ID} | reaction box`, e));
     return;
   }
+  /* "Two Steps, or a Stride?" (0.34.0): only from a player who owns the mover */
+  if (data.t === "stepsAnswer") {
+    if (!isRunner()) return;
+    const a = stepAsks.get(data.key), from = game.users.get(senderId); if (!a || !from || !["steps", "stride"].includes(data.answer)) return;
+    const c = game.combats.get(a.combat), t = c && sceneOf(c)?.tokens.get(a.by); if (!from.isGM && !t?.actor?.testUserPermission(from, "OWNER")) return;   /* the sender as Foundry reports it */
+    answerSteps(data.key, data.answer, from.name).catch(e => console.warn(`${ID} | steps`, e));
+    return;
+  }
   Hooks.callAll(`${ID}.reactionPrompt`, data);   /* "ask" and "close": the prompt window in a player's browser (ui/react.mjs) */
 }
 function emitSocket(data) { try { game.socket.emit(SOCKET, data); } catch (e) { console.warn(`${ID} | socket`, e); } }
+/** A player's answer to "Two Steps, or a Stride?": to the runner by socket (the runner's own page answers directly). */
+export function answerStepsQuestion(key, answer) {
+  if (isRunner()) return answerSteps(key, answer, game.user.name);
+  emitSocket({ t: "stepsAnswer", key, answer });
+}
 /** An answer to one reaction row: a player's goes to the runner by socket; a GM writes it on the request. */
 export async function answerReaction(combatId, requestId, key, row, answer) {
   const combat = game.combats.get(combatId), rx = combat && request(combat, requestId)?.react; if (!rx || rx.key !== key) return;
@@ -3308,7 +3321,7 @@ async function guiltEffect(combat, tok, kind = "enfeebled") {
    moves, chat cards, items changing hands and Prone coming off; each offer is its own request (`reaction`), run with the same Strike code as a turn's,
    so a player's Shield Block and Reactive Shield are asked as usual. The reaction comes just after the action shows (the design's first version: a
    player's drag isn't interrupted). A monster reacts once a round; its reaction comes back when its own turn begins. */
-const CARD_MS = 15000, stepCards = new Map(), standCards = new Map(), castCards = new Map(), carried = new Map(), queued = new Set(), reactionIds = new Set(), offering = new Set();
+const CARD_MS = 15000, stepCards = new Map(), strideCards = new Map(), stepAsks = new Map(), stepsSettling = new Set(), standCards = new Map(), castCards = new Map(), carried = new Map(), queued = new Set(), reactionIds = new Set(), offering = new Set();
 let reactionLine = Promise.resolve();
 /* A fight's scene (B-6, 0.33.2): Foundry 14 makes a new encounter unlinked (its `scene` null) from the tracker's + and the token HUD's
    combat toggle, so the scene is read from the combatants' tokens when the encounter names none. Every "the fight's scene" in the module
@@ -3360,30 +3373,38 @@ async function offerReaction(combat, m, by, trig, from = null) {
   const step = { do: "strike", item: pick.id, itemName: pick.name, target: "T", targetName: by.name, variant: 0, flat: flatDC(state) };   /* variant 0: a reaction takes no multiple attack penalty */
   reactionIds.add(id);
   await saveTurns(combat, { [`requests.${id}`]: { state: "ready", reaction: whole({ by: by.id, gate: trig.gate, sure: !!trig.sure, kind: trig.kind ?? "", why: trig.why ?? null, strike: pick.name, auto }), combatantId: m.c.id, tokenId: m.t.id, turnOf: combat.combatant?.id ?? null, round: combat.round, turn: combat.turn, at: Date.now(), since: clock(), log: {}, labels: { T: by.id }, steps: [step], pos: 0, tries: 0, note: null } });
-  if (auto) (async () => {
+  if (auto) autoReaction(combat, id, by);
+  return id;
+}
+/** A sure offer to a monster with Angel and Auto ticked: it strikes by itself once the move shows, waiting out the game's pause. */
+function autoReaction(combat, id, by) {
+  (async () => {
     const moving = by.object?.movementAnimationPromise; if (moving) await Promise.race([moving, sleep(5000)]).catch(() => {});   /* let the move be seen first */
     while (game.paused) { await sleep(300); if (request(combat, id)?.state !== "ready") return; }   /* the game's pause pauses Auto (Rhea, 2026-11-08) */
     if (request(combat, id)?.state === "ready") await doReaction(combat, id);
   })().catch(e => console.error(`${ID} | reaction`, e));
-  return id;
 }
-/** Offer every monster that the trigger reaches. route: the squares of a move (reach is tested for each square left), or null. */
+/** Offer every monster that the trigger reaches. route: the squares of a move (reach is tested for each square left), or null. Returns the
+    ids of the offers made. */
 async function offerAll(combat, by, trig, route = null, elev = null) {
-  if (!trig?.gate || !isRunner() || !combat?.started || !by?.actor || isDown(by.actor) || (by.hidden && !by.actor.hasPlayerOwner)) return;   /* a body dragged past a monster triggers nothing */
+  const made = [];
+  if (!trig?.gate || !isRunner() || !combat?.started || !by?.actor || isDown(by.actor) || (by.hidden && !by.actor.hasPlayerOwner)) return made;   /* a body dragged past a monster triggers nothing */
   const scene = sceneOf(combat), here = placeOf(by, scene);
   for (const m of monsterReactors(combat, by)) {
     const p = placeOf(m.t, scene); let from = null;
     if (route) { const g = routeGates(route, { size: sizeOf(by), elev: elev ?? heightUp(by) }, [{ id: m.t.id, pos: p.pos, span: p.span, elev: heightUp(m.t), reach: m.melee.reach }])[0]; if (!g) continue; from = { at: route[g.k], elev: elev ?? heightUp(by) }; }
     else if (distanceBetween({ x: here.pos[0], y: here.pos[1], size: here.span, elev: heightUp(by) }, { x: p.pos[0], y: p.pos[1], size: p.span, elev: heightUp(m.t) }, { reach: m.melee.reach }) > m.melee.reach) continue;
     offering.add(m.t.id);
-    try { await offerReaction(combat, m, by, trig, from); } catch (e) { console.error(`${ID} | reaction offer`, e); } finally { offering.delete(m.t.id); }
+    try { const id = await offerReaction(combat, m, by, trig, from); if (id) made.push(id); } catch (e) { console.error(`${ID} | reaction offer`, e); } finally { offering.delete(m.t.id); }
   }
+  return made;
 }
 /** Do it on a monster's reaction (or its own start, with Auto): the runner makes the Strike. From another GM's browser it asks the runner. */
 export async function doReaction(combat, id) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
   if (!isRunner()) { const why = runnerProblem(); if (why) throw new Error(why); return save(combat, id, { go: true }); }
   if (running.has(id) || queued.has(id)) return;
+  if (stepsSettling.has(id)) { for (let t = 0; t < 50 && stepsSettling.has(id); t++) await sleep(100); if (request(combat, id)?.state !== "ready") return; }   /* a player's Steps answer being written wins (0.34.0, review 1) */
   /* one roller at a time: a Strike's cards are matched by a single waiter (`pending`), so a reaction waits for whatever is running (a turn's
      action, another reaction) and reactions go in the order they were asked (review finding 1) */
   queued.add(id);
@@ -3437,6 +3458,7 @@ async function turnReactions(combat) {
   const now = combat.combatant?.tokenId; if (now && turns(combat).reacted?.[now]) change[`reacted.${now}`] = null;
   if (now && turns(combat).rx?.[now]) change[`rx.${now}`] = null;   /* a party member's reaction comes back when its turn begins (0.27.0) */
   if (Object.keys(change).length) await saveTurns(combat, change);
+  for (const [key, a] of stepAsks) if (a.combat === combat.id) { stepAsks.delete(key); emitSocket({ t: "stepsClose", key }); }   /* the moment has passed (0.34.0) */
   await dropEarthCover(combat).catch(e => console.warn(`${ID} | cover`, e));   /* Interposing Earth's cover never outlives the turn it was used on */
   noteCarried(combat);
 }
@@ -3448,10 +3470,75 @@ export function onTokenMoved(doc, movement) {
   const combat = fightOf(doc); if (!combat || !doc.actor?.isOfType?.("creature")) return;
   const scene = sceneOf(combat), px = scene.grid.size, d = scene.dimensions, near = (doc.width ?? 1) < 1 ? Math.floor : Math.round, sq = w => [near((w.x - d.sceneX) / px), near((w.y - d.sceneY) / px)];   /* a Tiny token counts as the square holding its corner, as placeOf has it */
   const way = movement.passed?.waypoints ?? [], route = squaresAlong([sq(movement.origin), ...way.map(sq)]); if (route.length < 2) return;
-  const action = way.find(w => w.action)?.action ?? doc.movementAction ?? "walk", at = stepCards.get(doc.actor.id), stepped = !!at && clock() - at < CARD_MS; if (stepped) stepCards.delete(doc.actor.id);
-  let trig = moveTrigger({ action, squares: route.length - 1, ownTurn: combat.combatant?.tokenId === doc.id, stepped });
+  /* PF2e's "travel" is walking out of an encounter, and a token keeps its last move's action: a creature's first drag in a fight after moving
+     outside one comes as "travel" (B-10, seen live 2026-11-16 on 0.33.2: a real Stride read as Not certain). In a fight it is a walk. */
+  const raw = way.find(w => w.action)?.action ?? doc.movementAction ?? "walk", action = raw === "travel" ? "walk" : raw, at = stepCards.get(doc.actor.id), stepped = !!at && clock() - at < CARD_MS; if (stepped) stepCards.delete(doc.actor.id);
+  const sAt = strideCards.get(doc.actor.id), strode = !!sAt && clock() - sAt < CARD_MS; if (strode) strideCards.delete(doc.actor.id);
+  /* a Step can't go into difficult terrain or be made with a Speed under 10 ft (q-33): read for a walk of up to three squares only */
+  const short = action === "walk" && route.length <= 4, elev = heightUp({ elevation: movement.origin?.elevation });
+  const land = short ? Number(doc.actor.system?.movement?.speeds?.land?.value) : NaN, difficult = short && difficultIn(scene, route, sizeOf(doc), movement.origin?.elevation ?? 0);
+  let trig = moveTrigger({ action, squares: route.length - 1, ownTurn: combat.combatant?.tokenId === doc.id, stepped, strode, difficult, landSpeed: Number.isFinite(land) ? land : null, keyboard: movement.method === "keyboard", script: movement.method === "api" });
   if (trig?.sure && movement.method === "api") trig = { ...trig, sure: false, why: "It was moved by a script or another module, which may not be its own move action." };
-  if (trig) offerAll(combat, doc, trig, route, heightUp({ elevation: movement.origin?.elevation })).catch(e => console.error(`${ID} | reactions`, e));
+  if (trig) offerAll(combat, doc, trig, route, elev).then(ids => trig.steps && ids.length ? askSteps(combat, doc, trig.steps, ids) : null).catch(e => console.error(`${ID} | reactions`, e));
+}
+/** Whether a move entered difficult terrain: any square its footprint enters (not the one it started on) lies in a region that makes walking cost
+    more (PF2e's and Survey Sheet's `modifyMovementCost`), at the height it moved at. */
+function difficultIn(scene, route, size, elevation = 0) {
+  const px = scene.grid.size, d = scene.dimensions, start = new Set(footprintAt(route[0], size).map(p => p.join())), hard = [];
+  for (const r of scene.regions) if (r.behaviors.some(b => b.type === "modifyMovementCost" && !b.disabled && (Number(b.system?.difficulties?.walk) || 1) > 1)) hard.push(r);
+  if (!hard.length) return false;
+  for (const sq of route.slice(1)) for (const [i, j] of footprintAt(sq, size)) { if (start.has(`${i},${j}`)) continue;
+    const pt = { x: d.sceneX + (i + .5) * px, y: d.sceneY + (j + .5) * px, elevation };
+    if (hard.some(r => { try { return r.testPoint(pt); } catch { return false; } })) return true; }
+  return false;
+}
+/* ---------- "Two Steps, or a Stride?" (0.34.0; Rhea, 2026-11-15, q-33: "Ask the player") ----------
+   One walk of 10 or 15 ft on the mover's own turn could be Steps (no reaction) or a Stride. The offers are made as Not certain at once (Do it and Skip
+   stay on her card), and the mover's player is asked in a small window. Steps: the offers end with a note. Stride: they become sure, and a monster on
+   Auto strikes. No answer in the reaction timer's time, or nobody playing the mover: the offers stay hers, saying so. */
+async function askSteps(combat, by, n, ids) {
+  const users = game.users.filter(u => u.active && !u.isGM && by.actor?.testUserPermission?.(u, "OWNER"));
+  if (!users.length) return;
+  const key = foundry.utils.randomID(8), secs = reactionTimer(), until = secs ? clock() + secs * 1000 : 0, names = users.map(u => u.name).join(" or ");
+  stepAsks.set(key, { combat: combat.id, by: by.id, actor: by.actor.id, n, ids, users: users.map(u => u.id), names });
+  const ch = {}; for (const id of ids) ch[`requests.${id}.reaction.ask`] = { key, n, who: names, until };
+  await saveTurns(combat, ch);
+  /* the monsters as the mover's player knows them: a name only when the token shows it and the character perceives that monster (review 2) */
+  const monsters = ids.map(id => sceneOf(combat).tokens.get(request(combat, id)?.tokenId)).filter(Boolean).map(m => seenBy(by, m) ? moverName(m) : "a creature");
+  emitSocket({ t: "steps", combat: combat.id, key, token: by.id, n, monsters, users: users.map(u => u.id), until });
+  /* closes on the timer, or as soon as the GM has answered every offer (Do it or Skip), or the fight is gone (review 5) */
+  const poll = setInterval(() => {
+    if (!stepAsks.has(key)) return clearInterval(poll);
+    const c = game.combats.get(combat.id), open = c && ids.some(id => { const r = request(c, id); return r?.state === "ready" && !r.go; });
+    if (!open) { clearInterval(poll); answerSteps(key, "gm").catch(e => console.warn(`${ID} | steps`, e)); }
+    else if (until && clock() >= until) { clearInterval(poll); answerSteps(key, "timeout").catch(e => console.warn(`${ID} | steps`, e)); }
+  }, 500);
+}
+/** Whether a creature perceives another as the module's other player-facing words read it: seen, or concealed (Visioner's record when it has one). */
+function seenBy(viewer, tok) {
+  if (tok.hidden) return false;
+  try { const v = visionerApi()?.getVisibility(viewer.id, tok.id); if (v) return ["observed", "concealed"].includes(v); } catch { /* no Visioner record */ }
+  return true;
+}
+/** The player's answer (or the timer's): "steps", "stride" or "timeout". Offers the GM already answered are left as they are. */
+async function answerSteps(key, answer, user = null) {
+  const a = stepAsks.get(key); if (!a) return; stepAsks.delete(key);
+  emitSocket({ t: "stepsClose", key });
+  const combat = game.combats.get(a.combat); if (!combat) return;
+  const by = sceneOf(combat)?.tokens.get(a.by), name = by?.name ?? "The creature";
+  for (const id of a.ids) {
+    const r = request(combat, id); if (!r?.reaction || r.reaction.ask?.key !== key) continue;
+    /* `stepsSettling` holds Do it off while this offer's answer is written (review 1: Do it in that moment struck and was then marked Steps) */
+    if (answer === "gm" || !by || r.state !== "ready" || running.has(id) || queued.has(id) || r.go) { await save(combat, id, { "reaction.ask": null }); continue; }
+    stepsSettling.add(id);
+    try {
+      if (answer === "steps") { await save(combat, id, { state: "done", go: false, stepped: true, "reaction.ask": null, note: stepsAnswerWords("steps", name, user ?? a.names, a.n) }); continue; }
+      if (answer === "stride") { const m = sceneOf(combat).tokens.get(r.tokenId), auto = !!m?.getFlag(ID, "run") && !!m?.getFlag(ID, "auto");
+        await save(combat, id, { "reaction.ask": null, "reaction.sure": true, "reaction.why": null, "reaction.kind": stepsAnswerWords("stride", name, user ?? a.names, a.n), "reaction.auto": auto });
+        if (auto) autoReaction(combat, id, by); continue; }
+      await save(combat, id, { "reaction.ask": null, "reaction.why": `${r.reaction.why ?? ""} ${stepsAnswerWords("timeout", name, a.names, a.n)}`.trim() });
+    } finally { stepsSettling.delete(id); }
+  }
 }
 /** A chat card (the runner's `createChatMessage` hook): a ranged attack, a manipulate spell or action, a move action that leaves no square. */
 export async function onActionCard(message) {
@@ -3474,6 +3561,7 @@ export async function onActionCard(message) {
   if (spellAttack) { const at = castCards.get(tok.actor.id); castCards.delete(tok.actor.id); if (at && clock() - at < 60000) return; }
   if (slug === "stand") standCards.set(tok.actor.id, clock());
   if (trig.step) { stepCards.set(tok.actor.id, clock()); return; }
+  if (trig.stride) { strideCards.set(tok.actor.id, clock()); return; }
   await offerAll(combat, tok, trig);
 }
 /** An item changed hands with no card (the runner's `updateItem` hook): drawing, stowing or picking up is an Interact, if it was an action. */
@@ -3482,14 +3570,15 @@ export function onItemHands(item, change) {
   const now = { carry: item.system.equipped?.carryType, hands: item.system.equipped?.handsHeld ?? 0 }, before = carried.get(item.uuid) ?? null; carried.set(item.uuid, now);
   if (!before) return;   /* never seen (picked up new, or the page reloaded this turn): no guessing which way it went */
   const combat = game.combats.find(c => c.started && tokenIn(c, item.actor)), tok = combat && tokenIn(combat, item.actor); if (!tok) return;
-  const trig = equipTrigger(before, now, item.name); if (trig) offerAll(combat, tok, trig).catch(e => console.error(`${ID} | reactions`, e));
+  const trig = equipTrigger(before, now, item.name, combat.combatant?.tokenId === tok.id); if (trig) offerAll(combat, tok, trig).catch(e => console.error(`${ID} | reactions`, e));
 }
 /** Prone came off (the runner's `deleteItem` hook): if no Stand card comes with it, the GM is asked whether it stood up. */
 export function onConditionGone(item) {
   if (!isRunner() || item.type !== "condition" || item.slug !== "prone" || !item.actor) return;
   const actor = item.actor, combat = game.combats.find(c => c.started && tokenIn(c, actor)), tok = combat && tokenIn(combat, actor); if (!tok) return;
+  const ownTurn = combat.combatant?.tokenId === tok.id;   /* whose turn it was when Prone came off, not 1.5 s later (0.34.0, review 9) */
   setTimeout(() => { const at = standCards.get(actor.id), stood = !!at && clock() - at < CARD_MS;   /* the Stand card can land just after the condition goes */
-    const trig = proneOffTrigger({ ownTurn: combat.combatant?.tokenId === tok.id, stood }); if (trig) offerAll(combat, tok, trig).catch(e => console.error(`${ID} | reactions`, e)); }, 1500);
+    const trig = proneOffTrigger({ ownTurn, stood }); if (trig) offerAll(combat, tok, trig).catch(e => console.error(`${ID} | reactions`, e)); }, 1500);
 }
 /** The monsters' reactions the module doesn't run (anything but Reactive Strike), for the GM's card: [{ name, reaction, trigger }], one per kind of monster. */
 export function monsterReactionsLeft(combat) {

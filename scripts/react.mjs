@@ -132,15 +132,27 @@ export const MONSTER_REACTIONS = ["reactive-strike", "attack-of-opportunity"];
    (blink, displace) aren't move actions that leave squares. There is no "step": a one-square walk can be a Step, which triggers nothing. */
 const MOVE_ACTIONS = ["walk", "crawl", "climb", "swim", "fly", "burrow", "jump"], TELEPORTS = ["blink", "displace"];
 /** A token move as a trigger. action: Foundry's movement action; squares: how many squares it left; ownTurn: it is the mover's turn; stepped: the mover
-    posted a Step card just before. Returns null (no trigger) or { gate: "move", sure, kind, why }. */
-export function moveTrigger({ action = "walk", squares = 0, ownTurn = true, stepped = false } = {}) {
+    posted a Step card just before; strode: a Stride card just before; difficult: a square it entered is difficult terrain; landSpeed: its land Speed
+    in feet (null when unknown); keyboard: moved by the arrow keys; script: moved by a script or another module. Returns null (no trigger) or { gate: "move", sure, kind, why } (and `steps`: how many Steps it could have been).
+    Rhea, 2026-11-15 (q-33): "a step is 5ft anf a stride is anything more then 5ft. Can't you use that as your guide?": one walked square on its own
+    turn is a Step, unless a Step can't go there (difficult terrain, a Speed other than land, a land Speed under 10: Player Core pg. 418, checked on
+    Archives of Nethys 2026-11-15) or a Stride card says otherwise. And "they couild go 2 or 3 steps in a row": one walk of 10 or 15 ft could be
+    Steps or a Stride, so the player is asked (`steps`), never the module guessing. */
+export function moveTrigger({ action = "walk", squares = 0, ownTurn = true, stepped = false, strode = false, difficult = false, landSpeed = null, keyboard = false, script = false } = {}) {
   if (!(squares > 0) || TELEPORTS.includes(action)) return null;
-  if (squares === 1 && action === "walk") { if (stepped) return null;
-    return { gate: "move", sure: false, kind: "moved one square", why: "It moved one square: a Step doesn't trigger this, a Stride does." }; }
+  if (squares === 1 && action === "walk" && stepped) return null;
   if (!MOVE_ACTIONS.includes(action)) return { gate: "move", sure: false, kind: "moved", why: `Its move was made as "${action}", which may not be a move action.` };
   if (!ownTurn) return { gate: "move", sure: false, kind: "moved", why: "It moved outside its own turn: being pushed or pulled doesn't trigger this." };
-  return { gate: "move", sure: true, kind: "left a square" };
+  const canStep = action === "walk" && !strode && !difficult && !(landSpeed != null && landSpeed < 10);
+  /* the arrow keys move one square a press, so a Stride by keys is a row of one-square moves: those stay the GM's to judge, as before q-33 */
+  if (canStep && squares <= 3 && script) return { gate: "move", sure: false, kind: `moved ${squares * 5} feet`, why: "It was moved by a script or another module, which may not be its own move action." };   /* never the player's to answer for */
+  if (canStep && squares === 1 && keyboard) return { gate: "move", sure: false, kind: "moved one square", why: "It moved one square with the arrow keys: a Step doesn't trigger this, a Stride does." };
+  if (canStep && squares === 1) return null;   /* a Step */
+  if (canStep && squares <= 3) return { gate: "move", sure: false, kind: `moved ${squares * 5} feet`, steps: squares, why: `It moved ${squares * 5} feet: ${STEPS_WORDS[squares]} Steps don't trigger this, a Stride does.` };
+  const kind = action !== "walk" || squares > 3 ? "left a square" : strode ? "strode" : difficult ? "strode into difficult terrain (a Step can't go there)" : landSpeed != null && landSpeed < 10 ? "strode (with a Speed under 10 feet it can't Step)" : "left a square";
+  return { gate: "move", sure: true, kind };
 }
+export const STEPS_WORDS = { 2: "two", 3: "three" };
 /* Action cards whose movement shows as a token move (the move tells; the card would only ask twice), and the two move actions that leave no square. */
 const MOVERS = ["stride", "crawl", "leap", "fly", "swim", "climb", "burrow", "sneak", "tumble-through", "long-jump", "high-jump", "balance", "mount", "travel"];
 const STAYS = { stand: "stood up", "drop-prone": "dropped prone" };
@@ -170,6 +182,7 @@ export function cardTrigger(card = {}) {
   if (card.consumable) return HAND_CONSUMABLES.includes(card.consumable) || traits.includes("manipulate") ? { gate: "manipulate", sure: true, kind: `used ${name} (an Interact)` }
     : { gate: "manipulate", sure: false, kind: `used ${name}`, why: `It used ${name}: if activating it was a manipulate action, this triggers.` };
   if (card.slug === "step") return { step: true };
+  if (card.slug === "stride") return { stride: true };   /* the move itself is the trigger; the card says it wasn't Steps (q-33) */
   if (card.slug === "release") return null;   /* Release has the manipulate trait and triggers nothing (Player Core pg. 417) */
   if (traits.includes("manipulate")) return { gate: "manipulate", sure: true, kind: `used ${name} (manipulate)` };
   if (traits.includes("move")) { if (card.slug in STAYS) return { gate: "stay", sure: true, kind: STAYS[card.slug] };
@@ -177,17 +190,21 @@ export function cardTrigger(card = {}) {
   return null;
 }
 /** An item changing hands with no card (PF2e posts none for drawing, stowing or picking up). before/after: { carry, hands }. Letting go (dropped, or
-    fewer hands on something still held) is a Release and triggers nothing; anything else is an Interact, if it was an action at all: never sure. */
-export function equipTrigger(before = {}, after = {}, name = "an item") {
+    fewer hands on something still held) is a Release and triggers nothing. Something coming into a hand on its own turn (drawn, picked up, a second
+    hand on the grip) is an Interact, sure (Rhea, 2026-11-15, q-33: "Yes, all by rule"); anything else (put away, or outside its turn) is an
+    Interact only if it was done as an action at all: never sure. */
+export function equipTrigger(before = {}, after = {}, name = "an item", ownTurn = false) {
   const b = { carry: before.carry ?? "worn", hands: before.hands ?? 0 }, a = { carry: after.carry ?? b.carry, hands: after.hands ?? b.hands };
   if (a.carry === b.carry && a.hands === b.hands) return null;
   if (a.carry === "dropped" || (a.carry === "held" && b.carry === "held" && a.hands < b.hands)) return null;
   const did = a.carry === "held" && b.carry !== "held" ? "drew or picked up" : b.carry === "held" && a.carry !== "held" ? "put away" : a.carry === "held" ? "changed its grip on" : "moved";
+  if (ownTurn && a.carry === "held" && (b.carry !== "held" || a.hands > b.hands)) return { gate: "manipulate", sure: true, kind: `${did} ${name} (an Interact)` };
   return { gate: "manipulate", sure: false, kind: `${did} ${name}`, why: `It ${did} ${name} with no action card: that is an Interact (manipulate) if it was done as an action.` };
 }
-/** Prone coming off with no Stand card: standing up is a move action, but the condition can also just be removed. Never sure. */
+/** Prone coming off with no Stand card: on its own turn that is a Stand, a move action (Rhea, 2026-11-15, q-33). Outside its turn it is no trigger
+    (the condition was taken off, nothing was done). */
 export function proneOffTrigger({ ownTurn = true, stood = false } = {}) {
-  return ownTurn && !stood ? { gate: "stay", sure: false, kind: "is no longer prone", why: "Prone came off with no Stand card: if it stood up, that is a move action." } : null;
+  return ownTurn && !stood ? { gate: "stay", sure: true, kind: "stood up (Prone came off on its own turn)" } : null;
 }
 /** The squares a token passed, from the squares of its waypoints (the first is where it started): straight runs between them, one square a step. */
 export function squaresAlong(points = []) {
@@ -203,6 +220,24 @@ export function reactionStrike(strikes = [], dist = 5) {
 export function offerWords(o = {}) {
   const who = o.target ?? "a creature";
   return `${o.monster ?? "A monster"} can make a Reactive Strike${o.strike ? ` (${o.strike})` : ""} at ${who}: ${who} ${o.kind ?? "acted"} in its reach.${o.sure ? "" : ` Not certain. ${o.why ?? ""}`.trimEnd()}`;
+}
+
+/** The player's question when one walk of 10 or 15 ft left a monster's reach (Rhea, 2026-11-15, q-33: "Ask the player"). n: squares (2 or 3);
+    monsters: their names as this player sees them. Returns { title, lines, steps, stride } (the two buttons). */
+export function stepsQuestion(n = 2, monsters = []) {
+  const counts = new Map(); for (const m of monsters) { const k = /^a creature$/i.test(m) ? "a creature" : m; counts.set(k, (counts.get(k) ?? 0) + 1); }
+  const NUM = { 2: "two", 3: "three", 4: "four" }, parts = [...counts].map(([k, c]) => c === 1 ? k : k === "a creature" ? `${NUM[c] ?? c} creatures` : `${NUM[c] ?? c} ${k}s`);
+  const ft = n * 5, list = parts.length ? (parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`) : "a creature";
+  const lead = list.charAt(0).toUpperCase() + list.slice(1);
+  return { title: "Your move", lines: [`You moved ${ft} feet, out of the reach of ${list}.`, `${lead} can react to a Stride, but not to a Step.`, `Was that ${STEPS_WORDS[n] ?? n} Steps, or a Stride?`],
+    steps: `${(STEPS_WORDS[n] ?? String(n)).replace(/^./, c => c.toUpperCase())} Steps`, stride: "Stride" };
+}
+/** What the player's answer did, for the card's note and the history. answer: "steps" | "stride" | "timeout"; who: the mover's name; user: the
+    player's name; n: squares. */
+export function stepsAnswerWords(answer, who = "It", user = "the player", n = 2) {
+  const steps = STEPS_WORDS[n] ?? n;
+  return answer === "steps" ? `No reaction: ${who} took ${steps} Steps, ${steps} of ${who}'s actions (${user} said so).` : answer === "stride" ? `strode ${n * 5} feet (${user} said so)`
+    : `${user} didn't answer whether it was ${steps} Steps or a Stride.`;
 }
 
 /* ---------- the party's reactions (0.27.0) ----------
