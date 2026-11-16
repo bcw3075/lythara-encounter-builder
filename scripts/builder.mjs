@@ -190,6 +190,14 @@ export async function place(prep) {
     tokenData.push(t); }
   const made = await scene.createEmbeddedDocuments("Token", tokenData), byKey = new Map(made.map(t => [t.getFlag(ID, "key"), t]));
   for (const t of made) if (plan.placed.find(p => p.key === t.getFlag(ID, "key"))?.state === "asleep") await t.actor.increaseCondition("unconscious");
+  /* a ranged creature starts with its ranged weapon in hand (0.33.2, from the live test: a hidden lookout had to draw its worn bow, and drawing
+     brought it out of hiding before it could shoot): its melee weapons go back to worn, its first ranged weapon to its hands */
+  for (const t of made) { const p = plan.placed.find(x => x.key === t.getFlag(ID, "key")); if (p?.role !== "ranged" || p.state === "asleep") continue;   /* asleep: an unconscious creature holds nothing ready (review) */
+    const ws = t.actor?.itemTypes?.weapon ?? []; if (ws.some(w => w.isRanged && w.system.equipped?.carryType === "held")) continue;   /* one in hand already: keep it (review) */
+    const bow = ws.find(w => w.isRanged); if (!bow) continue;
+    /* everything else it holds (a blade, a shield, a torch) goes back to worn, so the bow's other hand is free to shoot (review) */
+    try { for (const it of t.actor.items.filter(i => i !== bow && i.isOfType?.("physical") && i.system.equipped?.carryType === "held")) await t.actor.changeCarryType(it, { carryType: "worn", handsHeld: 0 });
+      await t.actor.changeCarryType(bow, { carryType: "held", handsHeld: bow.system.usage?.value === "held-in-two-hands" ? 2 : 1 }); } catch (e) { console.warn(`${ID} | ranged weapon in hand`, e); } }
   /* hidden at the start (B-7, 0.33.2): its initiative is rolled on Stealth, and the fight's start hides it in Visioner by that roll (fight.mjs hiddenAtStart) */
   for (const t of made) if (plan.placed.find(p => p.key === t.getFlag(ID, "key"))?.state === "hidden") { await t.setFlag(ID, "startHidden", true); await t.actor.update({ "system.initiative.statistic": "stealth" }); }
   /* treasure on who carries it, or in a cache */

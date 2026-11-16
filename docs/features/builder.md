@@ -16,6 +16,7 @@ Building an encounter from a brief: read the map, place monsters, treasure and j
 - **Mood sets the distance** from the party's entry [ASSUMPTION, starting points to judge on samples]: first contact by about round 2 (40 to 80 ft on a 40×40 map) by default; ambush closer, patrol further, lair wherever its anchor is, standoff with clear space between.
 - **One number per kind across the build (0.33.2, Rhea's pick from the live test):** three rows of the same creature were three "Goblin Warrior"s she couldn't tell apart; now any kind that appears more than once is numbered across the whole build ("Goblin Warrior 1", "2", "3"), and a kind that appears once keeps its plain name.
 - **A lookout keeps near what it watches (0.33.2, Angel's pick from the live test, Rhea: "I'll trust you to pick what can fit in the build"):** a hidden ranged creature on a map with a camp, cave, ruin or fallen tree stays within 10 squares of it, out toward the way the party comes, instead of the back-line rule that set the lookout 34 squares off.
+- **A ranged creature starts with its ranged weapon in hand (0.33.2, Angel's, from the first test build):** the hidden lookout had to draw its worn bow, and drawing (an Interact) brought it out of hiding by Rhea's rule A before it could shoot; now a row with the ranged role starts with its first ranged weapon held and its melee weapons worn.
 - **A creature the brief starts hidden rolls initiative on Stealth (0.33.2, B-7):** the build sets its `system.initiative.statistic` to stealth and flags it `startHidden`; the fight's start hides it in Visioner by that roll (`docs/features/stealth.md`).
 
 ## How it works
@@ -133,7 +134,7 @@ Record every id below in the release's change record when this feature, or a fea
 - (bu-5) {live} Extend keeps tokens and notes on their spots.
 - (bu-6) {live,player} As the player: no Encounters group, hidden tokens and the GM note not on their canvas, the journal not in their sidebar, a clue opens with a real hover then double-click, a revealed cache opens.
 - (bu-7) {unit} Local: `node tools/test/unit.mjs`, then `python3 tools/test/contact.py` and look at the picture after any scoring change.
-- (bu-8) {live} A build from a brief with the same creature in three rows and a hidden ranged row at a camp: the tokens are numbered 1 to 3, the lookout stands within 10 squares of the camp, its token is flagged `startHidden` with initiative on Stealth.
+- (bu-8) {live} A build from a brief with the same creature in three rows and a hidden ranged row at a camp: the tokens are numbered 1 to 3, the lookout stands within 10 squares of the camp, its token is flagged `startHidden` with initiative on Stealth, and holds its shortbow (`carryType` held) with its dogslicer worn.
 
 ## Traps
 - `scene.tokens` and the like are collections: `.map` and `.filter` work, `.flatMap` doesn't. Use `.contents`.
