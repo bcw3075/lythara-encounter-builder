@@ -2021,9 +2021,10 @@ export function markUnseen(message) {
 export function maskUnseen(message, html) {
   if (game.user.isGM || !message.getFlag?.(ID, "unseen")) return;
   for (const el of html.querySelectorAll?.(".message-sender") ?? []) el.textContent = "An unseen creature";
-  /* the header's portrait, whose picture and alt text are the creature's (Foundry 14 + PF2e: `.message-header .portrait`, seen live 2026-11-15) */
-  for (const el of html.querySelectorAll?.(".message-header .portrait, .message-header > img") ?? []) el.remove();
-  html.querySelector?.(".message-header")?.classList.remove("with-image");
+  /* the header's portrait, whose picture and alt text are the creature's. PF2e 8.7.0 adds it in its own renderHTML after Foundry's render hooks
+     have run (seen live 2026-11-15: gone at this hook, back once the card was drawn), so it is taken out again just after */
+  const strip = () => { for (const el of html.querySelectorAll?.(".message-header .portrait, .message-header > img") ?? []) el.remove(); html.querySelector?.(".message-header")?.classList.remove("with-image"); };
+  strip(); setTimeout(strip, 0);
 }
 const actWords = step => step.do === "draw" ? `drawing {their} ${step.itemName ?? "weapon"}` : step.do === "say" ? "giving {themself} up" : step.do === "command-animal" ? "commanding an animal" : step.do === "point-out" ? "pointing a creature out" : step.do === "stride" ? "{their} Stride" : step.do === "crawl" ? "{their} Crawl" : step.do === "stand" ? "standing up" : step.do === "drop-prone" ? "dropping prone" : step.do === "take-cover" ? "Taking Cover" : step.do === "interact" ? "{their} Interact" : step.do === "climb" ? "{their} Climb" : step.do === "burrow" ? "burrowing" : step.do === "release" ? "letting go of what {they} {holds|hold}" : step.do === "seek" ? "{their} Seek" : step.do === "spell" ? `casting ${step.itemName}` : step.do === "ability" ? `using ${step.itemName}` : step.do === "strike" ? `{their} ${step.itemName}` : "acting";
 function savedDegree(message, tokenId) {
