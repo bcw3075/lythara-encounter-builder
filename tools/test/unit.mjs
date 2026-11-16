@@ -124,6 +124,10 @@ for (const [name, [file, cx, cy]] of Object.entries(spots)) {
   /* a lookout (0.33.2, the live test: a hidden archer set 34 squares from the camp it watched): near the camp and out toward the way in */
   for (const seed of [3, 7]) { const lk = layout(model, [{ key: "g-0", group: 0, n: 1, role: "guard", state: "alert", anchor: "camp", label: "G" }, { key: "b-0", group: 1, n: 1, role: "brute", state: "alert", label: "B" }, { key: "l-0", group: 2, n: 1, role: "ranged", state: "hidden", label: "L" }], { seed, mood: "ambush", extraAnchors: [{ kind: "camp", at: [20, 20] }] }), L = lk.placed.find(p => p.key === "l-0");
     check(`${name}: a lookout keeps near the camp (seed ${seed})`, L && Math.hypot(L.i - 20, L.j - 20) <= 12, L && `${L.i},${L.j}`); }
+  /* the party already near the camp, so little near it is out of their view (0.33.2, test build 3) */
+  { const near = buildModel({ cols: 40, rows: 40, walls, costs: rd.grids.cost, occupied: new Array(1600).fill(false), entrySquares: [[20, 27], [21, 27]], entrySource: "read", read: rd });
+    const lk = layout(near, [{ key: "g-0", group: 0, n: 1, role: "guard", state: "alert", anchor: "camp", label: "G" }, { key: "l-0", group: 1, n: 1, role: "ranged", state: "hidden", label: "L" }], { seed: 5, mood: "lair", extraAnchors: [{ kind: "camp", at: [20, 20] }] }), L = lk.placed.find(p => p.key === "l-0");
+    check(`${name}: a lookout stays within 20 of the camp with the party close`, L && Math.hypot(L.i - 20, L.j - 20) <= 20, L && `${L.i},${L.j}`); }
   for (const mood of ["ambush", "lair", "patrol", "chase", "standoff"]) {
     const a = layout(model, creatures, { seed: 7, mood }), b = layout(model, creatures, { seed: 7, mood }), c = layout(model, creatures, { seed: 8, mood });
     check(`${name} ${mood}: same seed same layout`, JSON.stringify(a) === JSON.stringify(b)); check(`${name} ${mood}: another seed can differ`, c.seed === 8);

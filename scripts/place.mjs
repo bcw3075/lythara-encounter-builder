@@ -35,6 +35,9 @@ export function layout(model, creatures, { seed = 1, mood = "ambush", extraAncho
         if (near && Math.hypot(i + n / 2 - anchor.at[0] - .5, j + n / 2 - anchor.at[1] - .5) > GUARD_REACH) continue;
         const k = idx(i, j), d = approach[k]; if (!Number.isFinite(d) || d < 15) continue;
         const seen = exposure[k]; if (strict && !inView && seen > 0) continue;
+        /* a lookout out of sight but far from what it watches is no lookout (0.33.2, test build 3: the party on the map left only far squares unseen):
+           its out-of-view pass looks within twice its reach only, and the next pass weighs being seen against the distance */
+        if (strict && c.role === "ranged" && c.state === "hidden" && lair?.at && Math.hypot(i + n / 2 - lair.at[0] - .5, j + n / 2 - lair.at[1] - .5) > 2 * LOOKOUT_REACH) continue;
         const x = i + n / 2, y = j + n / 2, w = windowScore(d, win), cv = cover[k], cost = costs[k]; let s = 0;
         const first = groupFirst.get(c.group), toFirst = first ? Math.hypot(x - first[0], y - first[1]) : 0;
         const anchorDist = anchor ? Math.hypot(x - anchor.at[0] - .5, y - anchor.at[1] - .5) : 0;
