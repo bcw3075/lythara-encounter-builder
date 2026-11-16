@@ -7,7 +7,7 @@ import { SPEECH_LOG } from "../speech.mjs";
 import { COMMAND_LOG } from "../command.mjs";
 import { SIDE_LOG } from "../sides.mjs";
 import { apiUseWords, historyHTML, historyOf, journalHTML, namer, notebooksHTML } from "../history.mjs";
-import { acceptEscapeLines, bandLogWords, escapeOffers, notebookOf, runnerName } from "../fight.mjs";
+import { acceptEscapeLines, bandLogWords, escapeOffers, notebookOf, runnerName, sceneOf } from "../fight.mjs";
 import { bookPrint } from "../memory.mjs";
 import { MINDS } from "../minds.mjs";
 import { pronounOf } from "../library.mjs";
@@ -17,9 +17,9 @@ const STYLE = `.leb-history .leb-h-grey{opacity:.6;font-style:italic}.leb-histor
 
 /** What the history needs from a fight: the Combat flag, the order, names, and card numbers. */
 export function rounds(combat) {
-  const scene = combat.scene, names = Object.fromEntries((scene?.tokens.contents ?? []).map(t => [t.id, t.name]));
+  const scene = sceneOf(combat), names = Object.fromEntries((scene?.tokens.contents ?? []).map(t => [t.id, t.name]));
   const fight = { round: combat.round, turn: combat.turn, current: combat.combatant?.id ?? null, order: combat.turns.map(c => ({ id: c.id, tokenId: c.tokenId, name: c.token?.name ?? c.name, npc: !!c.actor?.isOfType?.("npc") && c.actor.alliance !== "party" })) };
-  return historyOf(combat.getFlag(ID, "turns") ?? {}, fight, names, look(names), bandLogWords(combat), Object.fromEntries(combat.scene?.tokens.map(t => { try { return [t.id, pronounOf(t, combat)]; } catch (e) { console.warn(`${ID} | pronoun`, e); return [t.id, undefined]; } }) ?? []));
+  return historyOf(combat.getFlag(ID, "turns") ?? {}, fight, names, look(names), bandLogWords(combat), Object.fromEntries(sceneOf(combat)?.tokens.map(t => { try { return [t.id, pronounOf(t, combat)]; } catch (e) { console.warn(`${ID} | pronoun`, e); return [t.id, undefined]; } }) ?? []));
 }
 /** Numbers read off chat cards: a roll's total, the DC or AC it was against (GM only), and damage types; a save on Toolbelt's row. Null when the card is gone. */
 function look(names) {
@@ -56,7 +56,7 @@ export async function saveHistory(combat) {
   const folder = game.folders.find(f => f.type === "JournalEntry" && f.getFlag(ID, "history")) ?? await Folder.implementation.create({ name: "Monster Turns history", type: "JournalEntry", sorting: "a", flags: { [ID]: { history: true } } });
   const date = today(), name = `Monster Turns · ${date}`;
   const entry = game.journal.find(e => e.folder?.id === folder.id && e.getFlag(ID, "historyDate") === date) ?? await JournalEntry.implementation.create({ name, folder: folder.id, flags: { [ID]: { historyDate: date } } });
-  const first = reqs.length ? Math.min(...reqs.map(r => r.at ?? Date.now())) : Date.now(), title = `${combat.scene?.name ?? "A fight"} · ${hhmm(first)}`;
+  const first = reqs.length ? Math.min(...reqs.map(r => r.at ?? Date.now())) : Date.now(), title = `${sceneOf(combat)?.name ?? "A fight"} · ${hhmm(first)}`;
   const content = journalHTML(rounds(combat), esc, { title, when: `${date}, ${reqs.length} plan${reqs.length === 1 ? "" : "s"}, round ${combat.round}` }) + notebooksHTML(nbs, esc, { fold: false });
   /* saved again after midnight: the page stays in the night it was first saved */
   const page = game.journal.filter(e => e.folder?.id === folder.id).flatMap(e => e.pages.contents).find(p => p.getFlag(ID, "historyCombat") === combat.id);
@@ -71,8 +71,8 @@ const unsaved = combat => { const t = combat.getFlag(ID, "turns") ?? {}, nb = co
   if (!Object.keys(t.requests ?? {}).length && !Object.values(nb ?? {}).some(b => Object.values(b ?? {}).some(l => l?.k === "gm" || l?.x)) && !Object.values(t.orders?.log ?? {}).some(e => (e?.k === "order" && e.by === "gm") || SPEECH_LOG.includes(e?.k) || COMMAND_LOG.includes(e?.k) || SIDE_LOG.includes(e?.k))) return false; return t.historySaved !== signature(t.requests, nb, t.orders?.log); };
 /** Every creature's notebook as the Remembers fold-out shows it, in names, for the window's last section and the saved page. */
 function notebooks(combat) {
-  const labels = combat.getFlag(ID, "turns")?.labels ?? {}, n = namer(labels, Object.fromEntries(combat.scene?.tokens.map(t => [t.id, t.name]) ?? []));
-  return Object.keys(combat.getFlag(ID, "notebook") ?? {}).map(id => { const tok = combat.scene?.tokens.get(id), nb = tok ? notebookOf(combat, id) : null; if (!nb) return null;
+  const labels = combat.getFlag(ID, "turns")?.labels ?? {}, n = namer(labels, Object.fromEntries(sceneOf(combat)?.tokens.map(t => [t.id, t.name]) ?? []));
+  return Object.keys(combat.getFlag(ID, "notebook") ?? {}).map(id => { const tok = sceneOf(combat)?.tokens.get(id), nb = tok ? notebookOf(combat, id) : null; if (!nb) return null;
     const words = x => `${n.named(x.text)}${x.sure === false ? " (unsure)" : ""}${x.by === "gm" ? " (the GM's line)" : ""}`;
     return { name: tok.name, mind: MINDS[nb.mind]?.label ?? nb.mind, sent: [...nb.remembers.map(words), ...nb.allies.map(x => `Ally: ${n.named(x.text)}`)], unused: nb.unused.map(words), crossed: nb.crossed.map(words), side: nb.side }; }).filter(Boolean);
 }
@@ -127,14 +127,14 @@ async function askOnEnd(combat, { history = true, offers = [] } = {}) {
 export class HistoryApp extends foundry.applications.api.ApplicationV2 {
   static DEFAULT_OPTIONS = { id: "leb-history", classes: ["leb-history"], window: { title: "Monster Turns history", resizable: true }, position: { width: 480, height: 600, left: 520, top: 60 } };
   folds = new Map();   /* turn key → open or not, as the GM left it; untouched turns follow the default (the current round open) */
-  get combat() { return game.combat?.scene?.id === canvas.scene?.id ? game.combat : game.combats.find(c => c.scene?.id === canvas.scene?.id) ?? null; }
+  get combat() { return sceneOf(game.combat)?.id === canvas.scene?.id ? game.combat : game.combats.find(c => sceneOf(c)?.id === canvas.scene?.id) ?? null; }
   async _renderHTML() {
     if (!document.getElementById("leb-history-style")) { const s = document.createElement("style"); s.id = "leb-history-style"; s.textContent = STYLE; document.head.append(s); }
     const c = this.combat; if (!c) return "<p>No fight on this scene.</p>";
     const rds = rounds(c), last = rds.at(-1)?.round;
     const open = (key, t) => this.folds.has(key) ? this.folds.get(key) : t.current || rds.find(r => r.turns.includes(t))?.round === last;
     const saved = c.getFlag(ID, "turns")?.historySaved;
-    return `<div class="leb-h-top"><span>${esc(c.scene?.name ?? "")} · round ${c.round}${saved ? (unsaved(c) ? " · changed since saved" : " · saved") : ""}</span><button type="button" data-do="save"><i class="fa-solid fa-book"></i> Save to journal</button></div>${(() => { const w = apiUseWords(c.getFlag(ID, "turns") ?? {}); return w ? `<p class="leb-h-api">${esc(w)}</p>` : ""; })()}${historyHTML(rds, esc, { open })}${notebooksHTML(notebooks(c), esc)}`;
+    return `<div class="leb-h-top"><span>${esc(sceneOf(c)?.name ?? "")} · round ${c.round}${saved ? (unsaved(c) ? " · changed since saved" : " · saved") : ""}</span><button type="button" data-do="save"><i class="fa-solid fa-book"></i> Save to journal</button></div>${(() => { const w = apiUseWords(c.getFlag(ID, "turns") ?? {}); return w ? `<p class="leb-h-api">${esc(w)}</p>` : ""; })()}${historyHTML(rds, esc, { open })}${notebooksHTML(notebooks(c), esc)}`;
   }
   _replaceHTML(html, content) {
     const atEnd = content.scrollHeight - content.scrollTop - content.clientHeight < 40, top = content.scrollTop;

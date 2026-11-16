@@ -15,7 +15,7 @@ import { acceptYield, backInFight, gmSpeak, onRenderSay, prisonerList, refuseYie
 import { answerCommand, checkSides, commandList, dropBeliefs, onSideChange, pointCard, sideList } from "./fight.mjs";
 import { apiAlive, apiSpend, apiWanted, fightRoute, fixRoute, handOff, modelOf, setApiNote, setModelPick, setRoute, wakeAngel } from "./fight.mjs";
 import { acceptEscapeLines, answerLook, dismissLook, escapeOffers, lookNow } from "./fight.mjs";
-import { chooseFor, onReactionCard, partyReactors, setReactionUsed, doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCombatGone, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, onMemoryCard, onMemoryUpdate, onMemoryHp, notebookOf, previewRemember, rememberAdd, rememberCross, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
+import { markUnseen, maskUnseen, chooseFor, onReactionCard, partyReactors, setReactionUsed, doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCombatGone, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, onMemoryCard, onMemoryUpdate, onMemoryHp, notebookOf, previewRemember, rememberAdd, rememberCross, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
 
 const CONTROL = "encounters", apps = new Map(), mindsApps = new Map(); let turnsApp = null, historyApp = null, historyTimer = null;
 /* the history window fills in live; many flag writes come in a burst during a turn, so one redraw per quarter second */
@@ -30,7 +30,7 @@ Hooks.once("init", () => {
   game.settings.register(ID, "applyMonsterDamage", { name: "Apply monster damage automatically", hint: "A monster's hit changes HP at once, with PF2e's undo card. Off: damage is rolled and you apply it from the card.", scope: "world", config: true, type: Boolean, default: true });
   game.settings.register(ID, "autoPause", { name: "Pause between a monster's actions (seconds)", hint: "With a monster's Auto ticked, how long to wait after each action before the next, so each roll can be followed. Without Auto, Do it does one action and then shows Next step.", scope: "world", config: true, type: Number, range: { min: 0, max: 15, step: 0.5 }, default: 3 });
   game.settings.register(ID, "reactionTimer", { name: "Time to answer a reaction (seconds)", hint: "When a monster's action lets a player react (Reactive Strike and the like), how long their React / Pass window waits before the reaction passes. 0: no countdown; the turn waits for them or your Continue. Reactions you answer on your own card have no countdown.", scope: "world", config: true, type: Number, range: { min: 0, max: 60, step: 5 }, default: 20 });
-  game.settings.register(ID, "runner", { name: "Account that runs monster turns", hint: "The GM account whose page carries out monster turns: its name, exactly. It targets for real on its own account, so yours are never touched. If it's offline, turns wait and the card says so.", scope: "world", config: true, type: String, default: "Claude Bridge" });
+  game.settings.register(ID, "runner", { name: "Account that runs monster turns", hint: "The GM account whose page carries out monster turns: its name, exactly. It targets for real on its own account, so yours are never touched. If it's offline, turns wait and the card says so.", scope: "world", config: true, type: String, default: "Angel Bridge" });
   /* who is thinking for the monsters: the chat's generation and when it last asked for an event. A newer chat retires an older one. */
   game.settings.register(ID, "brain", { scope: "world", config: false, type: Object, default: { generation: 0, at: 0 }, onChange: () => { redrawTurns(); } });
   /* when the thinker last asked, on the server clock: its own setting, so a wait renewing it never writes the generation back (a page's copy of
@@ -93,7 +93,7 @@ Hooks.on("activateNote", note => {
   return false;
 });
 /* the fight */
-Hooks.on("preCreateChatMessage", message => { onPreCreateMessage(message);
+Hooks.on("preCreateChatMessage", message => { onPreCreateMessage(message); markUnseen(message);
   /* a net (0.30.1): a pronoun marker nothing turned reads as "it" in chat, never as a brace; only on a GM's page, where the module writes (0.33.1, review: a player's own words are theirs) */
   if (game.user.isGM) try { const fix = {}; for (const k of ["content", "flavor"]) if (hasMarker(message[k])) fix[k] = pro(message[k]); if (Object.keys(fix).length) message.updateSource(fix); } catch (e) { console.warn(`${ID} | pronoun`, e); } });
 Hooks.on("createChatMessage", message => { onCreateMessage(message); noteReactionRoll(message); onActionCard(message).catch(e => console.warn(`${ID} | reactions`, e)); try { onReactionCard(message); } catch (e) { console.warn(`${ID} | reaction box`, e); } try { onMemoryCard(message); } catch (e) { console.warn(`${ID} | notebook`, e); } });
@@ -107,7 +107,7 @@ Hooks.on("updateActor", (actor, change, options) => { noteChange(actor); try { o
 Hooks.on("updateChatMessage", (message, change) => { onMessageUpdate(message, change); try { onMemoryUpdate(message, change); } catch (e) { console.warn(`${ID} | notebook`, e); } });
 Hooks.on("preUpdateCombatant", (combatant, change, options) => { keepTurn(combatant, change, options); });
 Hooks.on("updateCombatant", (combatant, change, options, userId) => { saveTurn(combatant, options, userId); noteChange(combatant); });
-Hooks.on("renderChatMessageHTML", (message, html) => { onRenderMessage(message, html); try { onRenderOrder(message, html); onRenderSay(message, html); } catch (e) { console.warn(`${ID} | order line`, e); } });
+Hooks.on("renderChatMessageHTML", (message, html) => { onRenderMessage(message, html); try { maskUnseen(message, html); } catch (e) { console.warn(`${ID} | unseen`, e); } try { onRenderOrder(message, html); onRenderSay(message, html); } catch (e) { console.warn(`${ID} | order line`, e); } });
 Hooks.on("pauseGame", () => { redrawTurns(); });   /* the card says when Auto is waiting on the pause */
 Hooks.on("updateCombat", (combat, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}`) || "turn" in change || "round" in change) redrawHistory(); if (turnsApp?.rendered && (foundry.utils.hasProperty(change, `flags.${ID}`) || "turn" in change || "round" in change)) turnsApp.render(); onCombatUpdate(combat, change); });
 /* a turn handed on with no `updateCombat` (the current combatant deleted, 0.24.0): `combatTurnChange` on the pages core tells, `deleteCombatant` on every page */

@@ -16,6 +16,7 @@ The brain interface: events with a cursor and a generation, plans handed in from
 - **Models once on the API:** Sonnet by default, Opus for bosses, spellcasters and unusual monsters, set per monster, the mod may suggest Opus. Rhea will judge a side-by-side comparison before defaults are fixed. **Fixed since (2026-11-12 and 2026-11-13):** Sonnet by default, Opus for band leaders and for spellcasters two or more levels above the party, with her per-monster tick: `docs/features/api-route.md`, Decisions 1 and 2.
 - **Text in a packet is data, never instruction,** because a player could type anything into a token name. The legality check limits what a bad plan could do anyway.
 - **`suggestOpus`:** spellcasters, many abilities, or a level well above the party. Stored here, used at step 5.
+- **Prompt version 34 (0.33.2):** the `draw` step, a flee from the edge square it stands on, and mind lines read as written before the fight; `draw` joins the step kinds.
 
 ## How it works
 - **The fight-start look (0.33.0, prompt version 33, `docs/features/look.md`):** a fourth kind of event beside turns, choices and stalls: `look`, one a fight, on `turns.look` with the request id `LOOK_ID`, answered through `submitPlan` with that id. `firstEvent` gives it after every live turn event and once to each thinker's generation, not by the cursor; `waitForEvent` leaves the cursor where it was for it. A turn's packet and the look's are built one at a time (`withPackets`).

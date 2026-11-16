@@ -28,6 +28,7 @@ Settled by Angel, told to Rhea, hers to change:
 - **Who wins when they pull apart** (design review 11), in the prompt: the rules and its conditions, then what the GM asks for this turn, then Notes, then the rest of its mind. Orders and a band's plan take their places in release 3.
 - **Allies' deeds this round and the side's tally** (design review 15) are left for release 2, with fight memory.
 - **No page for minds in the build's journal:** the Monster Minds window is the one place to read and edit.
+- **Mind lines are told as written before the fight (0.33.2, Rhea's pick from the live test):** a line that said where a monster started ("under the fallen log") was read two rounds later as where it was. The prompt now says these lines were written before the fight: where it is now is `you.square`, and what it perceives now wins (prompt version 34).
 
 ## How it works
 - **A player's creature on the party's side (bug B-7, 0.31.0):** a monster given to a player, its Angel tick kept by the sides rule, is listed under With the party as "a player's", no longer as "Angel plays it" (the module stops playing it; found in 0.31.0's close-out on installed 0.30.1).

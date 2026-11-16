@@ -8,7 +8,7 @@ import { DEAF_FLAT, cleanCommand, commandWords } from "./command.mjs";
 import { pointResult } from "./pointout.mjs";
 import { IT, pro } from "./pronoun.mjs";
 /** What each step kind costs. An ability's cost is its own (0 for a free action); 1 here is only the fallback. */
-export const COSTS = { strike: 1, stride: 1, fly: 1, swim: 1, climb: 1, burrow: 1, release: 0, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, flee: 1, interact: 1, delay: 0, order: 0, say: 0, "command-animal": 1, "point-out": 1, none: 0 };
+export const COSTS = { strike: 1, stride: 1, fly: 1, swim: 1, climb: 1, burrow: 1, release: 0, draw: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, flee: 1, interact: 1, delay: 0, order: 0, say: 0, "command-animal": 1, "point-out": 1, none: 0 };
 /* Interact and Delay (0.12.0). Interact (https://2e.aonprd.com/Actions.aspx?ID=2296): 1 action, manipulate; the module can't know what a monster does
    with its hands, so it posts a card saying what, and the GM applies it, as for any ability the module can't run. Restrained bars manipulate actions;
    Grabbed asks a DC 5 flat check for them, lost on a failure. Delay (ID 2294): a free action when its turn begins, so it must be the plan's only step and
@@ -114,7 +114,8 @@ function checkPlanIt(plan, ctx) {
   let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, herePos = ctx.me?.pos ?? here, hereElev = Number(ctx.me?.elev) || 0, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, surfaced = false, fled = false, ordered = false, said = false, gaveUp = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {}, shots = {};
   const commanded = new Set(), pointed = new Set();   /* 0.30.0: one command an animal and one Point Out a creature in a plan */
   /* up a tree it climbed (it holds on there: no Stride, Step and the like until it climbs down), and what it holds in its hands */
-  let tree = hereElev > 0 && ctx.onTree ? ctx.onTree : null, below = !!ctx.below; if (below) hereElev = 0;   /* its token sits below 0; once up it stands at 0 */ const holding = new Map((ctx.holding ?? []).map(h => [h.id, h.name])), released = new Set();
+  let tree = hereElev > 0 && ctx.onTree ? ctx.onTree : null, below = !!ctx.below; if (below) hereElev = 0;   /* its token sits below 0; once up it stands at 0 */ const holding = new Map((ctx.holding ?? []).map(h => [h.id, h.name])), released = new Set(), drawn = new Set(), handsOf = new Map((ctx.holding ?? []).map(h => [h.id, Number(h.hands) || 1]));
+  let freeHands = Math.max(0, (ctx.hands ?? 2) - [...handsOf.values()].reduce((s, n) => s + n, 0));   /* draw (0.33.2): hands free now, by what it holds */
   const upTree = word => `{they} {is|are} ${Math.round(hereElev)} ft up the tree at [${tree.at[0]}, ${tree.at[1]}], so {they} can't ${word} there: a Climb (a "climb" step) with "height": 0 gets {them} down${ctx.flySpeed > 0 ? `, or {they} can Fly off` : ""}.`;
   /* distances from where each creature really stands (pos, fractional off the grid), as PF2e and the packet measure them; after a move, from the square it moved to */
   const distanceTo = (t, reach) => { const p = t.pos ?? t.square; return herePos && p ? distanceBetween({ x: herePos[0], y: herePos[1], size: ctx.me.span ?? ctx.me.size ?? 1, elev: hereElev, depth: ctx.me.depth }, { x: p[0], y: p[1], size: t.pos ? t.span ?? t.size ?? 1 : t.size ?? 1, elev: t.elev, depth: t.depth }, { reach }) : t.distance; };
@@ -286,6 +287,19 @@ function checkPlanIt(plan, ctx) {
       }
       steps.push({ do: "seek", aim }); sought = true; last = { do: "seek" }; continue;
     }
+    if (step.do === "draw") {
+      /* Draw a weapon (0.33.2, Rhea's pick from the live test: an NPC's worn bow counted as in hand): Interact (1 action, manipulate) to draw a weapon it
+         carries but doesn't hold, named by the id of a Strike made with it. It needs the weapon's hands free; Restrained bars it, Grabbed asks a DC 5 flat
+         check, as for any Interact. */
+      if (ctx.cantAttack) return { ok: false, reason: `${at}: {they} {is|are} restrained, so {they} can't draw a weapon (Interact, a manipulate action).` };
+      const s = (ctx.strikes ?? []).find(x => x.id === step.item);
+      if (!s) return { ok: false, reason: `${at}: a draw needs "item": the id of a Strike in "you.strikes" marked "sheathed" (the weapon it is made with).` };
+      if (!s.sheathed || drawn.has(s.weaponItem)) return { ok: false, reason: `${at}: {their} ${s.name} is already in {their} hands: Strike with it, no draw needed.` };
+      const need = Number(s.hands) || 1;
+      if (freeHands < need) return { ok: false, reason: `${at}: drawing {their} ${s.name} needs ${need === 2 ? "both hands" : "a hand"} free, and {they} {holds|hold} ${listWords([...holding.values()])}. A "release" step (a free action) first drops one.` };
+      freeHands -= need; drawn.add(s.weaponItem); holding.set(s.id, s.name); handsOf.set(s.id, need);   /* now held: a later Release in the plan can drop it */
+      steps.push({ do: "draw", item: s.id, itemName: s.name, weaponItem: s.weaponItem, hands: need, ...(ctx.grabbed ? { flat: GRABBED_FLAT } : {}) }); last = { do: "draw" }; continue;
+    }
     if (step.do === "release") {
       /* Release (Player Core, https://2e.aonprd.com/Actions.aspx?ID=2300): a free action, manipulate, that drops something held. Restrained bars manipulate
          actions; Grabbed asks a DC 5 flat check, as for Interact. A Climb needs both hands free (Rhea, 2026-11-08: by the rule). */
@@ -293,7 +307,7 @@ function checkPlanIt(plan, ctx) {
       const want = typeof step.item === "string" ? step.item.trim().toLowerCase() : "";
       const hit = [...holding].find(([id, name]) => id.toLowerCase() === want || String(name).toLowerCase() === want);
       if (!hit) return { ok: false, reason: `${at}: a release needs "item": the name of something {they} {holds|hold} (${holding.size ? `{they} {holds|hold} ${listWords([...holding.values()])}` : "{they} {holds|hold} nothing"}).` };
-      holding.delete(hit[0]); released.add(hit[0]);
+      holding.delete(hit[0]); released.add(hit[0]); freeHands += handsOf.get(hit[0]) ?? 0; handsOf.delete(hit[0]);
       steps.push({ do: "release", item: hit[0], itemName: hit[1], ...(ctx.grabbed ? { flat: GRABBED_FLAT } : {}) }); last = { do: "release" }; continue;
     }
     if (step.do === "climb") {
@@ -414,7 +428,11 @@ function checkPlanIt(plan, ctx) {
       if (step.do === "flee" && ctx.party) return { ok: false, reason: `${at}: {they} {fights|fight} on the party's side, and leaving the fight off the map is for the GM to decide, not a plan step.` };
       if (!Array.isArray(step.to)) return { ok: false, reason: `${at}: a ${word} needs "to", the square to end on.` };
       if (!here || !ctx.route) return { ok: false, reason: `${at}: I can't work out moves here.` };
-      if (same(here, step.to)) return { ok: false, reason: `${at}: {they} {is|are} already at [${step.to[0]}, ${step.to[1]}].` };
+      /* already on the map's edge (0.33.2, the live test: a rattled goblin stood two rounds on the east edge, its flee to its own square refused): a flee
+         from where it stands leaves the map, an action like any flee; anything else to its own square is no move */
+      const inPlace = step.do === "flee" && same(here, step.to) && !steps.some(x => MOVES.includes(x.do)) ? (ctx.edgeAt?.(here, ctx.me?.size ?? 1) ?? []) : [];
+      if (inPlace.length) { steps.push({ do: "flee", from: [...here], to: [...here], route: [[...here]], cost: 0, sides: inPlace, inPlace: true }); fled = true; moved = true; last = { do: "flee" }; continue; }
+      if (same(here, step.to)) return { ok: false, reason: `${at}: {they} {is|are} already at [${step.to[0]}, ${step.to[1]}]${step.do === "flee" ? ", which isn't on the map's edge" : ""}.` };
       const way = ctx.route(here, step.to, routes, { step: small, kind: step.do });
       if (!way.ok) return { ok: false, reason: `${at}: ${way.reason}` };
       if (small && way.cost > STEP_FT) return { ok: false, reason: `${at}: ${step.do === "crawl" ? "crawling" : "stepping"} to [${step.to[0]}, ${step.to[1]}] counts as ${way.cost} ft, and a ${word} moves only ${STEP_FT} ft${way.route?.length === 2 && way.route[0][0] !== way.route[1][0] && way.route[0][1] !== way.route[1][1] ? " (every second diagonal in a turn counts 10 ft)" : ""}.` };
@@ -431,7 +449,10 @@ function checkPlanIt(plan, ctx) {
     }
     if (ctx.cantAttack) return { ok: false, reason: `${at}: ${ctx.cantAttack}` };
     const s = ctx.strikes.find(x => x.id === step.item); if (!s) return { ok: false, reason: `${at}: {they} {has|have} no attack called "${step.item}".` };
-    if (s.dropped || (s.weapon && released.has(s.weapon))) return { ok: false, reason: `${at}: {their} ${s.name} is on the ground${s.dropped ? "" : " (released earlier in this plan)"}, so {they} can't Strike with it.` };
+    if (s.sheathed && !drawn.has(s.weaponItem)) return { ok: false, reason: `${at}: {their} ${s.name} isn't in {their} hands: a "draw" step (1 action, Interact) first.` };
+    /* a one-plus-hands weapon (a bow) is held in one hand and used with two (0.33.2): the other hand must be free when it Strikes */
+    if (s.bothToUse && freeHands < 1 && handsOf.get(s.weapon) !== 2) return { ok: false, reason: `${at}: {their} ${s.name} needs both hands to Strike with, and {their} other hand holds ${listWords([...holding.values()].filter(n => n !== s.name)) || "something"}. A "release" step (a free action) drops it first.` };
+    if (s.dropped || (s.weapon && released.has(s.weapon)) || (s.sheathed && released.has(s.id))) return { ok: false, reason: `${at}: {their} ${s.name} is on the ground${s.dropped ? "" : " (released earlier in this plan)"}, so {they} can't Strike with it.` };
     const t = ctx.targets[step.target]; if (!t) return { ok: false, reason: ctx.allies?.[step.target] || ctx.allyLabels?.includes?.(step.target) ? `${at}: "${step.target}" is on {their} side: a Strike needs a creature {they} {fights|fight}.` : `${at}: {they} {doesn't|don't} know of "${step.target}".` };   /* an ally's label said "doesn't know of" until 0.19.0 */
     const where = steps.some(x => MOVES.includes(x.do)) ? ` from [${here[0]}, ${here[1]}]` : "";
     /* ammunition: shotsLeft is what the shot's own checks will let through (fight.mjs's ammoOf), counted through the plan */
@@ -680,6 +701,20 @@ export function shouldSink({ requests = [], wet = false, dead = false, forward =
 export const movedOn = (prev = {}, now = {}) => (now.round ?? 0) > (prev.round ?? 0) || ((now.round ?? 0) === (prev.round ?? 0) && (now.turn ?? 0) > (prev.turn ?? 0));
 /** Whether a step moves the monster across the map (a Stride, Step or Crawl). */
 export const isMove = s => MOVES.includes(s?.do);
+/** Could this turn's plan set off a reaction with this trigger (0.33.2, Rhea's pick from the live test)? The card's "Not asked by the module" line named
+    a character's Counterspell on every monster turn, though none cast. Read from the trigger's words: a spell trigger needs a spell step, an attack or damage one
+    an attack, a move one a move, a manipulate or concentrate one such an action, a spoken one speech. A trigger none of these words fit is always shown. */
+const SET_OFF = [
+  [/\bspells?\b/, s => s.do === "spell"],
+  [/\b(strikes?|attacks?|attacked|hits?|damage|damaged|critical)\b/, s => ["strike", "ability", "spell"].includes(s.do)],
+  [/\b(moves?|moving|leaves?|enters?|stride|steps?|approaches|flies|swims|climbs|burrows)\b/, s => isMove(s) || ["fly", "swim", "climb", "burrow", "flee", "sneak", "stand", "drop-prone", "crawl", "step"].includes(s.do)],
+  [/\b(manipulate|concentrate|interacts?)\b/, s => ["interact", "draw", "spell", "ability", "command-animal", "point-out", "release", "seek", "hide", "sneak"].includes(s.do)],
+  [/\b(speaks?|says?|auditory|linguistic)\b/, s => ["say", "order"].includes(s.do)]];
+export function couldSetOff(trigger, steps = []) {
+  const words = String(trigger ?? "").toLowerCase(), hit = SET_OFF.filter(([re]) => re.test(words));
+  if (!hit.length) return true;
+  return hit.some(([, fits]) => (steps ?? []).some(s => s && fits(s)));
+}
 /** One id per Strike. A thrown dagger shares its slug with the melee one, and a plan has to be able to say which. strikes: [{ slug, ranged }]. */
 export function strikeIds(strikes) {
   const seen = new Map();
@@ -708,6 +743,7 @@ function doneStepIt(step, rec = {}) {
   if (step.do in POSTURES) return { do: step.do, result: rec.changed || rec.stood ? (step.do === "stand" ? "stood" : "dropped") : "unknown" };
   if (step.do === "take-cover") return { do: "take-cover", result: rec.covered ? "took cover" : "unknown" };
   if (step.do === "climb") return { do: "climb", height: step.height, result: climbResultIt(step, rec) };
+  if (step.do === "draw") return { do: "draw", item: step.itemName ?? step.item, result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.drawn ? "drew it" : "unknown" };
   if (step.do === "release") return { do: "release", item: step.itemName ?? step.item, result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.dropped ? "dropped it" : "unknown" };
   if (step.do === "order") return { do: "order", order: step.words, result: rec.given ? `given${Array.isArray(rec.heard) ? `: ${rec.heard.length ? `${rec.heard.length} of {their} band heard it` : "nobody heard it"}` : ""}` : rec.skipped ? `not given (${rec.skipped})` : "unknown" };
   if (step.do === "say") return { do: "say", intent: step.intent, result: rec.said ? (step.intent === "yield" ? "yielded: {they} {stands|stand} down" : "said") : rec.skipped ? `not said (${rec.skipped})` : "unknown" };
@@ -913,6 +949,7 @@ function describeStepIt(s) {
     return across ? `Swims ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}${s.out ? ", climbing out onto the bank" : ""}${how}.` : `Treads water where {they} {is|are} (Swim 0 ft, so {they} {doesn't|don't} sink)${how}.`; }
   if (s.do === "burrow") { const across = s.from && !same(s.from, s.to), way = across ? headingOf(s.from, s.to) : "";
     return `Burrows ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}${across ? `, to square ${s.to[0]}, ${s.to[1]}` : ""}${s.fromBelow && !s.below ? ", coming up to the surface" : !s.fromBelow && s.below ? (across ? ", under the ground (hidden from everyone)" : ", down under the ground where {they} {stands|stand} (hidden from everyone)") : s.below ? ", under the ground" : ", dipping under and coming up"}.`; }
+  if (s.do === "flee" && s.inPlace) return `Flees off the ${listWords(s.sides ?? [])} edge of the map from where {they} {stands|stand} (square ${s.to[0]}, ${s.to[1]}): you decide whether {they} {gets|get} away or the map grows.`;
   if (isMove(s)) { const way = s.from ? headingOf(s.from, s.to) : ""; return `${WORD[s.do]}s ${s.cost ?? "?"} ft${way ? ` ${way}` : ""}, to square ${s.to[0]}, ${s.to[1]}${s.do === "sneak" ? " (a secret Stealth check; Visioner applies the result)" : s.do === "flee" ? ` at the ${listWords(s.sides ?? [])} edge of the map: you decide whether {they} {gets|get} away or the map grows` : ""}.`; }
   if (s.do === "hide") return `Hides (a secret Stealth check against each creature {they} {has|have} cover or concealment from; Visioner applies the result).`;
   if (s.do === "seek") return s.aim?.type === "burst" ? `Seeks in a ${s.aim.size}-foot burst from the corner [${s.aim.corner[0]}, ${s.aim.corner[1]}] (a secret Perception check; Visioner applies the result).` : `Seeks in a ${s.aim?.size ?? SEEK.cone}-foot cone toward square ${s.aim?.toward?.[0]}, ${s.aim?.toward?.[1]} (a secret Perception check; Visioner applies the result).`;
@@ -937,6 +974,7 @@ function describeStepIt(s) {
   }
   if (s.do === "take-cover") return s.why === "prone" ? "Takes Cover while prone." : s.why === "near" ? "Takes Cover by the wall or trunk next to {them}." : `Takes Cover behind {their} cover from ${s.from}.`;
   if (s.do === "climb") return climbWords(s);
+  if (s.do === "draw") return `Draws {their} ${s.itemName ?? s.item}${s.flat ? ` (a DC ${s.flat} flat check first, as {they} {is|are} grabbed)` : ""}.`;
   if (s.do === "release") return `Releases {their} ${s.itemName ?? s.item}, which drops on {their} square${s.flat ? ` (a DC ${s.flat} flat check first, as {they} {is|are} grabbed)` : ""} (free action).`;
   if (s.do === "order") return `Orders {their} band: ${s.words}${s.order?.say ? `. {They} {says|say}: “${s.order.say}”` : ""} (free: speaking costs no action).`;
   if (s.do === "say") return s.intent === "yield" ? `Yields: {they} {stops|stop} fighting and {gives|give} {themself} up${s.say ? `, saying: “${s.say}”` : " (no words)"}. {Their} turn ends, and Accepted or Fight on is yours to press (free: speaking costs no action).` : `Says to the party (${s.intent === "bargain" ? "a bargain" : "a threat"}): “${s.say}” (free: speaking costs no action).`;
@@ -1105,10 +1143,18 @@ export const untouched = r => !!r && !r.reaction && !r.parent && !r.go && (r.sta
 export const requestBusy = r => !!r && (r.state === "running" || r.state === "submitted" || r.state === "extending" || !!r.go || !!r.extend);
 /** The note to show between turns: only the latest finished turn's, so an old warning never outlives the turn it was about. A turn that was re-planned
     is several requests linked by `parent`, and a warning from its first part (a PC at 0 HP) still counts. */
+/** The GM's instructions for a step she applies by hand ("Apply what {they} {does|do} from the Interact card.", "Then press Next step.") are for while
+    the turn waits on her (B-9, 0.33.2): once the next step runs, or the turn is over, they go from the note. Null when nothing else is left. */
+const GM_ASKS = [/\s*Apply what \S+ \S+ from the Interact card\./g, /\s*Then press Next step\./g];
+export function withoutAsks(note) {
+  if (typeof note !== "string") return note ?? null;
+  let s = note; for (const re of GM_ASKS) s = s.replace(re, "");
+  return s.trim() || null;
+}
 export function latestNote(requests = {}) {
   const fin = Object.values(requests).filter(r => ["done", "manual"].includes(r.state) && !r.reaction).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   const last = fin.at(-1); if (last?.state !== "done") return null;
-  const notes = []; for (let r = last, n = 0; r && n < 10; r = r.parent ? requests[r.parent] : null, n++) if (r.note) notes.unshift(r.note);
+  const notes = []; for (let r = last, n = 0; r && n < 10; r = r.parent ? requests[r.parent] : null, n++) { const n = withoutAsks(r.note); if (n) notes.unshift(n); }
   return notes.length ? { ...last, note: notes.join(" ") } : null;
 }
 /** The roll options PF2e's own damage button gives a target, from the damage card's context. */

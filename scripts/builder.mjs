@@ -178,13 +178,20 @@ export async function place(prep) {
   const actors = new Map();
   for (const c of brief.creatures) { const k = `${c.uuid}|${c.adjust}`; if (!actors.has(k)) actors.set(k, await importCreature(c.uuid, c.adjust, buildId, actorFolder)); }
   const tokenData = [];
+  /* one number per kind across the whole build (0.33.2, Rhea's pick from the live test): three rows of the same creature were three "Goblin Warrior"s
+     the GM couldn't tell apart; a kind that appears once keeps its plain name */
+  const nameOfRow = p => { const c = brief.creatures[p.group]; return actors.get(`${c.uuid}|${c.adjust}`).name; };
+  const kindCount = new Map(); for (const p of plan.placed) kindCount.set(nameOfRow(p), (kindCount.get(nameOfRow(p)) ?? 0) + 1);
+  const kindSeen = new Map(), numberOf = p => { const n = nameOfRow(p); if ((kindCount.get(n) ?? 0) < 2) return n; const k = (kindSeen.get(n) ?? 0) + 1; kindSeen.set(n, k); return `${n} ${k}`; };
   for (const p of plan.placed) { const c = brief.creatures[p.group], a = actors.get(`${c.uuid}|${c.adjust}`), idx = Number(p.key.split("-")[1]);
     const t = (await a.getTokenDocument({ x: ox + p.i * px, y: oy + p.j * px })).toObject();
-    Object.assign(t, { x: ox + p.i * px, y: oy + p.j * px, actorLink: false, hidden: p.state === "hidden", disposition: CONST.TOKEN_DISPOSITIONS.HOSTILE, name: c.count > 1 ? `${a.name} ${idx + 1}` : a.name });
+    Object.assign(t, { x: ox + p.i * px, y: oy + p.j * px, actorLink: false, hidden: p.state === "hidden", disposition: CONST.TOKEN_DISPOSITIONS.HOSTILE, name: numberOf(p) });
     foundry.utils.setProperty(t, `flags.${ID}`, { built: buildId, key: p.key, group: p.group, role: p.role, run: c.run, auto: false, model: null, opus: c.opus, band: c.band || null, leader: brief.bands.some(b => b.key === c.band && b.leader?.row === p.group && b.leader.n === idx) });   /* band and leader: a copy for the eye; the brief is what is read (0.26.0). Was: stored for the group releases, nothing acts on them yet (0.24.0) */
     tokenData.push(t); }
   const made = await scene.createEmbeddedDocuments("Token", tokenData), byKey = new Map(made.map(t => [t.getFlag(ID, "key"), t]));
   for (const t of made) if (plan.placed.find(p => p.key === t.getFlag(ID, "key"))?.state === "asleep") await t.actor.increaseCondition("unconscious");
+  /* hidden at the start (B-7, 0.33.2): its initiative is rolled on Stealth, and the fight's start hides it in Visioner by that roll (fight.mjs hiddenAtStart) */
+  for (const t of made) if (plan.placed.find(p => p.key === t.getFlag(ID, "key"))?.state === "hidden") { await t.setFlag(ID, "startHidden", true); await t.actor.update({ "system.initiative.statistic": "stealth" }); }
   /* treasure on who carries it, or in a cache */
   const lootText = []; let cache = null;
   if (treasure.lines.some(l => l.to === "cache")) { const at = cacheSquare(prep, planTaken(prep)) ?? [0, 0], folder = actorFolder;

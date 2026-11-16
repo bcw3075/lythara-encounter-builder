@@ -8,7 +8,7 @@ import { BAND_CAPS, FALL_BACK, NATURE, NATURE_LABEL, NATURE_PICKS, NATURE_SUGGES
 import { bandViews, joinBand, removeBand, setBand } from "../bandlib.mjs";
 import { pronounOf, dropOwn, giveOwn, kindFacts, libraryEntries, libraryExport, libraryGet, libraryImport, libraryPut, libraryRemove, mindRows, partyPeople, rowActor, rowProfile, setLines } from "../library.mjs";
 import { formsOf, fromGender, pro } from "../pronoun.mjs";
-import { modelOf, setModelPick } from "../fight.mjs";
+import { modelOf, setModelPick, sceneOf } from "../fight.mjs";
 import { modelName } from "../route.mjs";
 
 const STYLE = `.leb-minds .window-content{overflow:hidden!important;padding:0;display:flex;flex-direction:column}
@@ -93,7 +93,7 @@ export class MindsApp extends ApplicationV2 {
     const bandRow = inBand === null ? "" : `<div class="lm-row"><label>Band</label><div><select name="band" title="The group these monsters fight as part of. Its leader, nature and plan are on the band's own page, under Bands.">${inBand === "?" ? `<option value="?" selected>(only some of them: pick one to set all)</option>` : ""}<option value="">(no band)</option>${bands.map(v => `<option value="${esc(v.band.key)}"${v.band.key === bandId(inBand) ? " selected" : ""}>${esc(v.band.name)}</option>`).join("")}</select></div><div class="lm-from">${bands.length ? "changed at once" : "make one with New band…"}</div></div>`;
     /* the Model row (0.31.0; Rhea's q-28-api and her sample of 2026-11-13): which model thinks for these monsters on the API route, per monster:
        by the rule (Opus for a band leader or a spellcaster two or more levels above the party, else Sonnet) until she ticks or unticks it */
-    const fight = game.combats.find(x => x.started && x.scene?.id === scene.id) ?? null, mtoks = (single ? [at.own?.token ?? ref.token] : row.tokens.filter(id => !row.own.some(o => o.token === id))).map(id => scene.tokens.get(id)).filter(Boolean);
+    const fight = game.combats.find(x => x.started && sceneOf(x)?.id === scene.id) ?? null, mtoks = (single ? [at.own?.token ?? ref.token] : row.tokens.filter(id => !row.own.some(o => o.token === id))).map(id => scene.tokens.get(id)).filter(Boolean);
     const ms = this.models = mtoks.map(t => ({ t, m: modelOf(t, fight) })), cap = w => w ? `${w[0].toUpperCase()}${w.slice(1)}.` : "";
     const modelRow = !ms.length ? "" : (() => { const same = ms.every(x => x.m.model === ms[0].m.model), mine = ms.some(x => x.m.by === "gm"), whys = [...new Set(ms.map(x => x.m.why))];
       const box = same ? `<label class="lm-mod"><input type="checkbox" data-model ${ms[0].m.model === "opus" ? "checked" : ""}> Opus <span class="lm-hint">(${ms[0].m.model === "opus" ? "else Sonnet" : "Sonnet"})</span></label>` : `<label class="lm-mod"><input type="checkbox" data-model data-some="1"> <span class="lm-hint">(only some of them: tick to set all)</span></label>`;

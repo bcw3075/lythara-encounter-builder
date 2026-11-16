@@ -4,6 +4,7 @@ const hashf = (a, b, c) => { let h = (a * 374761393 + b * 668265263 + c * 214748
 /* feet of walking from the party's entry: first contact by about round 2 */
 export const MOOD_WINDOW = { ambush: [25, 55], chase: [30, 60], standoff: [50, 90], patrol: [60, 110], lair: [30, 200], default: [40, 80] };
 const GUARD_REACH = 5;   /* squares from what it guards */
+const LOOKOUT_REACH = 10;
 const ORDER = { guard: 0, brute: 1, ambusher: 2, beast: 3, ranged: 4, caster: 5 };
 const windowScore = (d, [lo, hi]) => d < lo ? Math.max(-1, 1 - (lo - d) / Math.max(10, lo) * 2) : d > hi ? Math.max(-1, 1 - (d - hi) / 40) : 1;
 
@@ -49,7 +50,12 @@ export function layout(model, creatures, { seed = 1, mood = "ambush", extraAncho
         if (mood === "lair" && anchor && c.role !== "guard") s += 1.5 - Math.min(2, anchorDist * .1);
         if (c.state === "asleep") s += cv * .2;
         /* the back line stays with the group, and behind it as the party sees it; nobody starts hard against the map's edge */
-        if ((c.role === "ranged" || c.role === "caster") && placed.length) { const cx = placed.reduce((a, p) => a + p.i + p.n / 2, 0) / placed.length, cy = placed.reduce((a, p) => a + p.j + p.n / 2, 0) / placed.length, along = (x - cx) * ux + (y - cy) * uy, off = Math.hypot(x - cx, y - cy); s += Math.max(-1, Math.min(.5, along * .08)) - Math.min(1.5, Math.max(0, off - 8) * .1); }
+        /* a lookout (0.33.2, the live test: a hidden archer set 34 squares from the camp it watched): a hidden ranged creature where there is a camp,
+           cave, ruin or fallen tree keeps watch over it from within LOOKOUT_REACH, out toward the way the party comes; the back-line rule isn't for it */
+        const lookout = c.role === "ranged" && c.state === "hidden" && !!lair?.at;
+        if (lookout) { const ld = Math.hypot(x - lair.at[0] - .5, y - lair.at[1] - .5), toward = -((x - lair.at[0] - .5) * ux + (y - lair.at[1] - .5) * uy);
+          s += (ld <= LOOKOUT_REACH ? .8 : -Math.min(4, (ld - LOOKOUT_REACH) * .4)) + Math.max(-.6, Math.min(.6, toward * .08)) + cv * .5; }
+        else if ((c.role === "ranged" || c.role === "caster") && placed.length) { const cx = placed.reduce((a, p) => a + p.i + p.n / 2, 0) / placed.length, cy = placed.reduce((a, p) => a + p.j + p.n / 2, 0) / placed.length, along = (x - cx) * ux + (y - cy) * uy, off = Math.hypot(x - cx, y - cy); s += Math.max(-1, Math.min(.5, along * .08)) - Math.min(1.5, Math.max(0, off - 8) * .1); }
         if (i === 0 || j === 0 || i + n === cols || j + n === rows) s -= .4;
         if (!strict) s -= seen * 3;
         s += hashf(seed, k, cIndex) * .25;
