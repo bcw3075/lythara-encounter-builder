@@ -3332,7 +3332,10 @@ export function onSocket(data, senderId) {
   /* Ready (0.35.0): the trigger typed on the chip, Now! and Done, only for a character the sender owns (Clear: a GM only) */
   if (data.t === "ready") {
     if (!isRunner()) return;
-    const combat = game.combats.get(data.combat), t = sceneOf(combat)?.tokens.get(data.token), from = game.users.get(senderId); if (!combat?.started || !t?.actor || !from) return;
+    const combat = game.combats.get(data.combat), from = game.users.get(senderId); if (!combat?.started || !from) return;
+    /* her Continue from another GM page names the turn, not a character (found live in 0.35.0's test build 1) */
+    if (data.op === "done" && from.isGM && typeof data.request === "string") { readyNowOn(combat, null, "done", "", from, data.request).catch(e => console.warn(`${ID} | ready`, e)); return; }
+    const t = sceneOf(combat)?.tokens.get(data.token); if (!t?.actor) return;
     if (!from.isGM && (!t.actor.testUserPermission(from, "OWNER") || data.op === "clear")) return;
     readyNowOn(combat, t.id, data.op, data.text, from, typeof data.request === "string" ? data.request : null).catch(e => console.warn(`${ID} | ready`, e));
     return;

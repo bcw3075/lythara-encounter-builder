@@ -10,7 +10,7 @@ export const PLAN_SCHEMA = 1;
 /** Every kind a plan may name. The module carries out only those in turn.mjs's COSTS so far; checkPlan turns down the rest by name. */
 export const STEP_KINDS = ["stride", "step", "crawl", "fly", "swim", "climb", "burrow", "release", "draw", "strike", "ability", "spell", "stand", "drop-prone", "seek", "hide", "sneak", "take-cover", "flee", "interact", "delay", "order", "say", "command-animal", "point-out", "none"];
 export const MAX_STEPS = 8, MAX_TRIES = 2, LISTEN_MS = 120000, MAX_WAIT_S = 100;   /* run_script stops at 120 s */
-const LABEL = /^[EM]\d{1,3}$/, ITEM = /^[\w-]{1,80}$/, BY = ["chat", "api", "gm"];
+const LABEL = /^[EM]\d{1,3}$/, SLAB = /^B\d{1,3}$/, ITEM = /^[\w-]{1,80}$/, BY = ["chat", "api", "gm"];
 
 /** A short line of text from outside: no control characters, capped. */
 export const text = (v, max) => typeof v === "string" ? v.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/ {2,}/g, " ").trim().slice(0, max) : "";
@@ -31,7 +31,7 @@ export function cleanPlan(raw) {
     if (!STEP_KINDS.includes(s.do)) return bad(`${at}: "${text(String(s.do ?? ""), 30)}" isn't a kind of step.`);
     const out = { do: s.do };
     if (s.item != null) { if (typeof s.item !== "string" || !ITEM.test(s.item)) return bad(`${at}: "${text(String(s.item), 30)}" isn't an id.`); out.item = s.item; }
-    if (s.target != null) { if (typeof s.target !== "string" || !LABEL.test(s.target)) return bad(`${at}: "${text(String(s.target), 30)}" isn't a label like E1.`); out.target = s.target; }
+    if (s.target != null) { if (typeof s.target !== "string" || !(LABEL.test(s.target) || (s.do === "strike" && SLAB.test(s.target)))) return bad(`${at}: "${text(String(s.target), 30)}" isn't a label like E1${s.do === "strike" ? " or B1" : ""}.`); out.target = s.target; }   /* an earth barrier's label, for a Strike only (0.35.0, found live) */
     if (s.to != null) { if (!Array.isArray(s.to) || s.to.length !== 2 || !s.to.every(v => Number.isInteger(v) && v >= 0 && v < 1000)) return bad(`${at}: "to" is a square, [x, y].`); out.to = [...s.to]; }
     /* a spell's rank (0 is never a rank, but a cantrip's own rank is given as is) and, for a spell cast with a choice of actions, how many */
     /* a Climb's tree, when it names one of several beside it (0.15.0) */
