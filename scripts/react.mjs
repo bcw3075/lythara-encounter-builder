@@ -118,8 +118,47 @@ export const KNOWN = {
   "volcanic-escape": { name: "Volcanic Escape", gates: ["harm"], target: true, aura: "kinetic-aura", own: true, pause: true },
   "pyrefowl-rebuke": { name: "Pyrefowl Rebuke", gates: ["harm"], spell: true, target: true, strike: true, range: 10, pause: true },
   "blinding-fury": { name: "Blinding Fury", gates: ["harm"], spell: true, target: true, range: 60, pause: true },
-  "overselling-flourish": { name: "Overselling Flourish", gates: ["harm"], spell: true, target: true, range: 60, pause: true }
+  "overselling-flourish": { name: "Overselling Flourish", gates: ["harm"], spell: true, target: true, range: 60, pause: true },
+  /* Moments D and F (0.38.0; the full reactions pass, release 4). Read from PF2e's compendium in PF2 Test on 2026-11-17 (Rhea: "Compendium first").
+     D, someone would drop to 0 or die (asked in the damage moment's question, when the hit as rolled could take them to 0 HP):
+     Martyr's Intervention (Knights of Lastwall, spell 3, divine, occult, primal, 60 ft, a living creature; requirement: you aren't wounded): it is
+       reduced to 1 HP instead of 0, all the damage it was spared is dealt to you, and you both become wounded 1 (or 1 more).
+     Breath of Life (Player Core, spell 5, divine, 60 ft): a living creature would die (not by a death effect or one that leaves no remains); it
+       doesn't die and regains 5d8 HP (+1d8 per 2 ranks).
+     Love's Sacrifice (Rival Academies, spell 7: you would drop to 0; a creature near you takes half or all of it) and Word of Revision (Kingmaker,
+       spell 6, rare, 60 ft: reduced to 0, it stays at 1; or a failed save, see F) are the player's (Pause), and the turn stops for her ruling.
+     F, a save against a monster's effect, before the roll (asked before the spell is cast, in the cast moment's question):
+     Divine Grace (Player Core 2, champion 2): a save against a spell; +2 circumstance to it.
+     Inspiring Resilience (Knights of Lastwall, champion 4, uncommon): you and at least one other creature are targeted by an emotion, fear or mental
+       effect with a save; allies within 30 ft get +1 circumstance to their Will save against it (+2 against an undead's).
+     Skeptic's Defense (Dark Archive, skill 7, once a day): targeted by or in the area of a mental spell or effect; counteract it with Intimidation,
+       rank half your level rounded up; success: you ignore it, and its source (Intelligence -3 or higher) is stupefied 1 for 1 round.
+     Elemental Counter (Rage of Elements, cantrip 1, arcane, primal): you or a creature within 60 ft saves against a spell with the earth, fire, metal,
+       plant, water or wood trait, and you have a slot of its countering element; you lose that slot and counteract the spell with its rank.
+     Prophet's Luck (Season of Ghosts, spell 4, rare, 60 ft): a save against an obvious threat; predict success or failure: +1 or -1 status to it
+       (2 at 6th, 3 at 9th); right, you get +1 status to saves for 10 minutes, wrong, the target -1.
+     F, after the result:
+     Know Oneself (Character Guide, human 1, once a day, fortune): a critical failure against an emotion effect becomes a failure.
+     Schadenfreude (Player Core 2, spell 1, 30 ft): you critically fail a save against a foe's effect; its Will save: success -1 status to
+       Perception and Will saves for 1 round, failure stupefied 1 for 1 round, critical failure stupefied 2 for 1 round and stunned 1.
+     Keep Up Appearances (Character Guide, human 1: you are affected by an emotion effect; Deception against observers) is the player's (Pause);
+       Champion's Sacrifice (an ally fails a save against an effect that doesn't affect you) and Word of Revision (a failed save) stop the turn.
+     Counter Element (kineticist 6) is not built: its prerequisite is exactly one kinetic element (Archives of Nethys, Rage of Elements pg. 22). */
+  "martyrs-intervention": { name: "Martyr's Intervention", gates: ["harm"], spell: true, guard: 60, other: true, drop: true, living: true, notWounded: true, deferCast: true },
+  "breath-of-life": { name: "Breath of Life", gates: ["harm"], spell: true, guard: 60, dies: true, living: true, deferCast: true },
+  "loves-sacrifice": { name: "Love's Sacrifice", gates: ["harm"], spell: true, target: true, drop: true, pause: true, stops: true },
+  "word-of-revision": { name: "Word of Revision", gates: ["harm", "saved"], spell: true, guard: 60, drop: true, failed: true, pause: true, stops: true },
+  "divine-grace": { name: "Divine Grace", gates: ["save"], target: true, spellOnly: true, saveBonus: 2 },
+  "inspiring-resilience": { name: "Inspiring Resilience", gates: ["save"], target: true, traitsAny: ["emotion", "fear", "mental"], others: true, will: true },
+  "skeptics-defense": { name: "Skeptic's Defense", gates: ["save"], target: true, traitsAny: ["mental"], freq: 86400, skeptic: true },
+  "elemental-counter": { name: "Elemental Counter", gates: ["save"], spell: true, guard: 60, spellOnly: true, element: true },
+  "prophets-luck": { name: "Prophet's Luck", gates: ["save"], spell: true, guard: 60, prophet: true },
+  "keep-up-appearances": { name: "Keep Up Appearances", gates: ["saved"], target: true, traitsAny: ["emotion"], affected: true, pause: true },
+  "know-oneself": { name: "Know Oneself", gates: ["saved"], target: true, traitsAny: ["emotion"], critFail: true, freq: 86400 },
+  "schadenfreude": { name: "Schadenfreude", gates: ["saved"], spell: true, target: true, critFail: true, foeSave: "will" }
 };
+/* Champion's Sacrifice answers a failed save too (Player Core 2: "an ally fails a saving throw against an effect that doesn't affect you"). */
+KNOWN["champions-sacrifice"].gates.push("saved"); KNOWN["champions-sacrifice"].failed = true;
 /** Reactions the player makes with the usual tools after React, then presses Done (Reactive Strike's roll, and the "Pause" rows of the pass). */
 export const makesItself = slug => !!(KNOWN[slug]?.reach || KNOWN[slug]?.pause);
 /** The rows that are asked before an attack and raise AC against it (circumstance bonuses, so only the best counts). */
@@ -178,7 +217,77 @@ export function fits(slug, gate, who = {}, what = {}) {
   if (row.bleeds && who.canBleed === false) return false;
   if ((row.freq || row.perAttacker) && who.freqOk === false) return false;   /* review 4 (0.37.0): Calcifying Sand's hour per attacker */
   if (row.own && !who.inAura) return false;   /* in your own aura (Volcanic Escape: your kinetic aura) */
+  /* Moments D and F (0.38.0): what adds { drops (the hit as rolled could take the creature to 0 HP), dies (and that would kill it), death (a death
+     effect), isSpell, traits, savers (how many will save), degree (the save's, at "saved") }; who adds { targetLiving, wounded, alsoSaves, elementSlot } */
+  if (row.drop && gate === "harm" && !what.drops) return false;
+  if (row.dies && (!what.dies || what.death)) return false;
+  if (row.living && who.targetLiving === false) return false;
+  if (row.notWounded && who.wounded) return false;
+  if (row.failed && gate === "saved" && !(Number(what.degree) <= 1)) return false;
+  if (gate === "saved" && row.other && who.alsoSaves) return false;   /* Champion's Sacrifice: an effect that doesn't affect you */
+  if (row.spellOnly && !what.isSpell) return false;
+  if (row.traitsAny && !(what.traits ?? []).some(t => row.traitsAny.includes(t))) return false;
+  if (row.others && !(Number(what.savers) > 1)) return false;
+  if (row.will && what.saveStat && what.saveStat !== "will") return false;   /* its bonus is to the Will save (review 9) */
+  if (row.element && !who.elementSlot) return false;
+  if (row.critFail && what.degree !== 0) return false;
+  if (row.affected && !(Number(what.degree) <= 2)) return false;
   return true;
+}
+/* ---------- Moments D and F (0.38.0) ---------- */
+/** Would this damage take the creature to 0 HP? hp, temp (and stamina): what it has now; hit: the damage (as rolled at the question, PF2e's own
+    figure once applied). Only a creature that is up can drop. */
+export const dropsFrom = ({ hp = 0, temp = 0, sp = 0, hit = 0 } = {}) => Number(hp) > 0 && Number(hit) >= Number(hp) + Number(temp) + Number(sp);
+/** Would this damage kill it (Breath of Life's "would die")? An NPC dies at 0 HP; a character dies of massive damage (twice its maximum HP) or when
+    the dying value it is knocked out with (1, 2 on a critical, plus its wounded value) reaches its dying maximum (4 less doomed). Player Core pg. 411. */
+export function diesFrom({ character = true, hp = 0, temp = 0, sp = 0, max = 0, spMax = 0, hit = 0, wounded = 0, dyingMax = 4, crit = false } = {}) {
+  if (!dropsFrom({ hp, temp, sp, hit })) return false;
+  if (!character) return true;
+  if (Number(max) > 0 && Number(hit) >= 2 * (Number(max) + Number(spMax))) return true;
+  return 1 + (crit ? 1 : 0) + (Number(wounded) || 0) >= (Number(dyingMax) || 4);
+}
+/** Martyr's Intervention: the creature stays at 1 HP and the caster takes what it was spared. before: its HP and temporary HP before the damage;
+    dealt: the full damage (PF2e's figure). */
+export const martyrShare = (before = 0, dealt = 0) => Math.max(0, (Number(dealt) || 0) - Math.max(0, (Number(before) || 0) - 1));
+/** Breath of Life's healing: 5d8, 1d8 more per 2 ranks above 5th. */
+export const breathDice = rank => `${5 + Math.floor((rnk(rank) - 5) / 2)}d8`;
+/** Prophet's Luck's bonus or penalty: 1, 2 from 6th rank, 3 from 9th. */
+export const prophetBy = rank => rnk(rank) >= 9 ? 3 : rnk(rank) >= 6 ? 2 : 1;
+/** Was the prophecy right? predict: "success" (a success or a critical success) or "failure"; degree: the save's. */
+export const prophetRight = (predict, degree) => (predict === "success") === (Number(degree) >= 2);
+/** Elemental Counter: the elements that counter a spell of each element (Rage of Elements: wood or plant counter earth, earth water, water fire,
+    fire metal, metal wood or plant). */
+export const ELEMENT_COUNTERS = { earth: ["plant", "wood"], water: ["earth"], fire: ["water"], metal: ["fire"], plant: ["metal"], wood: ["metal"] };
+export const counteringElements = (traits = []) => [...new Set((traits ?? []).flatMap(t => ELEMENT_COUNTERS[t] ?? []))];
+/** Skeptic's Defense's counteract rank: half the character's level, rounded up. */
+export const skepticRank = level => Math.max(1, Math.ceil(lvl(level) / 2));
+/** Know Oneself: a critical failure becomes a failure. */
+export const knowOneself = degree => degree === 0 ? 1 : degree;
+/** Schadenfreude by the foe's Will save: what it gets for 1 round, or null. */
+export const schadenBy = degree => degree === 3 ? null : degree === 2 ? { penalty: true } : degree === 1 ? { stupefied: 1 } : { stupefied: 2, stunned: 1 };
+/** What a row of Moments D and F would do, for its button (numbers worked out when it is asked). */
+export function rx4Detail(x = {}) {
+  const row = KNOWN[x.slug] ?? {};
+  if (row.pause) return "then make it yourself; the turn waits for the GM";
+  switch (x.slug) {
+    case "martyrs-intervention": return `${x.ally ? `${x.ally} stays` : "they stay"} at 1 HP; you take the rest of the damage, and you both become wounded (cast only if it is needed)`;
+    case "breath-of-life": return `${x.ally ? `${x.ally} doesn't die and regains` : "you don't die and regain"} ${breathDice(x.rank)} HP (cast only if it is needed)`;
+    case "divine-grace": return "+2 circumstance to your save against this spell";
+    case "inspiring-resilience": return `allies within 30 feet get +${x.undead ? 2 : 1} circumstance to their Will save against it`;
+    case "skeptics-defense": return `counteract it: Intimidation +${x.mod ?? 0} against DC ${x.dc ?? "?"}, rank ${x.myRank ?? 1}; on a success you ignore it`;
+    case "elemental-counter": return `spend your ${x.slotName ?? "spell"} (rank ${x.myRank ?? 1}) to counteract it: +${x.mod ?? 0} against DC ${x.dc ?? "?"}`;
+    case "prophets-luck": return `${x.predict === "failure" ? `-${prophetBy(x.rank)}` : `+${prophetBy(x.rank)}`} status to ${x.ally ?? "the"} save; right: +1 status to your saves for 10 minutes, wrong: -1 to theirs`;
+    case "know-oneself": return "your critical failure becomes a failure";
+    case "schadenfreude": return `its Will save against your spell DC${x.dc ? ` ${x.dc}` : ""} (stupefied, or worse)`;
+    default: return "";
+  }
+}
+/** The sentence for one of these. who: the monster as the reactor may see it; ally: the creature it is about, when it isn't the reactor; gate: harm, save or saved. */
+export function rx4Words(x = {}, who = "A creature", ally = null, gate = "harm", kind = "") {
+  const what = gate === "harm" ? `${who} is about to ${x.slug === "breath-of-life" ? "kill" : "drop"} ${ally ?? "you"}`
+    : gate === "save" ? `${who}'s ${kind || "spell"} calls for ${ally ? `${ally}'s` : "your"} save`
+    : `${ally ?? "You"} ${x.degree === 0 ? "critically failed" : "failed"} ${ally ? "their" : "your"} save against ${who}'s ${kind || "effect"}`;
+  return `${what}. React with ${x.reaction ?? KNOWN[x.slug]?.name}?`;
 }
 /** The window a row of the damage moment is asked in (0.37.1, seen live 2026-11-17: a character's Blazing Spirit and Deflecting Wave opened as two
     windows stacked on the same spot, the lower one hidden). A reaction that protects someone else (a champion picking which ally, Warping Pull) and
@@ -220,7 +329,7 @@ export function gateWords(gate, who, { kind = "", reaction = "" } = {}) {
   const W = { move: `${who} is moving out of a square in your reach`, stay: `${who} ${kind || "uses a move action"} in your reach`, manipulate: `${who} uses a manipulate action in your reach${kind ? ` (${kind})` : ""}`,
     ranged: `${who} makes a ranged attack in your reach`, attack: `${who} attacks you`, hit: `${who}'s ${kind || "Strike"} hits you`,
     harm: `${who} is about to damage ${kind || "your ally"}, and both are in your champion's aura`, area: `${who}'s ${kind || "spell"} is about to catch you in its area`,
-    cast: `${who} is casting ${kind || "a spell"}` };
+    cast: `${who} is casting ${kind || "a spell"}`, save: `${who}'s ${kind || "spell"} calls for a save`, saved: `A save against ${who}'s ${kind || "spell"} went badly` };
   return `${W[gate] ?? who}. React with ${reaction}?`;
 }
 /** What a reaction asked on the card or the prompt resolved to, from the answers: "react" (and the reactor finished: "done"), "pass", "timeout",
@@ -439,9 +548,17 @@ export function notAskedWords(list = []) {
   const W = { used: "reaction already used", delaying: "Delaying" };
   return list.map(x => `${x.name}: ${x.reaction} not asked (${W[x.why] ?? x.why}).`).join(" ");
 }
+/** The damage a creature took from one application, for the line after a reaction (0.38.0; Rhea, 2026-11-17: "You should be recording the full
+    damage"): PF2e's own figure (the update's `damageTaken`, which its damage-taken card shows and which goes past 0 HP) when it came; otherwise
+    what came off HP and temporary HP (no update came: nothing was taken, or the creature was already at 0); null when nothing is known. */
+export function fullDamage({ dealt = null, was = null, now = null } = {}) {
+  if (dealt != null && Number.isFinite(Number(dealt))) return Math.max(0, Number(dealt));
+  if (was == null || now == null) return null;
+  return Math.max(0, was - now);
+}
 /** What a hit did after the reactions to it, for everyone (Rhea, 2026-11-11, PR-10: every reduction says why, with the numbers).
-    o: { name, enemy ("the creature" as players may name it), hit (the damage as rolled, after doubling or halving), taken (what came off HP and
-    temporary HP), repent, resist (Glimpse refused: the resistance), less (Interposing Earth: what came off), block (Shield Block was used) } */
+    o: { name, enemy ("the creature" as players may name it), hit (the damage as rolled, after doubling or halving), taken (the full damage dealt
+    after the reactions, as PF2e's card gives it: `fullDamage`), repent, resist (Glimpse refused: the resistance), less (Interposing Earth: what came off), block (Shield Block was used) } */
 export function harmWords(o = {}) {
   const name = o.name ?? "Someone", enemy = o.enemy ?? "the creature";
   if (o.repent) return `${name} is unharmed: ${enemy} repented (Glimpse of Redemption).`;

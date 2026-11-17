@@ -27,6 +27,7 @@ Spells: a spell attack or a save spell at one perceived creature runs for real, 
 - **Spells:** read from `actor.spellcasting` with slots and DCs. The call is `entry.cast(spell, {rank, slotId, consume, message, messageMode})` [CODE, not run]. First test of this step.
 - **0.27.0 (`reactions.md`):** a spell attack's hit asks Shield Block before its damage (`hitGate` with the spell's damage types); the apply stage asks the damage gate first and passes `{ resist, less }` and the block to `applyFromCard`; with automatic damage off `harmByHand` asks after the roll.
 
+- **The save moments (0.38.0):** before a spell with a save is cast, the party's reactions to that save are asked in the cast question (`beforeAction`; a creature spared by Skeptic's Defense skips its save and damage, `log.<step>.spared`), and once the target's save is in `awaitSave` asks the reactions to the result (`saveAfter`) before writing it: one may change the degree, or stop the turn ("stopped" once the save is written). The detail is the reactions feature's (`docs/features/reactions.md`, RX-5).
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.
 **Spells** (any change to `spellBook`, `checkSpell`, `nextSpell`, `runSpell`, `awaitSave`, `saveButton`, the `saves` state or `applyFromCard`):
