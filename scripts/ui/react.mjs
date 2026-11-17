@@ -6,9 +6,9 @@
    Foundry's DialogV2 runs `submit` before it closes (checked in foundry.mjs, 14.370), so a React is never sent as a Pass. */
 import { esc } from "../journal.mjs";
 import { answerReaction, answerStepsQuestion } from "../fight.mjs";
-import { stepsQuestion } from "../react.mjs";
+import { makesItself, stepsQuestion } from "../react.mjs";
 
-const ROLLS = ["reactive-strike", "attack-of-opportunity"], open = new Map();
+const open = new Map();
 /* a group's buttons are one under the other: three names side by side wrapped inside their buttons (seen live, 2026-11-11) */
 const STYLE = ".leb-rx .leb-count{opacity:.8}.leb-rx .form-footer{flex-wrap:wrap}.leb-rx.leb-many .form-footer{flex-direction:column;align-items:stretch}.leb-rx.leb-many .form-footer button{width:100%;flex:0 0 auto}";
 /** "ask" and "close" from the runner. A close can name one row (its creature's reaction went on another row). */
@@ -16,35 +16,40 @@ export function onReactionPrompt(data) {
   if (!data || game.user.isGM) return;
   if (data.t === "close") { for (const [k, w] of open) if (k.startsWith(`${data.request}.${data.key}.`) && (!data.row || w.rows.includes(data.row))) { open.delete(k); w.quiet(); w.dlg.close().catch(() => {}); } return; }   /* closed by the runner: no answer sent (review finding 19) */
   if (data.t === "steps") return askSteps(data).catch(e => console.warn("steps question", e));
+  if (data.t === "told") { if ((data.users ?? []).includes(game.user.id)) told(data).catch(e => console.warn("reaction result", e)); return; }   /* Recognize Spell's result, to that player only (0.36.0) */
   if (data.t === "stepsClose") { const w = open.get(`steps.${data.key}`); if (w) { open.delete(`steps.${data.key}`); w.quiet(); w.dlg.close().catch(() => {}); } return; }
   if (data.t !== "ask") return;
   const groups = new Map();
-  for (const x of data.list ?? []) if ((x.users ?? []).includes(game.user.id)) { const g = x.group ?? x.id; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(x); }
+  /* one window per character and moment (0.36.0; the pass's sample 1, approved 2026-11-16): every row of one character in this question, a button
+     each, since a character has one reaction; a champion's choice of ally (`group`) stays a window of its own */
+  for (const x of data.list ?? []) if ((x.users ?? []).includes(game.user.id)) { const g = x.group ?? `c:${x.token ?? x.id}`; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(x); }
   for (const [g, rows] of groups) show(data, g, rows).catch(e => console.warn("reaction prompt", e));
 }
 async function show(data, group, rows) {
   const k = `${data.request}.${data.key}.${group}`; if (open.has(k)) return;
   if (!document.getElementById("leb-rx-style")) document.head.insertAdjacentHTML("beforeend", `<style id="leb-rx-style">${STYLE}</style>`);
-  const x = rows[0], many = rows.length > 1, ids = rows.map(r => r.id);
+  const x = rows[0], many = rows.length > 1, ids = rows.map(r => r.id), mixed = many && !x.group;
   const left = () => data.until ? Math.max(0, Math.ceil((data.until - game.time.serverTime) / 1000)) : null;
   const send = (row, answer) => answerReaction(data.combat, data.request, data.key, row, answer).catch(e => ui.notifications.error(e.message));
   let answered = false; const quiet = () => { answered = true; };
   const D = foundry.applications.api.DialogV2;
   /* a group: what each row is about, then one question with a button for each */
-  const body = many ? rows.map(r => `<p>${esc(String(r.words ?? "").replace(/\s*React with .*$/, ""))}</p>`).join("") + `<p>React with ${esc(x.reaction)}? Choose one.</p>`
+  const say = r => String(r.words ?? "").replace(/\s*React with .*$/, "").replace(/\s*Counterspell\? .*$/, "");
+  const body = mixed ? [...new Set(rows.map(say))].map(w => `<p>${esc(w)}</p>`).join("") + "<p>You have one reaction. Use one?</p>" + rows.map(r => `<p><b>${esc(r.reaction)}</b>${r.detail ? `: ${esc(r.detail)}` : ""}</p>`).join("")
+    : many ? rows.map(r => `<p>${esc(say(r))}</p>`).join("") + `<p>React with ${esc(x.reaction)}? Choose one.</p>`
     : (x.lines?.length ? x.lines : [x.words]).map(w => `<p>${esc(w)}</p>`).join("");
-  const buttons = many ? [...rows.map((r, n) => ({ action: `react:${n}`, label: `React: ${r.label ?? r.name}`, icon: "fa-solid fa-bolt", default: n === 0 })), { action: "pass", label: "Pass", icon: "fa-solid fa-xmark" }]
-    : [{ action: "react", label: x.labels?.react ?? "React", icon: "fa-solid fa-bolt", default: !x.labels }, { action: "pass", label: x.labels?.pass ?? "Pass", icon: x.labels ? "fa-solid fa-bolt" : "fa-solid fa-xmark", default: !!x.labels }];
+  const buttons = many ? [...rows.map((r, n) => ({ action: `react:${n}`, label: mixed ? `${r.reaction}${makesItself(r.slug) ? " (then make it yourself)" : ""}` : `React: ${r.label ?? r.name}`, icon: "fa-solid fa-bolt", default: n === 0 })), { action: "pass", label: "Pass", icon: "fa-solid fa-xmark" }]
+    : [{ action: "react", label: x.labels?.react ?? (x.slug?.startsWith("counterspell") ? "Counterspell" : "React"), icon: "fa-solid fa-bolt", default: !x.labels }, { action: "pass", label: x.labels?.pass ?? "Pass", icon: x.labels ? "fa-solid fa-bolt" : "fa-solid fa-xmark", default: !!x.labels }];
   const ask = new D({ window: { title: x.reaction }, classes: many ? ["leb-rx", "leb-many"] : ["leb-rx"], position: { width: x.lines?.length || many ? 440 : 360 },
     content: `${body}${data.until ? `<p class="leb-count">${x.labels ? `${esc(x.labels.pass)} in` : "It passes in"} <b>${left()}</b> s.</p>` : ""}`,
     buttons,
     submit: async result => { answered = true;
       if (result === "pass") { for (const id of ids) await send(id, "pass"); return; }
       const row = many ? rows[Number(String(result).split(":")[1])] ?? x : x;
-      if (!ROLLS.includes(row.slug)) return send(row.id, "done");
+      if (!makesItself(row.slug)) return send(row.id, "done");
       await send(row.id, "react");
       let finished = false;
-      const done = new D({ window: { title: row.reaction }, classes: ["leb-rx"], position: { width: 360 }, content: `<p>Make your ${esc(row.reaction)} now (PF2e HUD or your sheet), then press Done.</p>`,
+      const done = new D({ window: { title: row.reaction }, classes: ["leb-rx"], position: { width: 360 }, content: `<p>${KNOWN_SPELL(row) ? `Cast ${esc(row.reaction)} now from your sheet` : `Make your ${esc(row.reaction)} now (PF2e HUD or your sheet)`}, then press Done.${row.cast?.monster && row.gate === "cast" ? ` ${esc(row.cast.monster)}'s turn waits.` : ""}</p>`,
         buttons: [{ action: "done", label: "Done", icon: "fa-solid fa-check", default: true }], submit: () => { finished = true; open.delete(k); return send(row.id, "done"); } });
       /* closing this window counts as Done; the runner closing it sends nothing */
       done.addEventListener?.("close", () => { if (!finished) { finished = true; open.delete(k); send(row.id, "done"); } });
@@ -72,4 +77,12 @@ async function askSteps(data) {
   dlg.addEventListener?.("close", () => { answered = true; if (open.get(k)?.dlg === dlg) open.delete(k); });   /* closing it sends nothing: the GM decides */
   open.set(k, { dlg, rows: [], quiet: () => { answered = true; } }); await dlg.render({ force: true });
   if (data.until) { const tick = setInterval(() => { const n = left(), b = dlg.element?.querySelector(".leb-count b"); if (b) b.textContent = n; if (!dlg.rendered || n <= 0) { clearInterval(tick); if (dlg.rendered && !answered) { answered = true; open.delete(k); dlg.close(); } } }, 500); }
+}
+
+const KNOWN_SPELL = row => !!row.spell;
+/** A result told to one player only (Recognize Spell, 0.36.0): a small window, never a whispered card. */
+async function told(data) {
+  const D = foundry.applications.api.DialogV2;
+  await new D({ window: { title: data.title ?? "Reaction" }, classes: ["leb-rx"], position: { width: 360 }, content: (data.lines ?? []).map(l => `<p>${esc(l)}</p>`).join(""),
+    buttons: [{ action: "ok", label: "OK", icon: "fa-solid fa-check", default: true }] }).render({ force: true });
 }

@@ -6,7 +6,7 @@ import { tickGroups, groupChanges } from "./ticks.mjs";
 import { esc } from "../journal.mjs";
 /* her own words and names, never read for pronoun markers by the window's net (0.32.0 review 2): a brace as an HTML entity isn't a marker */
 const escW = s => esc(s).replace(/\{/g, "&#123;").replace(/\}/g, "&#125;");
-import { countingDown, offerWords, readyWords, readiedWords } from "../react.mjs";
+import { countingDown, makesItself, offerWords, readyWords, readiedWords } from "../react.mjs";
 import { barriersOf, readiedNow, readyAct, removeBarrier } from "../fight.mjs";
 import { describeKnows } from "../perceive.mjs";
 import { ID } from "../builder.mjs";
@@ -46,7 +46,7 @@ function rxHtml(rx) { if (!rx) return ""; const ans = rx.answers ?? {}, left = c
           /* a row can name its own two answers (0.27.0: Weight of Guilt's Stupefied 2 or Enfeebled 2) */
           const L = x.labels, state = a === "done" ? (L ? `chose ${L.react}` : "used it") : a === "react" ? "is rolling it" : a === "pass" ? (L ? `chose ${L.pass}` : "passed") : a === "timeout" ? (L ? `didn't answer in time: ${L.pass}` : "didn't answer in time") : a === "continue" ? (L ? L.pass : "skipped") : gm ? "yours to answer" : "asked in their window";
           const btns = gm && !a ? `<button type="button" data-rx="react" data-row="${esc(x.id)}">${esc(L?.react ?? "React")}</button><button type="button" data-rx="pass" data-row="${esc(x.id)}">${esc(L?.pass ?? "Pass")}</button>` : gm && a === "react" ? `<button type="button" data-rx="done" data-row="${esc(x.id)}">Done</button>` : "";
-          return `<p>${esc(x.name)}: ${esc(x.reaction)}${x.ally && x.kind ? ` for ${esc(x.kind)}` : ""}, ${state}. ${btns}</p>`; }).join("");
+          return `<p>${esc(x.name)}: ${esc(x.reaction)}${x.ally && x.kind ? ` for ${esc(x.kind)}` : ""}${x.detail ? ` (${esc(x.detail)})` : ""}, ${state}. ${btns}</p>`; }).join("");
         return `<div class="leb-react"><p><b>Reactions</b>: ${esc(String(rx.list[0]?.gmWords ?? rx.list[0]?.words ?? "").replace(/\s*React with .*$/, ""))}${left != null ? ` ${rx.list.some(x => x.to === "gm") ? "Players' answers pass" : "They pass"} in about ${left} s.` : ""}</p>${rows}<div class="leb-btns"><button type="button" data-rx="cont" title="Skip any reaction not answered yet and carry on"><i class="fa-solid fa-forward"></i> Continue</button></div></div>`; }
 /** A monster's repent or refuse (0.27.0; Rhea, 2026-11-11): the question while it is open, with the GM's own two buttons. They are always there: for a
     monster she plays, and for one of Angel's when the thinker doesn't answer. */
@@ -390,7 +390,7 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     root.querySelectorAll("[data-request] [data-rx]").forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); const id = el.closest("[data-request]").dataset.request, a = el.dataset.rx, r = c.getFlag(ID, "turns")?.requests?.[id], rx = r?.react; if (!rx) return;
       el.disabled = true;
       if (a === "cont") { notePress(c, id, "Continue"); return continueReactions(c, id).catch(e => ui.notifications.error(e.message)); }
-      const x = rx.list.find(y => y.id === el.dataset.row), answer = a === "react" && !["reactive-strike", "attack-of-opportunity"].includes(x?.slug) ? "done" : a;
+      const x = rx.list.find(y => y.id === el.dataset.row), answer = a === "react" && !makesItself(x?.slug) ? "done" : a;   /* Reactive Strike and the Pause rows (0.36.0) wait for Done */
       answerReaction(c.id, id, rx.key, el.dataset.row, answer).catch(e => ui.notifications.error(e.message)); }));
     /* a monster's repent or refuse, and the party's reaction boxes (0.27.0) */
     root.querySelectorAll("[data-request] [data-choose]").forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); const id = el.closest("[data-request]").dataset.request;

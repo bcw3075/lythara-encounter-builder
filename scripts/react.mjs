@@ -26,8 +26,30 @@ export const KNOWN = {
      Interposing Earth (Rage of Elements pg. 95, a reaction spell): you are the target of a Strike or would attempt a Reflex save against a damaging
        area effect; standard cover against it, and if you are still damaged the barrier is destroyed and the damage is 2 less (8 from 4th rank). */
   "glimpse-of-redemption": { name: "Glimpse of Redemption", gates: ["harm"], ally: true, aura: "champions-aura" },
-  "interposing-earth": { name: "Interposing Earth", gates: ["attack", "area"], target: true, ac: 2, cover: true, spell: true }
+  "interposing-earth": { name: "Interposing Earth", gates: ["attack", "area"], target: true, ac: 2, cover: true, spell: true },
+  /* Moment E, a monster casts a spell (0.36.0; the full reactions pass, release 2), each checked on Archives of Nethys 2026-11-16.
+     Counterspell (Player Core pg. 186; the compendium also keeps the legacy sorcerer's "spontaneous" version): a creature casts a spell you have
+       prepared (or in your repertoire, spontaneous) and you can see it; you lose that slot as if you had cast it, then counteract it.
+     Recognize Spell (Player Core pg. 261, secret): a creature in your line of sight casts a spell you don't have prepared or in your repertoire;
+       automatic success for a common spell up to rank 2/4/6/10 by your proficiency in its tradition's skill; untrained, no better than failure;
+       a critical success gives +1 circumstance to your save or AC against it.
+     Nullify (Impossible Magic pg. 155, spell 10): a foe within 120 feet casts a 9th-rank or lower spell; it is counteracted automatically and you
+       lose 1d8 HP per rank of that spell.
+     Shadow Siphon (Core Rulebook pg. 368, legacy only on Archives of Nethys): a spell deals damage, range 60 feet; counteract it with your rank
+       treated as 2 higher; on a success the damage is halved.
+     Mimic Spell (Rival Academies pg. 33, spell 8), Spell Riposte (Player Core 2 pg. 252, spell 7: you are the target; not an area) and Redirect
+       Teleportation (Impossible Magic pg. 109, wizard 12: a creature teleports into a space within 60 feet) are the player's to make (Pause). */
+  "counterspell-prepared": { name: "Counterspell", gates: ["cast"], sees: true, counter: "same", entries: "prepared" },
+  "counterspell-spontaneous": { name: "Counterspell", gates: ["cast"], sees: true, counter: "same", entries: "spontaneous" },
+  "recognize-spell": { name: "Recognize Spell", gates: ["cast"], sees: true, recognize: true },
+  "nullify": { name: "Nullify", gates: ["cast"], spell: true, sees: true, range: 120, maxRank: 9, counter: "auto" },
+  "shadow-siphon": { name: "Shadow Siphon", gates: ["cast"], spell: true, range: 60, damaging: true, counter: "siphon" },
+  "mimic-spell": { name: "Mimic Spell", gates: ["cast"], spell: true, sees: true, range: 120, tradition: true, pause: true },
+  "spell-riposte": { name: "Spell Riposte", gates: ["cast"], spell: true, target: true, pause: true },
+  "redirect-teleportation": { name: "Redirect Teleportation", gates: ["cast"], sees: true, range: 60, teleport: true, pause: true }
 };
+/** Reactions the player makes with the usual tools after React, then presses Done (Reactive Strike's roll, and the "Pause" rows of the pass). */
+export const makesItself = slug => !!(KNOWN[slug]?.reach || KNOWN[slug]?.pause);
 /** The rows that are asked before an attack and raise AC against it (circumstance bonuses, so only the best counts). */
 export const AC_ROWS = Object.keys(KNOWN).filter(k => KNOWN[k].ac);
 const PHYSICAL = ["bludgeoning", "piercing", "slashing"];
@@ -61,6 +83,15 @@ export function fits(slug, gate, who = {}, what = {}) {
   if (row.needs === "shield" && (!who.hasShield || who.shieldRaised)) return false;   /* already raised: nothing to gain */
   if (row.melee && !what.melee) return false;
   if (row.physical && (what.damageTypes?.length ? !what.damageTypes.some(t => PHYSICAL.includes(t)) : false)) return false;   /* unknown types: offer it */
+  /* a monster casting (0.36.0): who: { hasSame (a copy it can spend), knowsIt, dist (ft to the caster), tradition, spellRank }; what: the cast
+     { rank, tradition, damaging, teleport } */
+  if (row.counter === "same" && !who.hasSame) return false;
+  if (row.recognize && who.knowsIt) return false;
+  if (row.range && !(Number(who.dist) <= row.range)) return false;
+  if (row.maxRank && !(Number(what.rank) <= row.maxRank)) return false;
+  if (row.damaging && !what.damaging) return false;
+  if (row.teleport && !what.teleport) return false;
+  if (row.tradition && (!what.tradition || what.tradition !== who.tradition || !(Number(what.rank) <= Number(who.spellRank)))) return false;
   return true;
 }
 /** Where along a move the "move" gates fall. route: squares from where it stands to where it ends; mover: { size, elev }; reactors: [{ id, pos, span,
@@ -97,7 +128,8 @@ export const acAdds = (bonus, had) => Math.max(0, (Number(bonus) || 0) - Math.ma
 export function gateWords(gate, who, { kind = "", reaction = "" } = {}) {
   const W = { move: `${who} is moving out of a square in your reach`, stay: `${who} ${kind || "uses a move action"} in your reach`, manipulate: `${who} uses a manipulate action in your reach${kind ? ` (${kind})` : ""}`,
     ranged: `${who} makes a ranged attack in your reach`, attack: `${who} attacks you`, hit: `${who}'s ${kind || "Strike"} hits you`,
-    harm: `${who} is about to damage ${kind || "your ally"}, and both are in your champion's aura`, area: `${who}'s ${kind || "spell"} is about to catch you in its area` };
+    harm: `${who} is about to damage ${kind || "your ally"}, and both are in your champion's aura`, area: `${who}'s ${kind || "spell"} is about to catch you in its area`,
+    cast: `${who} is casting ${kind || "a spell"}` };
   return `${W[gate] ?? who}. React with ${reaction}?`;
 }
 /** What a reaction asked on the card or the prompt resolved to, from the answers: "react" (and the reactor finished: "done"), "pass", "timeout",
@@ -331,3 +363,62 @@ export const missWords = (name, reaction, strike = "The hit") => `${strike} at $
 /** What the thinker is told when its monster must answer Glimpse of Redemption: words, never numbers (Rhea, 2026-11-11, reading a). */
 export const CHOICES = ["repent", "refuse"];
 export const choiceWords = ally => `As your blow lands on ${ally || "your enemy"}, a vision floods your mind: the harm you are doing, and another way. You must choose now. "repent": you hold back, and this blow does ${ally || "them"} no harm at all. "refuse": the blow lands, but weaker, and you are left weakened until the end of your next turn.`;
+
+/* ---------- Moment E: a monster casts a spell (0.36.0) ----------
+   Counteracting (Player Core pg. 431, checked on Archives of Nethys 2026-11-16): a spell's counteract rank is its rank; the check is the
+   spellcasting attribute modifier plus the spellcasting proficiency bonus against the caster's spell DC. Critical success: counteract it if its
+   rank is no more than 3 higher than yours; success: no more than 1 higher; failure: only if it is lower; critical failure: never. */
+/** Does a counteract check of this degree (0 to 3) with my counteract rank beat theirs? */
+export function counteracts(degree, mine, theirs) {
+  const d = (Number(theirs) || 0) - (Number(mine) || 0);
+  return degree === 3 ? d <= 3 : degree === 2 ? d <= 1 : degree === 1 ? d < 0 : false;
+}
+/** Which prepared copy (or slot) Counterspell spends, from those it could: [{ rank, ... }]. The lowest rank that still counteracts on a success
+    (no more than 1 below the spell's), else the highest it has (Angel's reading, 0.36.0: keep the bigger slots for later). */
+export function counterCopy(copies = [], target = 1) {
+  const up = copies.filter(c => c.rank >= target - 1).sort((a, b) => a.rank - b.rank);
+  return up[0] ?? [...copies].sort((a, b) => b.rank - a.rank)[0] ?? null;
+}
+/** DCs by spell rank and the rarity adjustments (GM Core pg. 52, checked on Archives of Nethys 2026-11-16). */
+export const SPELL_RANK_DC = [14, 15, 18, 20, 23, 26, 28, 31, 34, 36, 39];
+export const RARITY_ADJ = { common: 0, uncommon: 2, rare: 5, unique: 10 };
+export const recognizeDc = (rank, rarity = "common") => SPELL_RANK_DC[Math.max(0, Math.min(10, Math.round(Number(rank) || 0)))] + (RARITY_ADJ[rarity] ?? 0);
+/** The highest rank Recognize Spell identifies at once, by proficiency rank in the tradition's skill (0 untrained to 4 legendary). */
+export const recognizeCap = prof => [0, 2, 4, 6, 10][Math.max(0, Math.min(4, Number(prof) || 0))];
+export const TRADITION_SKILL = { arcane: "arcana", divine: "religion", occult: "occultism", primal: "nature" };
+/** Recognize Spell's degree after its own rules: untrained, no better than failure; automatic, no worse than success. */
+export function recognizeDegree(degree, { prof = 0, rank = 1, rarity = "common" } = {}) {
+  if (!(Number(prof) > 0)) return Math.min(degree, 1);
+  if (rarity === "common" && Number(rank) <= recognizeCap(prof)) return Math.max(degree, 2);
+  return degree;
+}
+const RANK_WORD = r => { const n = Math.round(Number(r) || 0); return `${n}${n === 1 ? "st" : n === 2 ? "nd" : n === 3 ? "rd" : "th"}`; };
+/** The window's words for one reaction to a cast (the player's; gm: the GM's card, which always names the spell). x: the row. */
+export function castWords(x = {}, who = "A creature", spell = "a spell", gm = false) {
+  const name = gm || x.slug?.startsWith("counterspell") ? spell : "a spell";
+  if (x.slug?.startsWith("counterspell")) return `${who} is casting ${spell}. You have ${spell} ${x.copy?.kind === "spontaneous" ? "in your repertoire" : "prepared"}. Counterspell? It uses up your ${x.copy?.kind === "spontaneous" ? `${RANK_WORD(x.copy?.rank)}-rank slot` : `prepared ${spell}`}.`;
+  if (x.slug === "spell-riposte") return `${who} is casting ${name} at you. React with ${x.reaction}?`;
+  if (x.slug === "shadow-siphon") return `${who} is casting ${name} that will deal damage. React with ${x.reaction}?`;
+  if (x.slug === "redirect-teleportation") return `${who} is casting ${gm ? spell : "a teleportation spell"}. React with ${x.reaction}?`;
+  return `${who} is casting ${name}. React with ${x.reaction}?`;
+}
+/** What each reaction to a cast would do, in numbers worked out now (the sample's line under the button). */
+export function castDetail(x = {}) {
+  if (x.slug?.startsWith("counterspell") || x.slug === "shadow-siphon") return `counteract check ${x.mod >= 0 ? "+" : ""}${x.mod} vs DC ${x.dc}${x.slug === "shadow-siphon" ? "; on a success its damage is halved" : ""}`;
+  if (x.slug === "nullify") return `counteracted automatically; you lose ${x.rank}d8 HP`;
+  if (x.slug === "recognize-spell") return x.auto ? "you know it at once (roll only for a critical success)" : `${x.skillName ?? "skill"} ${x.mod >= 0 ? "+" : ""}${x.mod}, rolled in secret`;
+  if (KNOWN[x.slug]?.pause) return "then make it yourself";
+  return "";
+}
+/** The public line after a counteract check (PR-10: every reduction says why). */
+export function counterLine({ who = "Someone", reaction = "Counterspell", monster = "A creature", spell = "spell", total = 0, dc = 0, degree = 1, ok = false, halved = false } = {}) {
+  const deg = ["Critical failure", "Failure", "Success", "Critical success"][degree] ?? "Failure";
+  return `${who} uses ${reaction} on ${monster}'s ${spell}: counteract check ${total} vs DC ${dc}, ${deg.toLowerCase()}. ${ok ? (halved ? "The spell still works, but its damage is halved." : "The spell is lost.") : "The spell goes on."}`;
+}
+/** What Recognize Spell tells the player, by degree (0 to 3). */
+export function recognizeWords(degree, spell = "the spell", rank = 1) {
+  if (degree === 3) return `You recognize it: ${spell} (${RANK_WORD(rank)} rank). You get +1 to your save or AC against it.`;
+  if (degree === 2) return `You recognize it: ${spell} (${RANK_WORD(rank)} rank).`;
+  if (degree === 1) return "You don't recognize the spell.";
+  return "You think you recognize it, but you are wrong: the GM tells you which spell you think it is.";
+}

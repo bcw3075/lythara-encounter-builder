@@ -16,7 +16,7 @@ import { namer } from "./history.mjs";
 import { RUNGS, STORE_MAX, GM_LINE_MAX, evict, forPacket, gmLine, lineKey, render, rethinkFor, rungOf, severity, sideWords, spellWords, witnessLines } from "./memory.mjs";
 import { readMap, partyLevels, partySize, suggestedLevel } from "./builder.mjs";
 import { aimArea, aimWords, alliesCaught, burstReachable, caughtBy, shapeOf, squaresNear } from "./area.mjs";
-import { AC_ROWS, CHOICES, GUILT, KNOWN, MONSTER_REACTIONS, answerWords, barrierStats, barrierEdge, barrierLabel, barrierCardWords, slabHit, slabWords, READY_WAIT_MS, cleanTrigger, readiedWords, acAdds, canReact, castRank, coverInDc, choiceWords, earthLess, glimpseResistance, guiltLines, guiltWords, harmWords, missWords, notAskedWords, shieldGrantsBlock, spentRows, untilNextTurnEnds, readCard, cardTrigger, degreeAgainst, equipTrigger, finished, fits, gateWords, moveTrigger, proneOffTrigger, stepsAnswerWords, reactionStrike, reactionsOf, routeGates, squaresAlong, untilFor } from "./react.mjs";
+import { AC_ROWS, TRADITION_SKILL, castDetail, castWords, counterCopy, counterLine, counteracts, makesItself, recognizeDc, recognizeDegree, recognizeWords, CHOICES, GUILT, KNOWN, MONSTER_REACTIONS, answerWords, barrierStats, barrierEdge, barrierLabel, barrierCardWords, slabHit, slabWords, READY_WAIT_MS, cleanTrigger, readiedWords, acAdds, canReact, castRank, coverInDc, choiceWords, earthLess, glimpseResistance, guiltLines, guiltWords, harmWords, missWords, notAskedWords, shieldGrantsBlock, spentRows, untilNextTurnEnds, readCard, cardTrigger, degreeAgainst, equipTrigger, finished, fits, gateWords, moveTrigger, proneOffTrigger, stepsAnswerWords, reactionStrike, reactionsOf, routeGates, squaresAlong, untilFor } from "./react.mjs";
 import { MAX_TRIES, choiceOut, cleanChoice, cleanMeta, cleanPlan, eventOut, hello, isChoice, listening, live, nextSeq, pickEvent, stale, stallOf, text, waitSeconds } from "./brain.mjs";
 import { esc } from "./journal.mjs";
 import { breaksYield, cleanGmSay, gestureWords, orderHtml, sayHtml, speechFor, speechForPacket, speechLanguage, understands } from "./speech.mjs";
@@ -2297,7 +2297,7 @@ async function runArea(combat, id, i, step, tok) {
         await record({ damageStarted: true });
         const message = await watched(async () => { const card = waitFor("damage-roll"); const v = (step.rank !== spell.rank ? spell.loadVariant?.({ castRank: step.rank }) : null) ?? spell; await v.rollDamage(clickWith("showDamageDialogs")); return card; });
         /* with automatic damage off the GM applies it: say each creature's share, since the damage card isn't tied to the saves */
-        const off = applySetting() ? null : `Apply ${step.itemName}'s damage from its card: ${listWords(Object.entries(hurt).map(([t, m]) => `${scene.tokens.get(t)?.name ?? "someone"} ${m === 2 ? "double" : m === 0.5 ? "half" : "full"}`))}.`;
+        const off = applySetting() ? null : `Apply ${step.itemName}'s damage from its card: ${listWords(Object.entries(hurt).map(([t, m]) => `${scene.tokens.get(t)?.name ?? "someone"} ${m === 2 ? "double" : m === 0.5 ? "half" : m === 0.25 ? "a quarter" : "full"}`))}.`;
         await save(combat, id, { log: { [i]: { damage: { message: message.id } } }, ...(off ? { note: joinNote(combat, id, off) } : {}) });
         if (applySetting()) await markApplied(message);
         else { const hb = await harmByHand(combat, id, i, tok, Object.entries(hurt).map(([x, m]) => ({ target: scene.tokens.get(x), hit: Math.floor((message.rolls?.[0]?.total ?? 0) * m) })).filter(h => h.target)); if (hb === "manual") return "next"; if (hb === "held" || hb === "gone") return hb; }
@@ -2481,7 +2481,7 @@ async function runTurn(combat, requestId) {
       if (target && !step.area?.aim && wrongBelief(combat, tok, target)) return save(combat, requestId, { state: "stopped", note: joinNote(combat, requestId, `${tok.name} believes ${target.name} is at a square an ally pointed out, and that square is wrong: ${step.itemName ?? "its spell"} goes at nothing there. Its action is yours to rule on: play the rest yourself.`) });
       work = step.area?.aim ? () => runArea(combat, requestId, i, step, tok) : () => runSpell(combat, requestId, i, step, tok, target);
     }
-    if (request(combat, requestId).log?.[i]?.disrupted) work = null;   /* disrupted before a reload: the action is spent, never done after all */
+    if (request(combat, requestId).log?.[i]?.disrupted || request(combat, requestId).log?.[i]?.countered) work = null;   /* countered (0.36.0) as disrupted */   /* disrupted before a reload: the action is spent, never done after all */
     /* player reactions before the action (0.20.0): a manipulate action, a ranged attack, an attack at a character; once per step, before it begins */
     if (work && !blind && !Object.keys(request(combat, requestId).log?.[i] ?? {}).length && ["strike", "interact", "draw", "release", "ability", "spell", "point-out"].includes(step.do)) {
       const tid = step.target ? tokenIdOf(combat, r, step.target) : null;
@@ -2491,6 +2491,9 @@ async function runTurn(combat, requestId) {
       if (pre === "held") return save(combat, requestId, { state: "held", hold: false, note: `Held before step ${i + 1}, after the reactions to it.` });
       if (pre === "ask") return save(combat, requestId, { state: "stopped", note: `${request(combat, requestId).note ?? ""} Step ${i + 1} hasn't been done. Check the reactions in chat, then press Do it to carry on or play the rest yourself.`.trim() });
       if (pre === "down") { await save(combat, requestId, { pos: i, state: "done", note: joinNote(combat, requestId, `${tok.name} went down to a reaction before {they} could act.`) }); return endAfter(combat, requestId); }
+      if (pre === "countered") { await dropEarthCover(combat).catch(e => console.warn(`${ID} | cover`, e));   /* the step is over: its +1 and cover go (review 3) */
+        await save(combat, requestId, { log: { [i]: { countered: true } }, note: joinNote(combat, requestId, `${tok.name}'s ${step.itemName ?? "spell"} was countered: the actions are spent and nothing was cast.`) }); work = null; }
+      if (pre === "paused") return save(combat, requestId, { state: "stopped" });
       if (pre === "disrupted") { await save(combat, requestId, { log: { [i]: { disrupted: true } }, note: joinNote(combat, requestId, `A critical Reactive Strike disrupted ${tok.name}'s ${actWords(step).replace(/^\{their\} /, "")}: the action is spent (any spell slot or use it costs is your call).`) }); work = null; }
     }
     const stayFrom = ["stand", "drop-prone", "climb"].includes(step.do) && tok.object ? { at: placeOf(tok, sceneOf(combat)).pos, elev: heightUp(tok) } : null;   /* a Climb is asked from where it was (review finding 16) */
@@ -2878,6 +2881,33 @@ function rankLeft(e, sp, focus) {
   /* spontaneous or flexible: its own rank, and any higher one only when it is a signature spell */
   return castRank(base, ranks.filter(r => r === base || sp.system?.location?.signature).map(r => ({ rank: r, left: Number(slots[`slot${r}`]?.value) || 0 })));
 }
+/** What a reactor has for a monster's cast (0.36.0, Moment E): who (for `fits`) and the row's own fields (its numbers, its words). cast: { slug,
+    name, rank, tradition, rarity, dc, damaging, teleport, monster (as players see it), gmMonster }. dist: feet from the caster. */
+function castFacts(actor, x, cast, dist) {
+  const entries = (actor?.spellcasting?.regular ?? []).filter(e => !e.isRitual && CASTERS.includes(e.category)), copies = [];
+  let knowsIt = false;
+  for (const e of entries) { const slots = e.system?.slots ?? {}, same = (e.spells?.contents ?? []).filter(sp => (sp.slug ?? "") === cast.slug); if (!same.length) continue;
+    if (e.isPrepared && !e.isFlexible) { for (let r = 0; r <= 10; r++) { const list = Array.isArray(slots[`slot${r}`]?.prepared) ? slots[`slot${r}`].prepared : Object.values(slots[`slot${r}`]?.prepared ?? {});
+        list.forEach((p, n) => { const sp = same.find(y => y.id === p?.id); if (!sp) return; knowsIt = true; if (!p.expended || sp.isCantrip) copies.push({ entryId: e.id, spellId: sp.id, rank: sp.isCantrip ? Math.max(1, Math.ceil((actor.level || 1) / 2)) : r, slot: n, kind: "prepared" }); }); } }
+    else if (["spontaneous", "prepared"].includes(e.category)) { knowsIt = true;   /* a repertoire, or a flexible caster's collection (review 7) */
+      const spont = e.category === "spontaneous";
+      for (const sp of same) for (let r = sp.rank ?? 1; r <= 10; r++) if ((r === sp.rank || sp.system?.location?.signature) && (Number(slots[`slot${r}`]?.value) || 0) > 0) copies.push({ entryId: e.id, spellId: sp.id, rank: r, kind: spont ? "spontaneous" : "flexible", spontaneous: true }); } }
+  const row = KNOWN[x.slug] ?? {}, who = { dist, knowsIt, tradition: x.spell ? actor.spellcasting?.get(x.spell.entryId)?.tradition ?? null : null, spellRank: x.spell?.rank ?? null };
+  const counterMod = e => (e?.statistic?.check?.modifiers ?? []).filter(m => m.enabled && ["ability", "proficiency"].includes(m.type)).reduce((n, m) => n + m.modifier, 0);   /* Player Core pg. 431: attribute + proficiency */
+  const out = { cast: { slug: cast.slug, name: cast.name, rank: cast.rank, monster: cast.monster } };
+  const dcOk = Number.isFinite(Number(cast.dc)) && cast.dc != null;   /* no spell DC to roll against: never a counter (review 1) */
+  if (row.counter === "same") { const usable = copies.filter(c => actor.spellcasting?.get(c.entryId)?.category === (row.entries === "spontaneous" ? "spontaneous" : "prepared"));
+    const copy = dcOk ? counterCopy(usable, cast.rank) : null; who.hasSame = !!copy; if (copy) Object.assign(out, { copy, mod: counterMod(actor.spellcasting.get(copy.entryId)), dc: cast.dc }); }
+  else if (row.counter === "siphon" && !dcOk) who.dist = Infinity;   /* out of its range: not asked */
+  else if (row.counter === "siphon") Object.assign(out, { mod: counterMod(actor.spellcasting?.get(x.spell?.entryId)), dc: cast.dc, myRank: (x.spell?.rank ?? 5) + 2 });
+  else if (row.counter === "auto") Object.assign(out, { rank: cast.rank });
+  else if (row.recognize) { const skill = TRADITION_SKILL[cast.tradition], st = skill ? actor.skills?.[skill] : null, prof = Number(st?.rank) || 0;
+    Object.assign(out, { skill, skillName: st?.label ?? skill, mod: Number(st?.mod) || 0, prof, rdc: recognizeDc(cast.rank, cast.rarity), rarity: cast.rarity, auto: prof > 0 && recognizeDegree(0, { prof, rank: cast.rank, rarity: cast.rarity }) >= 2 }); }
+  const r = { slug: x.slug, reaction: row.name, ...out };
+  out.detail = castDetail(r); out.words = castWords(r, cast.monster, cast.name); out.gmWords = castWords(r, cast.gmMonster, cast.name, true);
+  if (out.detail) { out.words = `${out.words} (${out.detail})`; out.gmWords = `${out.gmWords} (${out.detail})`; }
+  return { who, row: out };
+}
 /** The users who answer for an actor: its non-GM owners who are online. None: the GM answers on the card. */
 const answerersOf = actor => game.users.filter(u => u.active && !u.isGM && actor?.testUserPermission?.(u, "OWNER")).map(u => u.id);
 /** Does this creature perceive the monster now (observed or concealed)? Below ground or GM-hidden it doesn't; without Visioner, seen. */
@@ -2908,12 +2938,12 @@ function reactorsFor(combat, tok, gate, o = {}) {
     const dist = distanceBetween({ x: me.pos[0], y: me.pos[1], size: me.span, elev: myElev }, { x: p.pos[0], y: p.pos[1], size: p.span, elev: heightUp(t) }, { reach });
     const sh = a.attributes?.shield, ally = !!o.target?.actor && o.target.id !== t.id && !!a.isAllyOf?.(o.target.actor);
     const who = { inReach: !cantAttack(a) && (o.anyReach || dist <= reach), isTarget: o.target?.id === t.id, isAlly: ally, shieldRaised: !!sh?.raised && !sh?.broken, hasShield: !!sh?.itemId && !sh?.broken && (sh?.ac ?? 0) > 0 };
-    for (const x of reactionsFor(a)) { if (!x.known || !(sees || !NEED_SIGHT.includes(x.slug))) continue;
-      const row = KNOWN[x.slug], w = { ...who, canCast: !x.spell || x.spell.rank != null, inAura: !!row.aura && ally && inAura(t, row.aura, [tok, o.target]) };
-      if (!fits(x.slug, gate, w, { melee: !!o.melee, damageTypes: o.damageTypes ?? [] })) continue;
+    for (const x of reactionsFor(a)) { if (!x.known || !(sees || !(NEED_SIGHT.includes(x.slug) || KNOWN[x.slug]?.sees))) continue;
+      const row = KNOWN[x.slug], cf = gate === "cast" && o.cast ? castFacts(a, x, o.cast, dist) : null, w = { ...who, ...(cf?.who ?? {}), canCast: !x.spell || x.spell.rank != null, inAura: !!row.aura && ally && inAura(t, row.aura, [tok, o.target]) };
+      if (!fits(x.slug, gate, w, { melee: !!o.melee, damageTypes: o.damageTypes ?? [], ...(o.cast ?? {}) })) continue;
       if (spent) { o.skipped?.push({ name: t.name, reaction: x.name, why: spent, token: t.id, pos: p.pos, span: p.span, elev: heightUp(t), reach }); continue; }
       out.push({ id: `${t.id}:${x.slug}`, token: t.id, actor: a.id, name: t.name, reaction: x.name, slug: x.slug, gate, pos: p.pos, span: p.span, elev: heightUp(t), reach,
-        ...(o.kind ? { kind: o.kind } : {}), ...(x.spell ? { spell: x.spell } : {}), ...(row.aura ? { value: glimpseResistance(a.level), guilt: a.items.some(it => it.slug === "weight-of-guilt") } : {}) }); }
+        ...(o.kind ? { kind: o.kind } : {}), ...(x.spell ? { spell: x.spell } : {}), ...(cf?.row ?? {}), ...(row.aura ? { value: glimpseResistance(a.level), guilt: a.items.some(it => it.slug === "weight-of-guilt") } : {}) }); }
   }
   return out;
 }
@@ -3065,7 +3095,7 @@ const strip = ({ users, words, gmWords, pos, span, elev, reach, ...x }) => x;
     answered, passed, run out of time, the GM pressed Continue or Hold, or the monster went down; "manual" when the GM took the turn; "gone" when the
     turn moved on. Each gate is asked once: a reload while asking keeps what was answered and skips the rest, with a note (review finding 2). The
     question (`react`) is cleared on every way out (review finding 3). */
-async function askReactions(combat, id, i, key, gate, tok, list, kind = "") {
+async function askReactions(combat, id, i, key, gate, tok, list, kind = "", gmKind = null) {
   /* what was asked once is never worked out again (0.27.0, seen live: after a reload the champion who had reacted had her box ticked, so her row was
      gone from a fresh list, and her answer with it): the stored question wins over whatever `list` holds now */
   const had = request(combat, id).gates?.[i]?.[key];
@@ -3076,13 +3106,13 @@ async function askReactions(combat, id, i, key, gate, tok, list, kind = "") {
     await save(combat, id, { react: null, gates: { [i]: { [key]: whole({ done: true, list: final, reloaded: true }) } }, note: joinNote(combat, id, `The page reloaded while ${tok.name}'s ${gate === "hit" ? "hit" : "action"} waited for reactions: what was answered stands and the rest were skipped. Check the chat for a reaction already rolled.`) });
     emitSocket({ t: "close", combat: combat.id, request: id, key });
     /* what was answered before the reload still counts (review 8): its box is ticked, and a reaction spell is cast */
-    for (const x of final) if (!x.free && x.answer === "done") { await markUsed(combat, x.token, x.reaction); if (x.spell) await castReaction(combat, id, x); }
+    for (const x of final) if (!x.free && x.answer === "done") { await markUsed(combat, x.token, x.reaction); if (x.spell && !KNOWN[x.slug]?.pause) await castReaction(combat, id, x); }
     return { done: true, list: final, rolls: [], reloaded: true };
   }
   const who = moverName(tok), start = request(combat, id), watchKey = `${combat.id}.${id}.${i}.${key}`, rolls = [];
   /* each row is worded by its own gate (a question can hold rows of several: a Strike in reach asks Reactive Strike and Nimble Dodge together) */
   const asked = list.map(x => { const users = answerersOf(sceneOf(combat).tokens.get(x.token)?.actor ?? game.actors.get(x.actor)), g = x.gate ?? (x.slug === "nimble-dodge" ? "attack" : gate), k = x.kind ?? kind;
-    return { ...strip(x), to: users.length ? "player" : "gm", users, words: x.words ?? gateWords(g, who, { kind: k, reaction: x.reaction }), gmWords: x.gmWords ?? gateWords(g, tok.name, { kind: k, reaction: x.reaction }) }; });   /* the GM's card names the monster (seen live: "A creature" on her own card) */
+    return { ...strip(x), to: users.length ? "player" : "gm", users, words: x.words ?? gateWords(g, who, { kind: k, reaction: x.reaction }), gmWords: x.gmWords ?? gateWords(g, tok.name, { kind: x.gmKind ?? (x.kind ? k : gmKind ?? k), reaction: x.reaction }) }; });   /* a spell's name only on her card (0.36.0, review 5) */   /* the GM's card names the monster (seen live: "A creature" on her own card) */
   /* the countdown is for players' windows only: a row the GM answers on her card waits for React, Pass or Continue (Rhea, 2026-11-09, 0.20.1) */
   const until = untilFor(asked, reactionTimer(), clock());
   /* `since` moves on: waiting for a reaction is a wait on a person for the stall check (brain.mjs stallOf, review finding 9) */
@@ -3115,7 +3145,7 @@ async function askReactions(combat, id, i, key, gate, tok, list, kind = "") {
   if (out !== "done") return out;
   if (final.some(x => x.answer === "done" && !x.free)) await addNote(combat, id, `Reactions: ${answerWords(final.filter(x => !x.free && !(x.group && x.answer === "continue"))).join("; ")}.`);   /* not a champion's rows for the allies it didn't pick */
   /* a reaction spell is cast for real: its slot is spent and its card shows (0.27.0) */
-  for (const x of final) if (x.answer === "done" && x.spell) await castReaction(combat, id, x);
+  for (const x of final) if (x.answer === "done" && x.spell && !KNOWN[x.slug]?.pause) await castReaction(combat, id, x);   /* a Pause row's spell is the player's to cast (0.36.0) */
   return { done: true, list: final, rolls, held };
 }
 const downNow = tok => !!tok.actor?.isDead || (tok.actor?.hitPoints?.value ?? 1) <= 0;
@@ -3132,20 +3162,70 @@ async function castReaction(combat, id, x) {
   if (!seen || !running.has(id)) return;
   running.delete(id); try { for (let t = 0; t < 300 && autoOpen(); t++) await sleep(200); } finally { running.add(id); }
 }
+/** After the reactions to a monster's cast (0.36.0, Moment E): each one used is carried out once. Counterspell spends the reactor's copy and rolls
+    the counteract check; Nullify counteracts at once and costs its caster HP; Shadow Siphon rolls and halves the damage on a success; Recognize
+    Spell is rolled in secret and told to that player only (in their window, never a whispered card) and to the GM's card; a Pause row (Mimic
+    Spell, Spell Riposte, Redirect Teleportation) stops the turn before the spell so the GM can rule on it. Returns "countered", "paused", "ask"
+    or null. What was done is kept on the gate (`counter`), so a Do it after a stop never rolls again. */
+async function castAnswers(combat, id, i, step, tok, list, cast) {
+  const used = list.filter(x => x.answer === "done" && x.gate === "cast"); if (!used.length) return null;
+  const had = request(combat, id).gates?.[i]?.counter;
+  if (had?.result) return had.result === "paused" ? null : had.result === "countered" ? "countered" : null;   /* paused once: her Do it means go on */
+  if (had?.started) { await addNote(combat, id, `The page reloaded while ${tok.name}'s ${cast.name} was being countered: check the chat for the counteract check and spend any slot yourself. If it was countered, play the rest of the turn yourself; if not, Do it casts the spell.`); await save(combat, id, { gates: { [i]: { counter: { result: "ask" } } } }); return "ask"; }
+  await save(combat, id, { gates: { [i]: { counter: { started: true } } } });
+  const scene = sceneOf(combat); let result = null, siphon = false;
+  const roll = async (x, mod, dc, mine, reaction) => {
+    const r = await new Roll(`1d20 + ${Number(mod) || 0}`).evaluate(), nat = r.dice[0]?.results?.[0]?.result ?? r.total - mod, degree = degreeAgainst(r.total, nat, dc), ok = counteracts(degree, mine, cast.rank);
+    const line = counterLine({ who: x.name, reaction, monster: cast.monster, spell: cast.name, total: r.total, dc, degree, ok, halved: x.slug === "shadow-siphon" });
+    await watched(() => r.toMessage({ speaker: ChatMessage.implementation.getSpeaker({ token: scene.tokens.get(x.token) }), flavor: `<p>${esc(line)}</p>` }));   /* for everyone (PR-10) */
+    await addNote(combat, id, line); return ok; };
+  for (const x of used) { const a = scene.tokens.get(x.token)?.actor; if (!a) continue;
+    try {
+      if (result === "countered" && (x.slug.startsWith("counterspell") || ["nullify", "shadow-siphon"].includes(x.slug))) { await addNote(combat, id, `${x.name}'s ${x.reaction} wasn't needed: the spell was already countered (nothing spent).`); continue; }
+      if (x.slug.startsWith("counterspell")) {
+        const e = a.spellcasting?.get(x.copy?.entryId), sp = e?.spells?.get(x.copy?.spellId);
+        let spent = false; try { spent = !!(e && sp && await e.consume(sp, x.copy.rank, x.copy.slot)); } catch (err) { console.warn(`${ID} | counterspell slot`, err); }
+        if (!spent) await addNote(combat, id, `I couldn't spend ${x.name}'s ${cast.name} for Counterspell: spend it yourself.`);
+        if (await roll(x, x.mod, x.dc, x.copy?.rank ?? cast.rank, "Counterspell")) result = "countered";
+      } else if (x.slug === "nullify") {
+        const hp = await new Roll(`${Math.max(1, cast.rank)}d8`).evaluate(), now = a.hitPoints?.value ?? 0, left = Math.max(0, now - hp.total);
+        await a.update({ "system.attributes.hp.value": left });
+        const line = `${x.name} uses Nullify on ${cast.monster}'s ${cast.name}: it is counteracted automatically, and the feedback costs ${x.name} ${hp.total} HP (${cast.rank}d8).`;
+        await watched(() => hp.toMessage({ speaker: ChatMessage.implementation.getSpeaker({ token: scene.tokens.get(x.token) }), flavor: `<p>${esc(line)}</p>` }));
+        await addNote(combat, id, line); result = "countered";
+        if (left === 0) await addNote(combat, id, `${x.name} is at 0 HP from Nullify: apply Dying as for any drop to 0 (it is HP lost, so the module didn't).`);   /* review 8 */
+      } else if (x.slug === "shadow-siphon") { if (await roll(x, x.mod, x.dc, x.myRank, "Shadow Siphon")) siphon = true; }
+      else if (x.slug === "recognize-spell") {
+        const r = await new Roll(`1d20 + ${Number(x.mod) || 0}`).evaluate(), nat = r.dice[0]?.results?.[0]?.result ?? 10;
+        const degree = recognizeDegree(degreeAgainst(r.total, nat, x.rdc), { prof: x.prof, rank: cast.rank, rarity: x.rarity }), words = recognizeWords(degree, cast.name, cast.rank);
+        const users = answerersOf(a); if (users.length) emitSocket({ t: "told", users, title: `Recognize Spell: ${x.name}`, lines: [words] });
+        await addNote(combat, id, `${x.name}'s Recognize Spell (rolled in secret: ${r.total} vs DC ${x.rdc}, ${CHECK_OUTCOMES[degree]}): ${degree === 0 ? `tell ${pro("{them}", P(scene.tokens.get(x.token), combat))} it is another spell of your choice.` : users.length ? `told ${pro("{them}", P(scene.tokens.get(x.token), combat))}: "${words}"` : `tell ${pro("{them}", P(scene.tokens.get(x.token), combat))}: "${words}"`}`);
+        if (degree === 3) await a.createEmbeddedDocuments("Item", [{ name: "Recognize Spell (+1)", type: "effect", img: "icons/svg/eye.svg", system: { rules: ["ac", "saving-throw"].map(selector => ({ key: "FlatModifier", selector, type: "circumstance", value: 1, label: "Recognize Spell" })), duration: { value: -1, unit: "unlimited" } }, flags: { [ID]: { recognize: true } } }]);   /* against this spell only: gone when the step ends */
+      } else if (KNOWN[x.slug]?.pause) { result = result ?? "paused"; await addNote(combat, id, `${x.name} used ${x.reaction} against ${tok.name}'s ${cast.name}. Rule on it with ${pro("{their}", P(scene.tokens.get(x.token), combat))} player (the counteract and what happens to the spell), then press Do it to cast the spell anyway, or play the rest yourself.`); }
+    } catch (err) { console.error(`${ID} | cast reaction`, err); await addNote(combat, id, `I couldn't finish ${x.name}'s ${x.reaction} (${err.message}): resolve it yourself.`); result = result ?? "paused"; }
+  }
+  if (result === "countered") { const f = spellFor(tok.actor, step);   /* a countered spell is lost: its slot or use is spent all the same */
+    try { if (f && !(await f.entry.consume(f.spell, Number(step.rank ?? f.spell.rank) || 1))) await addNote(combat, id, `Spend ${tok.name}'s ${cast.name} (slot or use) yourself.`); } catch (err) { console.warn(`${ID} | countered slot`, err); await addNote(combat, id, `Spend ${tok.name}'s ${cast.name} (slot or use) yourself.`); } }
+  if (siphon && result !== "countered" && (step.mode === "card" || (step.area?.aim && step.mode !== "area") || !applySetting())) await addNote(combat, id, `Halve ${step.itemName ?? "the spell"}'s damage for everyone it hurts (Shadow Siphon).`);   /* review 9: damage the module doesn't apply itself */
+  await save(combat, id, { gates: { [i]: { counter: { started: true, result: result ?? "none" } } }, ...(siphon ? { log: { [i]: { siphon: true } } } : {}) });
+  return result;
+}
 /** Before an action that isn't a move: a manipulate action (Release excepted: it triggers no such reactions, Player Core pg. 417, review finding 4), a
     ranged attack, a Strike at a character (Nimble Dodge). Returns null to go on, "disrupted", "down", "held", "ask", "manual" or "gone". */
 async function beforeAction(combat, id, i, step, tok, target) {
   const w = beforeKinds(tok.actor, step, target);
-  if (!w.manipulate && !w.ranged && !w.attack && !w.area) return null;
+  if (!w.manipulate && !w.ranged && !w.attack && !w.area && !w.cast) return null;
   const list = [], skipped = [], add = l => { for (const x of l) if (!list.some(y => y.id === x.id)) list.push(x); };
   if (w.manipulate) add(reactorsFor(combat, tok, "manipulate", { skipped }));
   if (w.ranged) add(reactorsFor(combat, tok, "ranged", { skipped }));
   if (w.attack && target) add(reactorsFor(combat, tok, "attack", { target, skipped }));
   /* a damaging area with a Reflex save (0.27.0): each creature it will catch that can answer it (Interposing Earth), before the spell is cast */
   if (w.area) { const scene = sceneOf(combat); let ids = []; try { ids = coverage(scene, tok, step.area.aim, { square: squareOf(tok, scene), size: sizeOf(tok), elev: Number(tok.elevation) || 0 }).ids; } catch (e) { console.warn(`${ID} | area reactions`, e); }
-    for (const t of ids) { const caught = scene.tokens.get(t); if (caught && !caught.hidden) add(reactorsFor(combat, tok, "area", { target: caught, kind: step.itemName, skipped })); } }
+    for (const t of ids) { const caught = scene.tokens.get(t); if (caught && !caught.hidden) add(reactorsFor(combat, tok, "area", { target: caught, kind: "spell", skipped }).map(x => ({ ...x, gmKind: step.itemName }))); } }   /* the players' window says "spell", her card its name (0.36.0, review 5) */
+  /* a monster casting (0.36.0, Moment E): Counterspell, Recognize Spell, Nullify, Shadow Siphon and the Pause rows, in the same question */
+  if (w.cast) add(reactorsFor(combat, tok, "cast", { target: step.area?.aim ? null : target, cast: w.cast, kind: w.cast.name, skipped }));
   if (!askedBefore(combat, id, i, "before")) await noteSkipped(combat, id, skipped);
-  const res = await askReactions(combat, id, i, "before", w.manipulate ? "manipulate" : w.ranged ? "ranged" : w.attack ? "attack" : "area", tok, list, w.kind);
+  const res = await askReactions(combat, id, i, "before", w.manipulate ? "manipulate" : w.ranged ? "ranged" : w.attack ? "attack" : w.area ? "area" : "cast", tok, list, w.kind, w.gmKind ?? null);
   if (typeof res === "string") return res;
   /* Interposing Earth against an area: standard cover on the Reflex save, as PF2e's own Effect: Cover, taken off when the step ends */
   for (const x of res.list) if (x.answer === "done" && x.slug === "interposing-earth" && x.gate === "area") { const a = sceneOf(combat).tokens.get(x.token)?.actor;
@@ -3156,6 +3236,8 @@ async function beforeAction(combat, id, i, step, tok, target) {
   if (res.held) return "held";
   const struck = new Set(res.list.filter(x => x.answer === "done" && KNOWN[x.slug]?.reach).map(x => x.actor));
   if (w.manipulate && (res.rolls ?? []).some(r => struck.has(r.actor) && r.target.endsWith(tok.id) && r.outcome === "criticalSuccess")) return "disrupted";
+  /* the counters to a cast (0.36.0) only once the caster is still up, the turn not held and the spell not disrupted (review 2) */
+  if (w.cast) { const c = await castAnswers(combat, id, i, step, tok, res.list, w.cast); if (c) return c; }
   return null;
 }
 /** What an action is for the reaction gates: { manipulate, ranged, attack, kind (words) }. Nimble Dodge is asked only for a Strike, the one attack whose
@@ -3167,7 +3249,10 @@ function beforeKinds(actor, step, target) {
   if (step.do === "strike") { const s = strikesWithIds(actor).find(x => x.id === step.item)?.strike; return { ranged: !!s?.item?.isRanged, attack: pc, kind: "Strike" }; }
   if (step.do === "ability") { const ab = abilityList(actor).find(a => a.id === step.item), tr = ab?.traits ?? []; if (ab?.followUp) return {}; return { manipulate: tr.includes("manipulate"), kind: ab?.name ?? "" }; }
   if (step.do === "spell") { const sp = spellFor(actor, step)?.spell, tr = [...(sp?.system?.traits?.value ?? [])];
-    return { manipulate: tr.includes("manipulate"), ranged: tr.includes("attack") && !/touch/i.test(String(sp?.system?.range?.value ?? "")), area: !!step.area?.aim && !!step.damaging && sp?.system?.defense?.save?.statistic === "reflex", kind: sp?.name ? `casting ${sp.name}` : "" }; }
+    const found = spellFor(actor, step), tok = actor?.getActiveTokens?.(false, true)?.[0] ?? null;
+    const cast = sp ? { slug: sp.slug ?? "", name: sp.name, rank: Number(step.rank ?? sp.rank) || 1, tradition: found?.entry?.tradition ?? null, rarity: sp.system?.traits?.rarity ?? "common", dc: found?.entry?.statistic?.dc?.value ?? null,
+      damaging: !!step.damaging, teleport: tr.includes("teleportation"), monster: tok ? moverName(tok) : "A creature", gmMonster: tok?.name ?? actor?.name ?? "The monster" } : null;   /* Moment E (0.36.0) */
+    return { manipulate: tr.includes("manipulate"), ranged: tr.includes("attack") && !/touch/i.test(String(sp?.system?.range?.value ?? "")), area: !!step.area?.aim && !!step.damaging && sp?.system?.defense?.save?.statistic === "reflex", cast, kind: sp?.name ? "casting a spell" : "", gmKind: sp?.name ? `casting ${sp.name}` : "" }; }
   return {};
 }
 /** What the target's reactions before this step's Strike add to its AC against it (Nimble Dodge; Interposing Earth's standard cover), from the answers
@@ -3303,7 +3388,7 @@ async function addEarthCover(actor) {
   await actor.createEmbeddedDocuments("Item", [src]);
 }
 async function dropEarthCover(combat) {
-  for (const c of combat?.combatants ?? []) { const a = c.token?.actor, ids = (a?.itemTypes?.effect ?? []).filter(e => e.getFlag?.(ID, "earth")).map(e => e.id); if (ids.length) await a.deleteEmbeddedDocuments("Item", ids).catch(e => console.warn(`${ID} | cover`, e)); }
+  for (const c of combat?.combatants ?? []) { const a = c.token?.actor, ids = (a?.itemTypes?.effect ?? []).filter(e => e.getFlag?.(ID, "earth") || e.getFlag?.(ID, "recognize")).map(e => e.id); if (ids.length) await a.deleteEmbeddedDocuments("Item", ids).catch(e => console.warn(`${ID} | cover`, e)); }
 }
 /** At the end of a move action that leaves no square (Stand, Drop Prone, a Climb), measured from where it was (a Climb can take it out of reach). */
 async function stayGate(combat, id, i, step, tok, from) {

@@ -572,7 +572,7 @@ export function nextArea(rec = {}, { mode = "area", apply = false, lasting = fal
     show creatures the monster doesn't perceive. */
 export const forThinker = (steps = []) => steps.map(s => s?.area?.hits ? { ...s, area: Object.fromEntries(Object.entries(s.area).filter(([k]) => k !== "hits")) } : s);
 /** Who an area hurts and by how much: { tokenId: multiplier } for each caught creature whose save lets damage through. */
-export const areaHurt = (rec = {}) => Object.fromEntries((rec.rows ?? []).filter(id => SAVE_MULT[rec.saves?.[id]] > 0).map(id => [id, SAVE_MULT[rec.saves[id]]]));
+export const areaHurt = (rec = {}) => Object.fromEntries((rec.rows ?? []).filter(id => SAVE_MULT[rec.saves?.[id]] > 0).map(id => [id, SAVE_MULT[rec.saves[id]] * (rec.siphon ? 0.5 : 1)]));   /* Shadow Siphon (0.36.0): half */
 /** Where an area was aimed, in words. */
 export const aimText = (area, forms = IT) => pro(aimTextIt(area), forms);
 function aimTextIt(area) {
@@ -582,7 +582,7 @@ function aimTextIt(area) {
   return a.toward ? ` toward square ${a.toward[0]}, ${a.toward[1]}` : "";
 }
 /** The damage multiplier a spell step applies: double on a spell attack's critical hit; by degree for a basic save. */
-export const spellMultiplier = (step, rec = {}) => step.mode === "attack" ? (rec.attack?.degree === 3 ? 2 : 1) : SAVE_MULT[rec.save?.degree] ?? 1;
+export const spellMultiplier = (step, rec = {}) => (step.mode === "attack" ? (rec.attack?.degree === 3 ? 2 : 1) : SAVE_MULT[rec.save?.degree] ?? 1) * (rec.siphon ? 0.5 : 1);   /* Shadow Siphon (0.36.0): half */
 /** A spell's actions from PF2e's "time": "2", "1 to 3", "1 or 2", "free"; null for a reaction or anything longer than a turn. */
 export function spellActions(time = "") {
   const t = String(time).trim().toLowerCase();
