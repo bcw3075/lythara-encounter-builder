@@ -155,12 +155,70 @@ export const KNOWN = {
   "prophets-luck": { name: "Prophet's Luck", gates: ["save"], spell: true, guard: 60, prophet: true },
   "keep-up-appearances": { name: "Keep Up Appearances", gates: ["saved"], target: true, traitsAny: ["emotion"], affected: true, pause: true },
   "know-oneself": { name: "Know Oneself", gates: ["saved"], target: true, traitsAny: ["emotion"], critFail: true, freq: 86400 },
-  "schadenfreude": { name: "Schadenfreude", gates: ["saved"], spell: true, target: true, critFail: true, foeSave: "will" }
+  "schadenfreude": { name: "Schadenfreude", gates: ["saved"], spell: true, target: true, critFail: true, foeSave: "will" },
+  /* Moments G, H and I (0.39.0; the full reactions pass, release 5). Read from PF2e's compendium in PF2 Test on 2026-11-17 (Rhea: "Compendium first"),
+     all four found there, none legacy.
+     G, a monster moves near someone:
+     Everdistant Defense (Pathfinder #168, champion 20; requirement: an aura from a champion feat or feature): a creature within your aura is targeted
+       by a ranged attack, or a creature moves through your aura; each square of the aura it would cross counts triple (a ranged attack takes range
+       penalties by the adjusted range). The player's (Pause): the turn stops for her ruling.
+     Zephyr Slip (Rage of Elements, spell 4, air, move): a creature enters a space within 5 feet of you; you Fly 15 feet straight away from it (25
+       feet with an adjacent ally from 6th rank; up to 5 allies within 30 feet from 8th). The player's (Pause): the move goes on after Done.
+     H, a condition gained:
+     Comforting Presence (Season of Ghosts, skill 10, emotion, mental): an adjacent ally becomes frightened or stupefied; adjacent allies' frightened
+       and stupefied go down by 1, and yours go up by the same amount.
+     I, a monster begins a reaction:
+     Miraculous Intervention (Knights of Lastwall, champion or cleric 12): an adjacent fiend or undead begins to use a reaction; at your level or
+       below it is disrupted; higher, your attack roll or spell attack roll against its AC disrupts it on a success (the player rolls: Done). */
+  "everdistant-defense": { name: "Everdistant Defense", gates: ["attack", "move"], myAura: "champions-aura", pause: true, stops: true },
+  "zephyr-slip": { name: "Zephyr Slip", gates: ["move"], spell: true, sees: true, zone: 5, pause: true },
+  "comforting-presence": { name: "Comforting Presence", gates: ["cond"], guard: 5, other: true, conds: ["frightened", "stupefied"] },
+  "miraculous-intervention": { name: "Miraculous Intervention", gates: ["react"], sees: true, range: 5, foe: ["fiend", "undead"] }
 };
+/** The Track list (the pass's q-35, sample 6): reactions her party can have that no moment the module sees answers (falls, social ones, ones on the
+    party's own turns). Never asked: her card lists those a character has under "Yours to play", with the three any character has. Brine Dragon
+    Bile joined in 0.37.0 (it answers the party wounding a monster). */
+export const TRACK = ["aid", "grab-an-edge", "arrest-a-fall", "gentle-landing", "air-cushion", "blastback", "air-bubble", "filter-air", "helpful-reload", "shadow-projectile", "propulsive-breeze", "shield-wall",
+  "healers-halo", "call-to-battle", "too-angry-to-die", "comical-recovery", "kreightons-cognitive-crossover", "say-that-again", "go-with-the-flow", "convincing-illusion", "second-thoughts", "shift-blame",
+  "catch-your-name", "seashell-of-stolen-sound", "anathematic-reprisal", "shadows-within-shadows", "impose-order", "alter-resistance", "desperate-repair", "brine-dragon-bile"];
+const ANYONE = ["aid", "grab-an-edge", "arrest-a-fall"];
+/** Her card's "Yours to play" line: each character's Track reactions (not the three anyone has), then those three. list: [{ name, reaction, slug }]. */
+export function trackWords(list = []) {
+  const own = list.filter(x => !ANYONE.includes(x.slug)).map(x => `${x.name}'s ${x.reaction}`).filter((w, k, l) => l.indexOf(w) === k);
+  return `Yours to play, no moment the module sees: ${[...own, "Grab an Edge", "Arrest a Fall", "Aid (on the party's own turns)"].join(", ")}.`;
+}
+/** Where along a move the zone rows fall (0.39.0): Zephyr Slip as the mover enters a space within its feet (any square after the first, the last
+    included: "enters"), Everdistant Defense before it leaves the first square from which it is in or about to step into the aura ("moves
+    through"). zones: [{ id, pos, span, elev, ft, enter }]. Returns [{ k, ids }] by route index, as routeGates does. */
+export function zoneGates(route = [], mover = {}, zones = []) {
+  const out = new Map(), d = (k, z) => distanceBetween({ x: route[k][0], y: route[k][1], size: mover.size ?? 1, elev: mover.elev ?? 0 }, { x: z.pos[0], y: z.pos[1], size: z.span ?? 1, elev: z.elev ?? 0 }, { reach: z.ft });
+  for (const z of zones) { if (!(z.ft > 0) || route.length < 2) continue; let hit = null;
+    if (z.enter) { for (let k = 1; k < route.length && hit == null; k++) if (d(k, z) <= z.ft) hit = k; }
+    else for (let k = 0; k < route.length - 1 && hit == null; k++) if (d(k, z) <= z.ft || d(k + 1, z) <= z.ft) hit = k;
+    if (hit != null) { if (!out.has(hit)) out.set(hit, []); out.get(hit).push(z.id); } }
+  return [...out].sort((a, b) => a[0] - b[0]).map(([k, ids]) => ({ k, ids }));
+}
+/** The window's sentence for a row of Moments G to I. who: the monster as the reactor sees it named; ally: the creature the reaction is for (not
+    the reactor); cond: the condition gained; higher: Miraculous Intervention against a creature above your level. */
+export function rx5Words(slug, gate, who = "A creature", { ally = null, cond = null, higher = false, gm = false, ac = null } = {}) {
+  const r = KNOWN[slug]?.name ?? slug;
+  if (slug === "everdistant-defense") return gate === "move" ? `${who} is moving through your champion's aura. React with ${r}? (Each square of your aura counts triple; the turn stops for the GM's ruling.)`
+    : `${who} is about to make a ranged attack at ${ally ?? "you"}, in your champion's aura. React with ${r}? (Each square of your aura counts triple for it; the turn stops for the GM's ruling.)`;
+  if (slug === "zephyr-slip") return `${who} enters a space within 5 feet of you. React with ${r}? (Fly 15 feet straight away from ${who === "A creature" ? "it" : who} yourself, then press Done.)`;
+  if (slug === "comforting-presence") return `${ally ?? "Your ally"} becomes ${cond ?? "frightened"}. React with ${r}? (Adjacent allies' frightened and stupefied go down by 1, and yours go up by 1 for each kind lowered.)`;
+  if (slug === "miraculous-intervention") return `${who} begins to use a reaction. React with ${r}? (${higher ? `It is above your level: make an attack roll or spell attack roll against its AC${gm && ac != null ? ` (${ac})` : ""}, then press Done; a hit disrupts it.` : "Its reaction is disrupted."})`;
+  return `${who}. React with ${r}?`;
+}
+/** Comforting Presence (0.39.0): who loses what. allies: [{ id, name, frightened, stupefied }] (each value now); returns { lowered: [{ id, name, conds }],
+    up: [the conditions the user takes on, 1 each] }. Angel's reading of "by the same amount": 1 for each kind lowered on anyone. */
+export function comfortPlan(allies = []) {
+  const lowered = allies.map(a => ({ id: a.id ?? null, name: a.name, conds: ["frightened", "stupefied"].filter(c => Number(a[c]) > 0) })).filter(a => a.conds.length);
+  return { lowered, up: ["frightened", "stupefied"].filter(c => lowered.some(a => a.conds.includes(c))) };
+}
 /* Champion's Sacrifice answers a failed save too (Player Core 2: "an ally fails a saving throw against an effect that doesn't affect you"). */
 KNOWN["champions-sacrifice"].gates.push("saved"); KNOWN["champions-sacrifice"].failed = true;
 /** Reactions the player makes with the usual tools after React, then presses Done (Reactive Strike's roll, and the "Pause" rows of the pass). */
-export const makesItself = slug => !!(KNOWN[slug]?.reach || KNOWN[slug]?.pause);
+export const makesItself = (slug, row = null) => !!(KNOWN[slug]?.reach || KNOWN[slug]?.pause || row?.makes);   /* row.makes: Miraculous Intervention above your level (0.39.0) */
 /** The rows that are asked before an attack and raise AC against it (circumstance bonuses, so only the best counts). */
 export const AC_ROWS = Object.keys(KNOWN).filter(k => KNOWN[k].ac);
 
@@ -232,6 +290,12 @@ export function fits(slug, gate, who = {}, what = {}) {
   if (row.element && !who.elementSlot) return false;
   if (row.critFail && what.degree !== 0) return false;
   if (row.affected && !(Number(what.degree) <= 2)) return false;
+  /* Moments G to I (0.39.0): who adds { auraFt (your champion's aura, 0 when none), targetInMyAura }; what adds { cond (the condition gained),
+     foeTraits (the monster's traits) }. A zone row on a move fits here; moveGates decides where along the route it falls. */
+  if (row.myAura && !(Number(who.auraFt) > 0)) return false;
+  if (row.myAura && gate === "attack" && !(what.ranged && who.targetInMyAura)) return false;
+  if (row.conds && !row.conds.includes(what.cond)) return false;
+  if (row.foe && !(what.foeTraits ?? []).some(t => row.foe.includes(t))) return false;
   return true;
 }
 /* ---------- Moments D and F (0.38.0) ---------- */

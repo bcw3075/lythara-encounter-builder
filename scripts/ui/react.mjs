@@ -38,7 +38,7 @@ async function show(data, group, rows) {
   const body = mixed ? [...new Set(rows.map(say))].map(w => `<p>${esc(w)}</p>`).join("") + "<p>You have one reaction. Use one?</p>" + rows.map(r => `<p><b>${esc(r.reaction)}</b>${r.detail ?? r.numbers ? `: ${esc(r.detail ?? r.numbers)}` : ""}</p>`).join("")
     : many ? rows.map(r => `<p>${esc(say(r))}</p>`).join("") + `<p>React with ${esc(x.reaction)}? Choose one.</p>`
     : (x.lines?.length ? x.lines : [x.words]).map(w => `<p>${esc(w)}</p>`).join("");
-  const buttons = many ? [...rows.map((r, n) => ({ action: `react:${n}`, label: mixed ? `${r.reaction}${makesItself(r.slug) ? " (then make it yourself)" : ""}` : `React: ${r.label ?? r.name}`, icon: "fa-solid fa-bolt", default: n === 0 })), { action: "pass", label: "Pass", icon: "fa-solid fa-xmark" }]
+  const buttons = many ? [...rows.map((r, n) => ({ action: `react:${n}`, label: mixed ? `${r.reaction}${makesItself(r.slug, r) ? " (then make it yourself)" : ""}` : `React: ${r.label ?? r.name}`, icon: "fa-solid fa-bolt", default: n === 0 })), { action: "pass", label: "Pass", icon: "fa-solid fa-xmark" }]
     : [{ action: "react", label: x.labels?.react ?? (x.slug?.startsWith("counterspell") ? "Counterspell" : "React"), icon: "fa-solid fa-bolt", default: !x.labels }, { action: "pass", label: x.labels?.pass ?? "Pass", icon: x.labels ? "fa-solid fa-bolt" : "fa-solid fa-xmark", default: !!x.labels }];
   const ask = new D({ window: { title: x.reaction }, classes: many ? ["leb-rx", "leb-many"] : ["leb-rx"], position: { width: x.lines?.length || many ? 440 : 360 },
     content: `${body}${data.until ? `<p class="leb-count">${x.labels ? `${esc(x.labels.pass)} in` : "It passes in"} <b>${left()}</b> s.</p>` : ""}`,
@@ -46,10 +46,10 @@ async function show(data, group, rows) {
     submit: async result => { answered = true;
       if (result === "pass") { for (const id of ids) await send(id, "pass"); return; }
       const row = many ? rows[Number(String(result).split(":")[1])] ?? x : x;
-      if (!makesItself(row.slug)) return send(row.id, "done");
+      if (!makesItself(row.slug, row)) return send(row.id, "done");
       await send(row.id, "react");
       let finished = false;
-      const done = new D({ window: { title: row.reaction }, classes: ["leb-rx"], position: { width: 360 }, content: `<p>${KNOWN_SPELL(row) ? `Cast ${esc(row.reaction)} now from your sheet` : `Make your ${esc(row.reaction)} now (PF2e HUD or your sheet)`}, then press Done.${row.cast?.monster && row.gate === "cast" ? ` ${esc(row.cast.monster)}'s turn waits.` : ""}</p>`,
+      const done = new D({ window: { title: row.reaction }, classes: ["leb-rx"], position: { width: 360 }, content: `<p>${row.makes ? "Target it and make an attack roll or spell attack roll now (PF2e HUD or your sheet): the module reads it" : KNOWN_SPELL(row) ? `Cast ${esc(row.reaction)} now from your sheet` : `Make your ${esc(row.reaction)} now (PF2e HUD or your sheet)`}, then press Done.${row.cast?.monster && row.gate === "cast" ? ` ${esc(row.cast.monster)}'s turn waits.` : ""}</p>`,
         buttons: [{ action: "done", label: "Done", icon: "fa-solid fa-check", default: true }], submit: () => { finished = true; open.delete(k); return send(row.id, "done"); } });
       /* closing this window counts as Done; the runner closing it sends nothing */
       done.addEventListener?.("close", () => { if (!finished) { finished = true; open.delete(k); send(row.id, "done"); } });
