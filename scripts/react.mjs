@@ -180,6 +180,11 @@ export function fits(slug, gate, who = {}, what = {}) {
   if (row.own && !who.inAura) return false;   /* in your own aura (Volcanic Escape: your kinetic aura) */
   return true;
 }
+/** The window a row of the damage moment is asked in (0.37.1, seen live 2026-11-17: a character's Blazing Spirit and Deflecting Wave opened as two
+    windows stacked on the same spot, the lower one hidden). A reaction that protects someone else (a champion picking which ally, Warping Pull) and
+    Scintillating Safeguard's one row when it is for an ally keep a group of their own, so their window lists the allies; a reactor's own rows get
+    none, so they share the character's one window (one window per character and moment, 0.36.0). x: the row ({ id, slug, token }); targetId: the creature the damage is for. */
+export const harmGroup = (x, targetId) => x.token !== targetId ? x.id : null;
 /** Where along a move the "move" gates fall. route: squares from where it stands to where it ends; mover: { size, elev }; reactors: [{ id, pos, span,
     elev, reach }]. A reactor is asked once per move action, before the mover leaves the first square of the route that is within its reach (the end
     square isn't left). Returns [{ k, ids }] by route index, in order. from: gates only from this index on (a move resumed after an earlier gate). */

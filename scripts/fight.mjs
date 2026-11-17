@@ -16,7 +16,7 @@ import { namer } from "./history.mjs";
 import { RUNGS, STORE_MAX, GM_LINE_MAX, evict, forPacket, gmLine, lineKey, render, rethinkFor, rungOf, severity, sideWords, spellWords, witnessLines } from "./memory.mjs";
 import { readMap, partyLevels, partySize, suggestedLevel } from "./builder.mjs";
 import { aimArea, aimWords, alliesCaught, burstReachable, caughtBy, shapeOf, squaresNear } from "./area.mjs";
-import { AC_ROWS, TRADITION_SKILL, castDetail, castWords, counterCopy, counterLine, counteracts, makesItself, recognizeDc, recognizeDegree, recognizeWords, CHOICES, GUILT, KNOWN, MONSTER_REACTIONS, answerWords, barrierStats, barrierEdge, barrierLabel, barrierCardWords, slabHit, slabWords, READY_WAIT_MS, cleanTrigger, readiedWords, acAdds, canReact, castRank, coverInDc, choiceWords, earthLess, glimpseResistance, guiltLines, guiltWords, harmWords, missWords, notAskedWords, shieldGrantsBlock, spentRows, untilNextTurnEnds, readCard, cardTrigger, degreeAgainst, equipTrigger, finished, fits, gateWords, moveTrigger, proneOffTrigger, stepsAnswerWords, reactionStrike, reactionsOf, routeGates, squaresAlong, untilFor , resistFor, rerollLower, sacrificeLess, reboundBack, blazingBack, bloodDice, bloodBy, calcifyBy, curseBy, curseWords, flatOf, rxDetail, rxWords, cantripRank, volcanicDice, pyrefowlDice } from "./react.mjs";
+import { AC_ROWS, TRADITION_SKILL, harmGroup, castDetail, castWords, counterCopy, counterLine, counteracts, makesItself, recognizeDc, recognizeDegree, recognizeWords, CHOICES, GUILT, KNOWN, MONSTER_REACTIONS, answerWords, barrierStats, barrierEdge, barrierLabel, barrierCardWords, slabHit, slabWords, READY_WAIT_MS, cleanTrigger, readiedWords, acAdds, canReact, castRank, coverInDc, choiceWords, earthLess, glimpseResistance, guiltLines, guiltWords, harmWords, missWords, notAskedWords, shieldGrantsBlock, spentRows, untilNextTurnEnds, readCard, cardTrigger, degreeAgainst, equipTrigger, finished, fits, gateWords, moveTrigger, proneOffTrigger, stepsAnswerWords, reactionStrike, reactionsOf, routeGates, squaresAlong, untilFor , resistFor, rerollLower, sacrificeLess, reboundBack, blazingBack, bloodDice, bloodBy, calcifyBy, curseBy, curseWords, flatOf, rxDetail, rxWords, cantripRank, volcanicDice, pyrefowlDice } from "./react.mjs";
 import { MAX_TRIES, choiceOut, cleanChoice, cleanMeta, cleanPlan, eventOut, hello, isChoice, listening, live, nextSeq, pickEvent, stale, stallOf, text, waitSeconds } from "./brain.mjs";
 import { esc } from "./journal.mjs";
 import { breaksYield, cleanGmSay, gestureWords, orderHtml, sayHtml, speechFor, speechForPacket, speechLanguage, understands } from "./speech.mjs";
@@ -2994,7 +2994,7 @@ function rx3Facts(a, x, tok, o, t) {
   if (x.slug === "shield-of-reckoning") { const sh = a.attributes?.shield; Object.assign(out, { hardness: Number(sh?.hardness) || 0, shieldId: sh?.itemId ?? null }); }
   const other = o.target && o.target.id !== t.id ? o.target.name : null, detail = rxDetail({ slug: x.slug, ...out });
   const words = rxWords({ slug: x.slug, reaction: row.name }, moverName(tok), other), gm = rxWords({ slug: x.slug, reaction: row.name }, tok.name, other);
-  return { ...out, words: detail ? `${words} (${detail})` : words, gmWords: detail ? `${gm} (${detail})` : gm };
+  return { ...out, ...(detail && !row.pause ? { numbers: detail } : {}), words: detail ? `${words} (${detail})` : words, gmWords: detail ? `${gm} (${detail})` : gm };   /* numbers: shown under its name when it shares a player's window (0.37.1); a Pause row's button already says to make it yourself (review 2) */
 }
 /** The damage types of a damage roll, the biggest first (persistent damage left out). */
 const typesOf = roll => (roll?.instances ?? []).filter(x => !x.persistent).sort((a, b) => (b.total ?? 0) - (a.total ?? 0)).map(x => x.type).filter((t, k, l) => t && l.indexOf(t) === k);
@@ -3244,7 +3244,7 @@ async function askReactions(combat, id, i, key, gate, tok, list, kind = "", gmKi
   noteReactionAnswers(combat, tok, final);   /* fight memory (0.25.0): who strikes at a move, who blocks */
   emitSocket({ t: "close", combat: combat.id, request: id, key });
   if (out !== "done") return out;
-  if (final.some(x => x.answer === "done" && !x.free)) await addNote(combat, id, `Reactions: ${answerWords(final.filter(x => !x.free && !(x.group && x.answer === "continue"))).join("; ")}.`);   /* not a champion's rows for the allies it didn't pick */
+  if (final.some(x => x.answer === "done" && !x.free)) await addNote(combat, id, `Reactions: ${answerWords(final.filter(x => !x.free && !(x.answer === "continue" && (x.group || final.some(y => y !== x && y.token === x.token && y.answer === "done" && !y.free))))).join("; ")}.`);   /* not a champion's rows for the allies it didn't pick */
   /* a reaction spell is cast for real: its slot is spent and its card shows (0.27.0) */
   for (const x of final) if (x.answer === "done" && x.spell && !KNOWN[x.slug]?.pause) await castReaction(combat, id, x);   /* a Pause row's spell is the player's to cast (0.36.0) */
   return { done: true, list: final, rolls, held };
@@ -3684,8 +3684,8 @@ async function harmGate(combat, id, i, tok, hits) {
   const rec = () => request(combat, id).log?.[i] ?? {}, open = hits.filter(h => h.target?.actor && h.hit > 0 && !rec().harm?.[h.target.id]?.asked); if (!open.length) return null;
   const skipped = [], list = [];
   for (const h of open) for (const x of reactorsFor(combat, tok, "harm", { target: h.target, damageTypes: h.types ?? [], melee: !!h.melee, close: !!h.close, attack: h.attack, strike: h.strike, skipped })) {
-    if (x.slug === "scintillating-safeguard" && list.some(y => y.group === x.id)) continue;   /* one row: it shields everyone in range it can (up to 5) */
-    list.push({ ...x, id: `${x.id}:${h.target.id}`, ally: h.target.id, kind: `${h.target.name} (${h.hit} damage)`, group: x.id, label: h.target.name }); }
+    if (x.slug === "scintillating-safeguard" && list.some(y => y.slug === x.slug && y.token === x.token)) continue;   /* one row: it shields everyone in range it can (up to 5) */
+    const g = harmGroup(x, h.target.id); list.push({ ...x, id: `${x.id}:${h.target.id}`, ally: h.target.id, kind: `${h.target.name} (${h.hit} damage)`, ...(g ? { group: g } : {}), label: h.target.name }); }   /* 0.37.1: a reactor's own rows share its one window */
   const again = askedBefore(combat, id, i, "harm"); if (!again) await noteSkipped(combat, id, skipped);
   const change = Object.fromEntries(open.map(h => [h.target.id, { asked: true }]));
   if (list.length || again) {

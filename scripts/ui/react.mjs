@@ -35,7 +35,7 @@ async function show(data, group, rows) {
   const D = foundry.applications.api.DialogV2;
   /* a group: what each row is about, then one question with a button for each */
   const say = r => String(r.words ?? "").replace(/\s*React with .*$/, "").replace(/\s*Counterspell\? .*$/, "");
-  const body = mixed ? [...new Set(rows.map(say))].map(w => `<p>${esc(w)}</p>`).join("") + "<p>You have one reaction. Use one?</p>" + rows.map(r => `<p><b>${esc(r.reaction)}</b>${r.detail ? `: ${esc(r.detail)}` : ""}</p>`).join("")
+  const body = mixed ? [...new Set(rows.map(say))].map(w => `<p>${esc(w)}</p>`).join("") + "<p>You have one reaction. Use one?</p>" + rows.map(r => `<p><b>${esc(r.reaction)}</b>${r.detail ?? r.numbers ? `: ${esc(r.detail ?? r.numbers)}` : ""}</p>`).join("")
     : many ? rows.map(r => `<p>${esc(say(r))}</p>`).join("") + `<p>React with ${esc(x.reaction)}? Choose one.</p>`
     : (x.lines?.length ? x.lines : [x.words]).map(w => `<p>${esc(w)}</p>`).join("");
   const buttons = many ? [...rows.map((r, n) => ({ action: `react:${n}`, label: mixed ? `${r.reaction}${makesItself(r.slug) ? " (then make it yourself)" : ""}` : `React: ${r.label ?? r.name}`, icon: "fa-solid fa-bolt", default: n === 0 })), { action: "pass", label: "Pass", icon: "fa-solid fa-xmark" }]
@@ -56,7 +56,12 @@ async function show(data, group, rows) {
       open.set(k, { dlg: done, rows: [row.id], quiet: () => { finished = true; } }); await done.render({ force: true }); } });
   /* closing the question without a button is a Pass */
   ask.addEventListener?.("close", () => { if (open.get(k)?.dlg === ask) open.delete(k); if (!answered) { answered = true; for (const id of ids) send(id, "pass"); } });
+  /* a second window open at the same time (a champion's pick of ally beside the player's own question) steps down and right, so none hides another
+     (0.37.1, seen live 2026-11-17: two windows opened on the same spot and the lower one couldn't be seen or clicked). Its place is counted before
+     its render: the windows of one question start together, so counting rendered ones afterwards would move them all alike (review 1). */
+  const under = [...open.values()].filter(w => w.dlg !== ask).length;
   open.set(k, { dlg: ask, rows: ids, quiet }); await ask.render({ force: true });
+  if (under) { const p = ask.position ?? {}; ask.setPosition({ top: (Number(p.top) || 0) + 40 * under, left: (Number(p.left) || 0) + 40 * under }); }
   if (data.until) { const tick = setInterval(() => { const n = left(), b = ask.element?.querySelector(".leb-count b"); if (b) b.textContent = n; if (!ask.rendered || n <= 0) { clearInterval(tick); if (ask.rendered && !answered) { answered = true; open.delete(k); ask.close(); } } }, 500); }
 }
 
