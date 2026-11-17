@@ -286,7 +286,7 @@ export function rx4Detail(x = {}) {
 export function rx4Words(x = {}, who = "A creature", ally = null, gate = "harm", kind = "") {
   const what = gate === "harm" ? `${who} is about to ${x.slug === "breath-of-life" ? "kill" : "drop"} ${ally ?? "you"}`
     : gate === "save" ? `${who}'s ${kind || "spell"} calls for ${ally ? `${ally}'s` : "your"} save`
-    : `${ally ?? "You"} ${x.degree === 0 ? "critically failed" : "failed"} ${ally ? "their" : "your"} save against ${who}'s ${kind || "effect"}`;
+    : `${ally ?? "You"} ${x.degree === 0 ? "critically failed" : "failed"} ${ally ? "the" : "your"} save against ${who}'s ${kind || "effect"}`;
   return `${what}. React with ${x.reaction ?? KNOWN[x.slug]?.name}?`;
 }
 /** The window a row of the damage moment is asked in (0.37.1, seen live 2026-11-17: a character's Blazing Spirit and Deflecting Wave opened as two

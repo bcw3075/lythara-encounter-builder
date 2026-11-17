@@ -2375,6 +2375,11 @@ async function applyFromCard(message, roll, target, multiplier = 1, shieldBlock 
 /** PF2e's own figure for one application (0.38.0, Rhea 2026-11-17: "You should be recording the full damage"): the `damageTaken` its update
     carries, which its damage-taken card shows and which goes past 0 HP ("takes 15 damage" for a creature that had 8 left). Watched on this page
     only, around the work that applies it; null when PF2e wrote no update (nothing taken, or the creature already at 0). */
+/* Moment D's hold (0.38.0) is one hook registered when this file loads, before other modules register theirs in their init or setup: hooks run in
+   the order they were added, and Workbench's own preUpdateActor hook reads the new HP to put Dying on at 0 (seen live in test build 1: Test Hero
+   held at 1 HP still got Dying 1 and Unconscious). `dealing` only arms it for one application. */
+const holds = new Set();
+Hooks.on("preUpdateActor", (d, change, opts) => { for (const h of holds) { try { h(d, change, opts); } catch (e) { console.warn(`${ID} | hold`, e); } } });
 async function dealing(target, work, guard = null) {
   let dealt = null;
   const mine = d => !!d && d.id === target.actor?.id && (!target.actor?.isToken || d.token?.id === target.id);
@@ -2389,8 +2394,8 @@ async function dealing(target, work, guard = null) {
     const to = guard.slug === "breath-of-life" ? Math.min(guard.max || 1, Math.max(1, guard.heal ?? 1)) : 1;
     if (change && path in change) change[path] = to; else foundry.utils.setProperty(change, path, to);
     guard.fired = { full, to, pre: true }; };
-  const a = Hooks.on("preUpdateActor", take), b = Hooks.on("updateActor", take), c = guard ? Hooks.on("preUpdateActor", hold) : null;
-  try { await work(); } finally { Hooks.off("preUpdateActor", a); Hooks.off("updateActor", b); if (c != null) Hooks.off("preUpdateActor", c); }
+  const a = Hooks.on("preUpdateActor", take), b = Hooks.on("updateActor", take); if (guard) holds.add(hold);
+  try { await work(); } finally { Hooks.off("preUpdateActor", a); Hooks.off("updateActor", b); holds.delete(hold); }
   return dealt;
 }
 /** Glimpse of Redemption, refused: resistance to all damage for one application, as an effect on the copy the damage is worked out on. */
@@ -3038,7 +3043,7 @@ function rx4Facts(a, x, tok, o, t, gate) {
   if (x.slug === "inspiring-resilience") row.undead = (tok.actor?.modeOfBeing ?? "") === "undead";
   if (o.degree != null && gate === "saved") row.degree = o.degree;
   const numbers = rx4Detail({ slug: x.slug, reaction: KNOWN[x.slug].name, ...row });
-  const words = rx4Words({ slug: x.slug, reaction: KNOWN[x.slug].name, degree: o.degree }, moverName(tok), ally, gate, o.kind && gate !== "harm" ? "spell" : ""), gm = rx4Words({ slug: x.slug, reaction: KNOWN[x.slug].name, degree: o.degree }, tok.name, ally, gate, o.gmKind ?? "");
+  const words = rx4Words({ slug: x.slug, reaction: KNOWN[x.slug].name, degree: o.degree }, moverName(tok), ally, gate, o.kind && gate !== "harm" ? "spell" : ""), gm = rx4Words({ slug: x.slug, reaction: KNOWN[x.slug].name, degree: o.degree }, tok.name, ally ?? t.name, gate, o.gmKind ?? "");   /* her card names the reactor, never "you" (seen in test build 1) */
   return { who, row: { ...row, ...(numbers && !KNOWN[x.slug].pause ? { numbers } : {}), words: numbers ? `${words} (${numbers})` : words, gmWords: numbers ? `${gm} (${numbers})` : gm, ...(KNOWN[x.slug].deferCast ? { deferCast: true } : {}) } };
 }
 /* ---------- Moments A to C (0.37.0; the full reactions pass, release 3) ---------- */
@@ -3407,7 +3412,7 @@ async function beforeAction(combat, id, i, step, tok, target) {
   if (w.cast) add(reactorsFor(combat, tok, "cast", { target: step.area?.aim ? null : target, cast: w.cast, kind: w.cast.name, skipped }));
   /* a save the spell will call for (0.38.0, Moment F before the roll), for each creature that will roll it, in the same question */
   if (w.save) { const savers = saversOf(combat, tok, step, target);
-    for (const sv of savers) add(reactorsFor(combat, tok, "save", { target: sv, savers: savers.map(t => t.id), isSpell: true, saveStat: w.save.stat, traits: w.save.traits, spellDc: w.save.dc, spellRank: w.save.rank, kind: "spell", gmKind: w.save.name, skipped })
+    for (const sv of savers) add(reactorsFor(combat, tok, "save", { target: sv, savers: savers.map(t => t.id), isSpell: true, saveStat: w.save.stat, traits: w.save.traits, spellDc: w.save.dc, spellRank: w.save.rank, kind: `${sv.name}'s save`, gmKind: w.save.name, skipped })
       .map(x => x.slug === "prophets-luck" ? { ...x, id: `${x.id}:${sv.id}`, ally: sv.id, reaction: `${x.reaction.replace(/^Prophet's Luck: it/, `Prophet's Luck: ${sv.id === x.token ? "you" : sv.name}`).replace(/you succeeds$/, "you succeed").replace(/you fails$/, "you fail")}` } : { ...x, ally: sv.id })); }
   if (request(combat, id)?.reaction) for (let k = list.length - 1; k >= 0; k--) if (KNOWN[list[k].slug]?.stops) list.splice(k, 1);   /* a monster's Reactive Strike can't stop for a ruling (review 2, 0.37.0) */
   if (!askedBefore(combat, id, i, "before")) await noteSkipped(combat, id, skipped);
@@ -3441,7 +3446,7 @@ async function saveAfter(combat, id, i, step, tok, saves) {
     await save(combat, id, { gates: { [i]: { fsa: whole({ started: true, result: "stopped", saves }) } } }); return { saves, stop: true }; }
   const scene = sceneOf(combat), sp = spellFor(tok.actor, step)?.spell, traits = [...(sp?.system?.traits?.value ?? [])], ids = Object.keys(saves), list = [];
   for (const t of ids) { const sv = scene.tokens.get(t); if (!sv || saves[t] == null) continue;
-    for (const x of reactorsFor(combat, tok, "saved", { target: sv, savers: ids, isSpell: true, traits, degree: saves[t], kind: "spell", gmKind: step.itemName ?? sp?.name ?? "" }))
+    for (const x of reactorsFor(combat, tok, "saved", { target: sv, savers: ids, isSpell: true, traits, degree: saves[t], kind: `${sv.name}'s save`, gmKind: step.itemName ?? sp?.name ?? "" }))
       if (!list.some(y => y.id === `${x.id}:${t}`)) list.push({ ...x, id: `${x.id}:${t}`, ally: t }); }
   let res = { list: [] };
   if (list.length || request(combat, id).gates?.[i]?.saved) { res = await askReactions(combat, id, i, "saved", "saved", tok, list); if (typeof res === "string") return res; }
