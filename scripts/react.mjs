@@ -107,7 +107,7 @@ export const KNOWN = {
   "vanish-weapon": { name: "Vanish Weapon", gates: ["hit"], spell: true, target: true, strike: true, melee: true, notCrit: true, pause: true, stops: true },
   "shield-of-reckoning": { name: "Shield of Reckoning", gates: ["harm"], ally: true, aura: "champions-aura", needs: "raised", physical: true, attack: true },
   "blazing-spirit": { name: "Blazing Spirit", gates: ["harm"], target: true, melee: true, attack: true, freq: 600 },
-  "calcifying-sand": { name: "Calcifying Sand", gates: ["harm"], target: true, close: true, attack: true },
+  "calcifying-sand": { name: "Calcifying Sand", gates: ["harm"], target: true, close: true, attack: true, perAttacker: 3600 },
   "consume-power": { name: "Consume Power", gates: ["harm"], target: true, dmg: ["acid", "electricity", "fire", "sonic"] },
   "deflecting-wave": { name: "Deflecting Wave", gates: ["harm"], target: true, dmg: ["acid", "bludgeoning", "fire", "slashing"], aware: true },
   "preemptive-reconfiguration": { name: "Preemptive Reconfiguration", gates: ["harm"], target: true, dmg: PHYS, freq: 86400 },
@@ -176,7 +176,7 @@ export function fits(slug, gate, who = {}, what = {}) {
   if (row.familiar && !who.familiarNear) return false;
   if (row.aware && who.offGuard) return false;
   if (row.bleeds && who.canBleed === false) return false;
-  if (row.freq && who.freqOk === false) return false;
+  if ((row.freq || row.perAttacker) && who.freqOk === false) return false;   /* review 4 (0.37.0): Calcifying Sand's hour per attacker */
   if (row.own && !who.inAura) return false;   /* in your own aura (Volcanic Escape: your kinetic aura) */
   return true;
 }
