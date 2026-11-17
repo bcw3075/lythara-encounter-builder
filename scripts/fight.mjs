@@ -16,7 +16,7 @@ import { namer } from "./history.mjs";
 import { RUNGS, STORE_MAX, GM_LINE_MAX, evict, forPacket, gmLine, lineKey, render, rethinkFor, rungOf, severity, sideWords, spellWords, witnessLines } from "./memory.mjs";
 import { readMap, partyLevels, partySize, suggestedLevel } from "./builder.mjs";
 import { aimArea, aimWords, alliesCaught, burstReachable, caughtBy, shapeOf, squaresNear } from "./area.mjs";
-import { AC_ROWS, TRADITION_SKILL, castDetail, castWords, counterCopy, counterLine, counteracts, makesItself, recognizeDc, recognizeDegree, recognizeWords, CHOICES, GUILT, KNOWN, MONSTER_REACTIONS, answerWords, barrierStats, barrierEdge, barrierLabel, barrierCardWords, slabHit, slabWords, READY_WAIT_MS, cleanTrigger, readiedWords, acAdds, canReact, castRank, coverInDc, choiceWords, earthLess, glimpseResistance, guiltLines, guiltWords, harmWords, missWords, notAskedWords, shieldGrantsBlock, spentRows, untilNextTurnEnds, readCard, cardTrigger, degreeAgainst, equipTrigger, finished, fits, gateWords, moveTrigger, proneOffTrigger, stepsAnswerWords, reactionStrike, reactionsOf, routeGates, squaresAlong, untilFor } from "./react.mjs";
+import { AC_ROWS, TRADITION_SKILL, castDetail, castWords, counterCopy, counterLine, counteracts, makesItself, recognizeDc, recognizeDegree, recognizeWords, CHOICES, GUILT, KNOWN, MONSTER_REACTIONS, answerWords, barrierStats, barrierEdge, barrierLabel, barrierCardWords, slabHit, slabWords, READY_WAIT_MS, cleanTrigger, readiedWords, acAdds, canReact, castRank, coverInDc, choiceWords, earthLess, glimpseResistance, guiltLines, guiltWords, harmWords, missWords, notAskedWords, shieldGrantsBlock, spentRows, untilNextTurnEnds, readCard, cardTrigger, degreeAgainst, equipTrigger, finished, fits, gateWords, moveTrigger, proneOffTrigger, stepsAnswerWords, reactionStrike, reactionsOf, routeGates, squaresAlong, untilFor , resistFor, rerollLower, sacrificeLess, reboundBack, blazingBack, bloodDice, bloodBy, calcifyBy, curseBy, curseWords, flatOf, rxDetail, rxWords, cantripRank, volcanicDice, pyrefowlDice } from "./react.mjs";
 import { MAX_TRIES, choiceOut, cleanChoice, cleanMeta, cleanPlan, eventOut, hello, isChoice, listening, live, nextSeq, pickEvent, stale, stallOf, text, waitSeconds } from "./brain.mjs";
 import { esc } from "./journal.mjs";
 import { breaksYield, cleanGmSay, gestureWords, orderHtml, sayHtml, speechFor, speechForPacket, speechLanguage, understands } from "./speech.mjs";
@@ -1276,8 +1276,9 @@ async function runStrike(combat, id, i, step, tok, target) {
   /* no shot left: before anything is rolled (a flat check first would be a free reroll on the re-plan; found by the 0.9.0 review) */
   const ammo = await ammoOf(tok.actor, strike).catch(() => null), own = !!ammo?.stack;
   if (ammo && !ammo.unreadable && !Object.keys(get()).length && (shotsFor(combat, tok, step.item, ammo) ?? 1) < 1) return "noShot";   /* unreadable: Ranged Combat counts the shot, the card says so (0.33.1, review: null < 1 refused every shot) */
+  const rf = rxFlat(combat, id, i, target, !!strike.item?.isRanged), fdc = Math.max(step.flat ?? 0, rf.dc), fwhy = rf.dc > (step.flat ?? 0) ? rf.by : null;   /* Moment A (0.37.0) */
   for (let guard = 0; guard < 8; guard++) {
-    const now = nextAction(get(), { apply: applySetting(), flat: step.flat ?? 0 });
+    const now = nextAction(get(), { apply: applySetting(), flat: fdc });
     if (now === "next") return "next";
     if (now === "ask") return "ask";
     if (!stepGate(now, id)) return "stopped";
@@ -1286,9 +1287,9 @@ async function runStrike(combat, id, i, step, tok, target) {
     try {
       if (now === "flat") {
         await record({ flatStarted: true });
-        const roll = await watched(async () => { const r = await new Roll("1d20").evaluate(); await r.toMessage({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), flavor: `Flat check, DC ${step.flat}` }); return r; });
-        await record({ flat: { dc: step.flat, total: roll.total, ok: roll.total >= step.flat } });
-        if (roll.total < step.flat) await save(combat, id, { note: `${step.itemName} at ${step.targetName} failed its DC ${step.flat} flat check (${roll.total}). The action is spent.` });
+        const roll = await watched(async () => { const r = await new Roll("1d20").evaluate(); await r.toMessage({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), flavor: `Flat check, DC ${fdc}${fwhy ? ` (${esc(fwhy)})` : ""}` }); return r; });
+        await record({ flat: { dc: fdc, total: roll.total, ok: roll.total >= fdc } });
+        if (roll.total < fdc) await save(combat, id, { note: `${step.itemName} at ${step.targetName} failed its DC ${fdc} flat check (${roll.total})${fwhy ? ` (${fwhy})` : ""}. The action is spent.` });
       } else if (now === "attack") {
         aimAt(target); await record({ started: true });
         /* its "no valid ammunition" window, or no roll: nothing was rolled. After a flat check the action is spent (no free reroll), otherwise asked again with it unspent */
@@ -1310,7 +1311,7 @@ async function runStrike(combat, id, i, step, tok, target) {
         if (raised.earth && degree < 2) await raiseBarrier(combat, id, i, target, tok, raised.earth.spell?.rank).catch(e => { console.error(`${ID} | barrier`, e); return addNote(combat, id, `${target.name}'s earth barrier should stand between ${target.name} and ${tok.name} for 3 rounds, but I couldn't put it on the map (${e.message}): yours to rule on.`); });
       } else if (now === "damage") {
         let hr; try { hr = await hitGate(combat, id, i, step, tok, target, { melee: !strike.item?.isRanged, damageTypes: damageTypesOf(strike) }, get); } catch (e) { console.error(`${ID} | reactions`, e); hr = null; await addNote(combat, id, `I couldn't ask the reactions to ${step.itemName}'s hit (${e.message}); damage went ahead.`); }   /* Shield Block, Reactive Shield (0.20.0) */
-        if (hr === "manual") return "next"; if (hr === "held" || hr === "gone") return hr; if (hr === "missed") continue;
+        if (hr === "manual") return "next"; if (hr === "held" || hr === "gone" || hr === "ask") return hr; if (hr === "missed") continue;
         const degree = get().attack.degree; aimAt(target); await record({ damageStarted: true });
         const message = await watched(async () => { const card = waitFor("damage-roll"); await strike[degree === 3 ? "critical" : "damage"]({ event: clickWith("showDamageDialogs"), target: target.object, mapIncreases: step.variant }); return card; });
         await record({ damage: { message: message.id } });
@@ -1319,7 +1320,7 @@ async function runStrike(combat, id, i, step, tok, target) {
       } else if (now === "apply") {
         const message = game.messages.get(get().damage.message), roll = message?.rolls?.[0]; if (!roll) return "ask";
         /* the party's reactions to the damage (0.27.0): Glimpse of Redemption, before anything is applied */
-        const hit = Math.floor(roll.total), hg = await harmGate(combat, id, i, tok, [{ target, hit }]);
+        const hit = Math.floor(roll.total), hg = await harmGate(combat, id, i, tok, [{ target, hit, types: typesOf(roll), ...strikeFacts(strike) }]);
         if (hg === "manual") return "next"; if (hg === "held" || hg === "gone") return hg;
         const hm = harmFor(combat, id, i, target, hit);
         await record({ applying: true }); const was = hpNow(target);
@@ -1826,11 +1827,11 @@ async function runAbility(combat, id, i, step, tok, target) {
         else if (message) { const hb = await harmByHand(combat, id, i, tok, [{ target, hit: Math.floor(message.rolls?.[0]?.total ?? 0) }]); if (hb === "manual") return "next"; if (hb === "held" || hb === "gone") return hb; }
       } else if (now === "apply") {
         const message = game.messages.get(get().damage.message), roll = message?.rolls?.[0]; if (!roll) return "ask";
-        const hit = Math.floor(roll.total), hg = await harmGate(combat, id, i, tok, [{ target, hit }]);   /* Glimpse of Redemption (0.27.0) */
+        const hit = Math.floor(roll.total), hg = await harmGate(combat, id, i, tok, [{ target, hit, types: typesOf(roll), melee: true, close: true, attack: true, strike: true }]);   /* Glimpse of Redemption (0.27.0); Moment C (0.37.0) */
         if (hg === "manual") return "next"; if (hg === "held" || hg === "gone") return hg;
-        const hm = harmFor(combat, id, i, target, hit);
+        const hm = harmFor(combat, id, i, target, hit), fx = rxEffects(hm), less = Math.max(0, Math.min(hm.less ?? 0, hit));
         await record({ applying: true }); const was = hpNow(target);
-        if (!hm.repent) await watched(() => (hm.resist ? target.actor.getContextualClone([], [resistEffect(hm.resist)]) : target.actor).applyDamage({ damage: roll, token: target, item: null, shieldBlockRequest: false }));
+        if (!hm.repent) await watched(() => (fx.length ? target.actor.getContextualClone([], fx) : target.actor).applyDamage({ damage: less ? roll.alter(1, -less) : roll, token: target, item: null, shieldBlockRequest: false }));
         await record({ applied: true, hp: [was, hpNow(target)] });
         await afterHarm(combat, id, i, tok, target, { hit, was });
         if (target.actor?.isOfType?.("character") && target.actor.hitPoints?.value === 0) await addNote(combat, id, `${target.name} is at 0 HP. If you undo this, PF2e restores the HP but you still need to remove Wounded and Prone and put their initiative back.`);
@@ -2127,8 +2128,8 @@ async function runSpell(combat, id, i, step, tok, target) {
         await save(combat, id, { log: { [i]: { attack: { message: message.id, degree } } }, ...(words ? { note: joinNote(combat, id, words) } : {}) });
       } else if (now === "damage") {
         /* a spell attack's hit (0.27.0): Shield Block against its physical damage, asked before the damage as for a Strike */
-        if (step.mode === "attack") { let hr; try { hr = await hitGate(combat, id, i, step, tok, target, { melee: false, damageTypes: Object.values(spell.system.damage ?? {}).map(d => d?.type).filter(Boolean), kind: step.itemName }, get); } catch (e) { console.error(`${ID} | reactions`, e); hr = null; await addNote(combat, id, `I couldn't ask the reactions to ${step.itemName}'s hit (${e.message}); damage went ahead.`); }
-          if (hr === "manual") return "next"; if (hr === "held" || hr === "gone") return hr; }
+        if (step.mode === "attack") { let hr; try { hr = await hitGate(combat, id, i, step, tok, target, { melee: false, strike: false, damageTypes: Object.values(spell.system.damage ?? {}).map(d => d?.type).filter(Boolean), kind: step.itemName }, get); } catch (e) { console.error(`${ID} | reactions`, e); hr = null; await addNote(combat, id, `I couldn't ask the reactions to ${step.itemName}'s hit (${e.message}); damage went ahead.`); }
+          if (hr === "manual") return "next"; if (hr === "held" || hr === "gone" || hr === "ask") return hr; }
         aimAt(target); await record({ damageStarted: true });
         /* the damage at the rank it was cast at (PF2e reads that from the card's button, which a script has none of) */
         const message = await watched(async () => { const card = waitFor("damage-roll"); const v = (step.rank !== spell.rank ? spell.loadVariant?.({ castRank: step.rank }) : null) ?? spell; await v.rollDamage(clickWith("showDamageDialogs"), step.mode === "attack" ? step.variant ?? 0 : undefined); return card; });
@@ -2137,7 +2138,7 @@ async function runSpell(combat, id, i, step, tok, target) {
         else { const hb = await harmByHand(combat, id, i, tok, [{ target, hit: Math.floor((message.rolls?.[0]?.total ?? 0) * spellMultiplier(step, get())), block: !!get().shieldBlock }]); if (hb === "manual") return "next"; if (hb === "held" || hb === "gone") return hb; }
       } else if (now === "apply") {
         const message = game.messages.get(get().damage.message), roll = message?.rolls?.[0]; if (!roll) return "ask";
-        const mult = spellMultiplier(step, get()), hit = Math.floor(roll.total * mult), hg = await harmGate(combat, id, i, tok, [{ target, hit }]);   /* Glimpse of Redemption (0.27.0) */
+        const mult = spellMultiplier(step, get()), hit = Math.floor(roll.total * mult), hg = await harmGate(combat, id, i, tok, [{ target, hit, types: typesOf(roll), attack: step.mode === "attack", strike: false }]);   /* Glimpse of Redemption (0.27.0) */
         if (hg === "manual") return "next"; if (hg === "held" || hg === "gone") return hg;
         const hm = harmFor(combat, id, i, target, hit);
         await record({ applying: true }); const was = hpNow(target);
@@ -2306,7 +2307,7 @@ async function runArea(combat, id, i, step, tok) {
         const message = game.messages.get(rec.damage.message), roll = message?.rolls?.[0]; if (!roll) return "ask";
         if (!target) { await record({ applied: { [t]: true } }); continue; }   /* removed from the map: nothing to apply to */
         /* the party's reactions to the damage (0.27.0): one question for everyone it hurts, before any of it is applied (a champion picks which ally) */
-        const hg = await harmGate(combat, id, i, tok, Object.entries(hurt).map(([x, m]) => ({ target: scene.tokens.get(x), hit: Math.floor(roll.total * m) })).filter(h => h.target));
+        const hg = await harmGate(combat, id, i, tok, Object.entries(hurt).map(([x, m]) => ({ target: scene.tokens.get(x), hit: Math.floor(roll.total * m), types: typesOf(roll), attack: false, strike: false })).filter(h => h.target));
         if (hg === "manual") return "next"; if (hg === "held" || hg === "gone") return hg;
         const hit = Math.floor(roll.total * hurt[t]), hm = harmFor(combat, id, i, target, hit);
         await record({ applying: { [t]: true } }); const was = hpNow(target);
@@ -2346,10 +2347,11 @@ export function onMessageUpdate(message, change) {
 }
 /* what PF2e's own Damage, Half and Double buttons do (applyDamageFromMessage, 8.7.0), for a named target rather than the selected tokens: the roll
    altered by the multiplier, and the target told whether the damage comes from an ally or an enemy. Effects that only count for this one hit aren't read. */
-async function applyFromCard(message, roll, target, multiplier = 1, shieldBlock = false, { resist = 0, less = 0 } = {}) {
+async function applyFromCard(message, roll, target, multiplier = 1, shieldBlock = false, hm = {}) {
+  let { less = 0 } = hm;
   /* a reaction's part (0.27.0): Glimpse of Redemption's resistance is on the copy of the creature this one application is worked out on (PF2e does
      the arithmetic by damage type and its card shows it), and Interposing Earth's flat reduction comes off the roll once, after doubling or halving */
-  const context = message.flags.pf2e?.context ?? {}, { origin, keep } = damageOptions(context.options ?? []), actor = target.actor.getContextualClone(origin, resist > 0 ? [resistEffect(resist)] : []);
+  const context = message.flags.pf2e?.context ?? {}, { origin, keep } = damageOptions(context.options ?? []), actor = target.actor.getContextualClone(origin, rxEffects(hm));
   less = Math.max(0, Math.min(less, Math.floor(roll.total * multiplier)));
   const side = target.actor.alliance && message.actor ? [`origin:${target.actor.alliance === message.actor.alliance ? "ally" : "enemy"}`] : [];
   const rollOptions = new Set([...keep, ...side, ...origin, ...actor.getSelfRollOptions()]);
@@ -2357,6 +2359,12 @@ async function applyFromCard(message, roll, target, multiplier = 1, shieldBlock 
 }
 /** Glimpse of Redemption, refused: resistance to all damage for one application, as an effect on the copy the damage is worked out on. */
 const resistEffect = n => ({ type: "effect", name: "Glimpse of Redemption (refused)", img: "icons/svg/shield.svg", system: { rules: [{ key: "Resistance", type: "all-damage", value: n }], duration: { value: -1, unit: "unlimited" } } });
+/** Every resistance the reactions give for one application (0.37.0): Glimpse of Redemption's, and Moment B and C's ({ type, value, except }), as effects on the copy. */
+function rxEffects(hm = {}) {
+  const out = hm.resist > 0 ? [resistEffect(hm.resist)] : [];
+  for (const r of hm.resists ?? []) if (r?.value > 0) out.push({ type: "effect", name: r.by ?? "A reaction", img: "icons/svg/shield.svg", system: { rules: [{ key: "Resistance", type: r.type, value: r.value, ...(r.except ? { exceptions: [r.except] } : {}) }], duration: { value: -1, unit: "unlimited" } } });
+  return out;
+}
 /** Do it (and Next step): on the runner, carry the plan on from where it stands. Without Auto it does one action and waits for Next step; with Auto it
     goes on by itself, with a pause between actions. Safe to call again after a reload: finished work is never repeated. From anyone else's browser it
     asks the runner, through the flag; a turn never runs quietly in the wrong browser. */
@@ -2938,15 +2946,106 @@ function reactorsFor(combat, tok, gate, o = {}) {
     const reach = a.getReach?.({ action: "attack" }) ?? 5, p = placeOf(t, scene), sees = perceivesNow(t, tok);
     const dist = distanceBetween({ x: me.pos[0], y: me.pos[1], size: me.span, elev: myElev }, { x: p.pos[0], y: p.pos[1], size: p.span, elev: heightUp(t) }, { reach });
     const sh = a.attributes?.shield, ally = !!o.target?.actor && o.target.id !== t.id && !!a.isAllyOf?.(o.target.actor);
-    const who = { inReach: !cantAttack(a) && (o.anyReach || dist <= reach), isTarget: o.target?.id === t.id, isAlly: ally, shieldRaised: !!sh?.raised && !sh?.broken, hasShield: !!sh?.itemId && !sh?.broken && (sh?.ac ?? 0) > 0 };
+    const who = { inReach: !cantAttack(a) && (o.anyReach || dist <= reach), isTarget: o.target?.id === t.id, isAlly: ally, shieldRaised: !!sh?.raised && !sh?.broken, hasShield: !!sh?.itemId && !sh?.broken && (sh?.ac ?? 0) > 0,
+      /* Moments A to C (0.37.0) */
+      dist, isAllyOfTarget: ally, distTarget: o.target && o.target.id !== t.id ? feetBetween(t, o.target, scene) : 0, offGuard: !!a.hasCondition?.("off-guard"),
+      canBleed: !(a.attributes?.immunities ?? []).some(m => m.type === "bleed"), familiarNear: familiarNear(a, t, scene) };
     for (const x of reactionsFor(a)) { if (!x.known || !(sees || !(NEED_SIGHT.includes(x.slug) || KNOWN[x.slug]?.sees))) continue;
-      const row = KNOWN[x.slug], cf = gate === "cast" && o.cast ? castFacts(a, x, o.cast, dist) : null, w = { ...who, ...(cf?.who ?? {}), canCast: !x.spell || x.spell.rank != null, inAura: !!row.aura && ally && inAura(t, row.aura, [tok, o.target]) };
-      if (!fits(x.slug, gate, w, { melee: !!o.melee, damageTypes: o.damageTypes ?? [], ...(o.cast ?? {}) })) continue;
+      const row = KNOWN[x.slug], cf = gate === "cast" && o.cast ? castFacts(a, x, o.cast, dist) : null, w = { ...who, ...(cf?.who ?? {}), canCast: !x.spell || x.spell.rank != null, inAura: !!row.aura && (row.own ? !!o.target && o.target.id === t.id && inAura(t, row.aura, [tok]) : ally && inAura(t, row.aura, [tok, o.target])), freqOk: freqOk(a, tok, x.slug) };
+      if (row.armor && !(a.wornArmor && !a.wornArmor.isBroken)) continue;   /* Sacrifice Armor needs armor that isn't broken */
+      if (!fits(x.slug, gate, w, { melee: !!o.melee, damageTypes: o.damageTypes ?? [], ranged: !!o.ranged, strike: o.strike, degree: o.degree, close: !!o.close, attack: o.attack, ...(o.cast ?? {}) })) continue;
       if (spent) { o.skipped?.push({ name: t.name, reaction: x.name, why: spent, token: t.id, pos: p.pos, span: p.span, elev: heightUp(t), reach }); continue; }
       out.push({ id: `${t.id}:${x.slug}`, token: t.id, actor: a.id, name: t.name, reaction: x.name, slug: x.slug, gate, pos: p.pos, span: p.span, elev: heightUp(t), reach,
-        ...(o.kind ? { kind: o.kind } : {}), ...(x.spell ? { spell: x.spell } : {}), ...(cf?.row ?? {}), ...(row.aura ? { value: glimpseResistance(a.level), guilt: a.items.some(it => it.slug === "weight-of-guilt") } : {}) }); }
+        ...(o.kind ? { kind: o.kind } : {}), ...(x.spell ? { spell: x.spell } : {}), ...(cf?.row ?? {}), ...(row.aura === "champions-aura" ? { value: glimpseResistance(a.level), guilt: a.items.some(it => it.slug === "weight-of-guilt") } : {}),
+        ...(RX3.has(x.slug) ? rx3Facts(a, x, tok, o, t) : {}) }); }
   }
   return out;
+}
+/* ---------- Moments A to C (0.37.0; the full reactions pass, release 3) ---------- */
+/* Rhea, 2026-11-16 (q-35, "Run simple, Pause rest"): before a monster's attack roll, on its hit and just before its damage is applied, each reaction of
+   the party that fits is asked in the same question as the others of that moment. Run rows are carried out by the module (a flat check, the monster's
+   save with PF2e's own spell effect, a reroll, a resistance or less damage on the copy the damage is worked out on, damage back at the attacker);
+   Pause rows are the player's to make, then Done: before or on a hit the turn then stops for the GM ("stops"), on damage it goes on. */
+const RX3 = new Set(["apparition-cloud", "cloud-dragons-cloak", "curse-of-recoil", "anchoring-air", "unexpected-transposition", "body-of-air", "whispers-of-warning", "sacrifice-armor", "hidebound", "rebounding-barrier", "wooden-double", "drop-dead", "champions-sacrifice", "vanish-weapon", "shield-of-reckoning", "blazing-spirit", "calcifying-sand", "consume-power", "deflecting-wave", "preemptive-reconfiguration", "eat-fire", "scintillating-safeguard", "blood-vendetta", "warping-pull", "volcanic-escape", "pyrefowl-rebuke", "blinding-fury", "overselling-flourish"]);
+const BEFORE_RX = ["apparition-cloud", "cloud-dragons-cloak", "curse-of-recoil", "anchoring-air", "unexpected-transposition", "body-of-air"];
+/** Feet between two creatures, edge to edge, as reach and ranges are measured. */
+function feetBetween(a, b, scene) { const p = placeOf(a, scene), q = placeOf(b, scene); return distanceBetween({ x: p.pos[0], y: p.pos[1], size: p.span, elev: heightUp(a) }, { x: q.pos[0], y: q.pos[1], size: q.span, elev: heightUp(b) }, {}); }
+/** Is this character's familiar adjacent to it or in its space (Apparition Cloud's requirement)? */
+function familiarNear(actor, tok, scene) {
+  try { return scene.tokens.some(f => f.actor?.type === "familiar" && (f.actor.master?.id ?? f.actor.system?.master?.id) === actor.id && !f.hidden && feetBetween(tok, f, scene) <= 5); } catch { return false; }
+}
+/** A reaction limited by its frequency (once per 10 minutes, once a day) is free again: read from the stamp in game time on the creature; Calcifying
+    Sand: the monster can't set it off again for 1 hour (the stamp on the monster). */
+function freqOk(actor, monster, slug) {
+  const row = KNOWN[slug], now = Number(game.time?.worldTime) || 0;
+  if (slug === "calcifying-sand") { const at = monster?.actor?.getFlag?.(ID, `calcified.${actor.id}`); return at == null || now < at || now - at >= 3600; }
+  if (!row?.freq) return true;
+  const at = actor?.getFlag?.(ID, `freq.${slug}`); return at == null || now < at || now - at >= row.freq;
+}
+const stampFreq = async (actor, slug) => { if (KNOWN[slug]?.freq) await actor?.setFlag?.(ID, `freq.${slug}`, Number(game.time?.worldTime) || 0).catch(e => console.warn(`${ID} | frequency`, e)); };
+/** What a row of Moments A to C carries: the numbers worked out now, the spell DC for a save, and the window's words. */
+function rx3Facts(a, x, tok, o, t) {
+  const row = KNOWN[x.slug], rank = x.slug === "eat-fire" ? cantripRank(a.level) : x.spell?.rank ?? 1, level = a.level ?? 1;
+  const dc = x.spell ? a.spellcasting?.get(x.spell.entryId)?.statistic?.dc?.value ?? null : a.classDC?.value ?? a.getStatistic?.("class")?.dc?.value ?? null;
+  const out = { level, rank, ...(dc != null ? { dc } : {}) };
+  if (row.gates[0] === "harm" || x.slug === "hidebound" || x.slug === "rebounding-barrier") { const r = resistFor(x.slug, { level, rank, types: o.damageTypes ?? [] }); if (r) out.resist = r; }
+  if (row.armor) out.less = sacrificeLess(a.wornArmor?.level ?? a.wornArmor?.system?.level?.value ?? 0);
+  if (x.slug === "shield-of-reckoning") { const sh = a.attributes?.shield; Object.assign(out, { hardness: Number(sh?.hardness) || 0, shieldId: sh?.itemId ?? null }); }
+  const other = o.target && o.target.id !== t.id ? o.target.name : null, detail = rxDetail({ slug: x.slug, ...out });
+  const words = rxWords({ slug: x.slug, reaction: row.name }, moverName(tok), other), gm = rxWords({ slug: x.slug, reaction: row.name }, tok.name, other);
+  return { ...out, words: detail ? `${words} (${detail})` : words, gmWords: detail ? `${gm} (${detail})` : gm };
+}
+/** The damage types of a damage roll, the biggest first (persistent damage left out). */
+const typesOf = roll => (roll?.instances ?? []).filter(x => !x.persistent).sort((a, b) => (b.total ?? 0) - (a.total ?? 0)).map(x => x.type).filter((t, k, l) => t && l.indexOf(t) === k);
+/** A Strike's facts for the damage rows: melee, and "close" (unarmed or a melee weapon without reach: Calcifying Sand). */
+function strikeFacts(strike) { const it = strike?.item, melee = !!it && !it.isRanged, tr = [...(it?.system?.traits?.value ?? [])]; return { melee, close: melee && !tr.some(x => /^reach/.test(x)), attack: true, strike: true }; }
+/** A spell effect from PF2e's compendium on a creature, or the module's own (rules), marked to be taken off by the module: "step" when the step ends,
+    "turn" when the turn moves on, "own" when that creature's own turn begins (so "until the start of its next turn" is exact). */
+async function rxEffect(actor, { uuid = null, name = null, selection = null, level = null, rules = null, end = "step", by = null } = {}) {
+  let src;
+  if (uuid) { src = (await fromUuid(uuid))?.toObject(); if (!src) throw new Error(`${name ?? "An effect"} isn't in PF2e's compendium.`); delete src._id;
+    if (selection) { const c = src.system.rules.find(r => r.key === "ChoiceSet"); if (c) c.selection = selection; } }
+  else src = { type: "effect", name, img: "icons/svg/aura.svg", system: { rules: rules ?? [] } };
+  if (name) src.name = name; if (level) foundry.utils.setProperty(src, "system.level.value", level);
+  foundry.utils.setProperty(src, "system.duration", { value: -1, unit: "unlimited", expiry: null, sustained: false });   /* the module takes it off at the right moment */
+  foundry.utils.setProperty(src, `flags.${ID}.rxEnd`, end); if (by) foundry.utils.setProperty(src, `flags.${ID}.rxBy`, by);
+  return actor.createEmbeddedDocuments("Item", [src]);
+}
+const CONDITION = name => game.packs.get("pf2e.conditionitems")?.index?.find(e => e.name === name)?.uuid ?? null;
+const SPELL_FX = { recoilFail: "Compendium.pf2e.spell-effects.Item.sxIEPmpuBfqSeck3", recoilCrit: "Compendium.pf2e.spell-effects.Item.P4PRme5opSzyPIM2", anchoring: "Compendium.pf2e.spell-effects.Item.dIk087Q4V9pS4eMe",
+  hidebound: "Compendium.pf2e.spell-effects.Item.70tKwsgD8aOj9SxG", eatFire: "Compendium.pf2e.spell-effects.Item.BGv44XBGtD4zOJBd", bloodFail: "Compendium.pf2e.spell-effects.Item.buXx8Azr4BYWPtFg", consume: "Compendium.pf2e.feat-effects.Item.m5kXngVAHiprZea1" };
+/** A creature's condition for a while, as the module's own effect granting PF2e's condition. */
+const conditionFx = (actor, cond, name, end) => { const uuid = CONDITION(cond); if (!uuid) throw new Error(`PF2e's ${cond} isn't in its compendium.`); return rxEffect(actor, { name, rules: [{ key: "GrantItem", uuid }], end }); };
+/** Take the module's timed effects off: "step" ones at a step's end, "turn" ones at a turn change, "own" ones of the creature whose turn begins. */
+async function dropRxEffects(combat, ends, ownerId = null) {
+  for (const c of combat?.combatants ?? []) { const a = c.token?.actor; if (!a) continue;
+    const ids = (a.itemTypes?.effect ?? []).filter(e => { const w = e.getFlag?.(ID, "rxEnd"); return w && (ends.includes(w) && (w !== "own" || c.tokenId === ownerId)); }).map(e => e.id);
+    if (ids.length) await a.deleteEmbeddedDocuments("Item", ids).catch(e => console.warn(`${ID} | effects`, e)); }
+}
+/** "Until the end of its next turn" (Calcifying Sand, Consume Power): an effect is armed when its holder's turn begins and taken off when that turn
+    ends, so one made during the holder's own turn lasts through its next one. ended: the token whose turn just ended; begins: the one starting. */
+async function endOwnTurnFx(combat, ended, begins) {
+  for (const c of combat?.combatants ?? []) { const a = c.token?.actor; if (!a) continue;
+    const fx = (a.itemTypes?.effect ?? []).filter(e => e.getFlag?.(ID, "rxEnd") === "ownEnd");
+    const gone = fx.filter(e => c.tokenId === ended && e.getFlag(ID, "rxArmed")).map(e => e.id); if (gone.length) await a.deleteEmbeddedDocuments("Item", gone).catch(e => console.warn(`${ID} | effects`, e));
+    if (c.tokenId === begins) for (const e of fx.filter(e => !e.getFlag(ID, "rxArmed"))) await e.setFlag(ID, "rxArmed", true).catch(() => {}); }
+}
+/** A monster's save against a reactor's DC, rolled through PF2e for everyone; the degree (0 to 3), or null when it couldn't be rolled. */
+async function monsterSave(tok, stat, dc, label) {
+  const st = tok.actor?.saves?.[stat] ?? tok.actor?.getStatistic?.(stat); if (!st || !Number.isFinite(Number(dc))) return null;
+  const r = await watched(() => st.roll({ dc: { value: Number(dc), label }, skipDialog: true, extraRollOptions: ["origin:reaction"] }));
+  return r?.degreeOfSuccess ?? null;
+}
+/** Damage back at the attacker (Rebounding Barrier, Blazing Spirit, Blood Vendetta, Volcanic Escape, Pyrefowl Rebuke): rolled for everyone with the
+    reason, a basic save first when there is one, and applied by PF2e. formula: a damage formula with its types ({1d6[fire],1[persistent,fire]}). */
+async function hitBack(tok, formula, { by, why, save = null, dc = null, mult = null } = {}) {
+  let m = mult ?? 1;
+  if (save) { const d = await monsterSave(tok, save, dc, `${why} (basic ${save === "reflex" ? "Reflex" : save})`); if (d == null) return `roll ${tok.name}'s basic ${save} save against DC ${dc} and apply ${formula} yourself`; m = SAVE_MULT[d]; }
+  if (!(m > 0)) return null;
+  const DamageRoll = CONFIG.Dice.rolls.find(r => r.name === "DamageRoll"), roll = await new DamageRoll(formula).evaluate(), dmg = m === 1 ? roll : roll.alter(m, 0);
+  await watched(() => roll.toMessage({ speaker: ChatMessage.implementation.getSpeaker({ token: by }), flavor: `<p>${esc(`${why}: ${enemyName(tok).replace(/^t/, "T")} takes ${m === 2 ? "double " : m === 0.5 ? "half " : ""}this damage.`)}</p>` }));
+  await tok.actor.applyDamage({ damage: dmg, token: tok });
+  return null;
 }
 /** Who is asked and has a reaction box (Rhea, 2026-11-11, PR-11): a character, or an ordinary NPC fighting on the party's side; never a minion. */
 const reactsLikeParty = a => !!a && canReact({ type: a.type, traits: [...(a.traits ?? a.system?.traits?.value ?? [])] }) && (a.isOfType?.("character") || a.alliance === "party");
@@ -3219,7 +3318,7 @@ async function beforeAction(combat, id, i, step, tok, target) {
   const list = [], skipped = [], add = l => { for (const x of l) if (!list.some(y => y.id === x.id)) list.push(x); };
   if (w.manipulate) add(reactorsFor(combat, tok, "manipulate", { skipped }));
   if (w.ranged) add(reactorsFor(combat, tok, "ranged", { skipped }));
-  if (w.attack && target) add(reactorsFor(combat, tok, "attack", { target, skipped }));
+  if (w.attack && target) add(reactorsFor(combat, tok, "attack", { target, melee: !w.isRanged, ranged: !!w.isRanged, strike: true, skipped }));
   /* a damaging area with a Reflex save (0.27.0): each creature it will catch that can answer it (Interposing Earth), before the spell is cast */
   if (w.area) { const scene = sceneOf(combat); let ids = []; try { ids = coverage(scene, tok, step.area.aim, { square: squareOf(tok, scene), size: sizeOf(tok), elev: Number(tok.elevation) || 0 }).ids; } catch (e) { console.warn(`${ID} | area reactions`, e); }
     for (const t of ids) { const caught = scene.tokens.get(t); if (caught && !caught.hidden) add(reactorsFor(combat, tok, "area", { target: caught, kind: "spell", skipped }).map(x => ({ ...x, gmKind: step.itemName }))); } }   /* the players' window says "spell", her card its name (0.36.0, review 5) */
@@ -3237,9 +3336,54 @@ async function beforeAction(combat, id, i, step, tok, target) {
   if (res.held) return "held";
   const struck = new Set(res.list.filter(x => x.answer === "done" && KNOWN[x.slug]?.reach).map(x => x.actor));
   if (w.manipulate && (res.rolls ?? []).some(r => struck.has(r.actor) && r.target.endsWith(tok.id) && r.outcome === "criticalSuccess")) return "disrupted";
+  /* Moment A (0.37.0): a flat check for the attack, the monster's save, or a Pause row that stops the turn before the roll */
+  { const b = await beforeRx(combat, id, i, step, tok, target, res.list); if (b) return b; }
   /* the counters to a cast (0.36.0) only once the caster is still up, the turn not held and the spell not disrupted (review 2) */
   if (w.cast) { const c = await castAnswers(combat, id, i, step, tok, res.list, w.cast); if (c) return c; }
   return null;
+}
+/** Moment A's rows once answered (0.37.0), each carried out once (kept on the gate as `rxb`, so a Do it after a stop does nothing again): Apparition
+    Cloud and Cloud Dragon's Cloak give the attack a flat check (the Cloak also for the target's ranged attacks until the caster's next turn); Curse of
+    Recoil and Anchoring Air roll the monster's save and put PF2e's own spell effect on it; Unexpected Transposition and Body of Air stop the turn
+    before the roll so the GM rules on them. Returns "paused", "ask" or null. */
+async function beforeRx(combat, id, i, step, tok, target, list) {
+  const used = list.filter(x => x.answer === "done" && BEFORE_RX.includes(x.slug)); if (!used.length) return null;
+  const had = request(combat, id).gates?.[i]?.rxb;
+  if (had?.result) return null;   /* done once (a stop's Do it means go on) */
+  if (had?.started) { await addNote(combat, id, `The page reloaded while the reactions to ${tok.name}'s ${step.itemName ?? "attack"} were being carried out: check the chat for a save already rolled, then press Do it to carry on.`); await save(combat, id, { gates: { [i]: { rxb: { started: true, result: "ask" } } } }); return "ask"; }
+  await save(combat, id, { gates: { [i]: { rxb: { started: true } } } });
+  const scene = sceneOf(combat); let result = null, flat = 0, flatBy = null;
+  for (const x of used) { const r = scene.tokens.get(x.token), a = r?.actor, row = KNOWN[x.slug]; if (!a) continue;
+    try {
+      await stampFreq(a, x.slug);
+      if (row.flat) { if (row.flat > flat) { flat = row.flat; flatBy = x.reaction; }
+        const prot = x.slug === "cloud-dragons-cloak" ? target : r;
+        if (x.slug === "cloud-dragons-cloak" && prot) await saveTurns(combat, { [`cloaks.${prot.id}`]: whole({ by: x.token, round: combat.round }) });
+        await sayToAll(prot ?? r, `${x.name} uses ${x.reaction}: ${prot?.name ?? x.name} is ${row.flat === 5 ? "concealed" : "hidden"} from ${enemyName(tok)}'s attack (a DC ${row.flat} flat check to hit)${x.slug === "cloud-dragons-cloak" ? ", and from ranged attacks until " + pro("{their}", P(r, combat)) + " next turn" : ""}.`); }
+      else if (row.save) {
+        const deg = await monsterSave(tok, row.save, x.dc, x.reaction);
+        if (deg == null) { await addNote(combat, id, `I couldn't roll ${tok.name}'s ${row.save === "will" ? "Will" : "Reflex"} save against ${x.name}'s ${x.reaction}: rule on it yourself.`); continue; }
+        const c = curseBy(x.slug, deg);
+        if (c && x.slug === "curse-of-recoil") {
+          if (c.penalty === -1) await rxEffect(tok.actor, { uuid: SPELL_FX.recoilFail, end: "step", by: x.token });
+          if (c.penalty === -2) await rxEffect(tok.actor, { uuid: SPELL_FX.recoilCrit, end: "own", by: x.token });   /* its ranged attacks until the start of its next turn, off-guard with it */
+          else await conditionFx(tok.actor, "Off-Guard", "Curse of Recoil (off-guard)", "own");
+        }
+        if (c && x.slug === "anchoring-air") {
+          await rxEffect(tok.actor, { uuid: SPELL_FX.anchoring, selection: c.thisAttack ? "success" : "failure", end: c.thisAttack ? "step" : "turn", by: x.token });
+          if (c.immobilized) await conditionFx(tok.actor, "Immobilized", "Anchoring Air (immobilized)", "own");
+        }
+        await sayToAll(tok, curseWords(x.slug, enemyName(tok).replace(/^t/, "T"), deg, x.name));
+      } else if (row.stops) { result = "paused"; await addNote(combat, id, `${x.name} used ${x.reaction} against ${tok.name}'s ${step.itemName ?? "attack"}. Rule on it with ${pro("{their}", P(r, combat))} player, then press Do it to make the attack anyway (at whoever is there now), or play the rest yourself.`); }
+    } catch (err) { console.error(`${ID} | reaction`, err); await addNote(combat, id, `I couldn't finish ${x.name}'s ${x.reaction} (${err.message}): resolve it yourself.`); result = result ?? "paused"; }
+  }
+  await save(combat, id, { gates: { [i]: { rxb: { started: true, result: result ?? "none", ...(flat ? { flat, flatBy } : {}) } } } });
+  return result;
+}
+/** The flat check a Strike needs from Moment A (0.37.0): Apparition Cloud or Cloud Dragon's Cloak on this step, or a Cloak still on the target. */
+function rxFlat(combat, id, i, target, ranged) {
+  const b = request(combat, id)?.gates?.[i]?.rxb, cloak = ranged && target && turns(combat).cloaks?.[target.id] ? flatOf("cloud-dragons-cloak") : 0;
+  return { dc: Math.max(b?.flat ?? 0, cloak), by: (b?.flat ?? 0) >= cloak ? b?.flatBy ?? null : "Cloud Dragon's Cloak" };
 }
 /** What an action is for the reaction gates: { manipulate, ranged, attack, kind (words) }. Nimble Dodge is asked only for a Strike, the one attack whose
     degree the module reads again (review finding 7). */
@@ -3247,7 +3391,7 @@ function beforeKinds(actor, step, target) {
   const pc = reactsLikeParty(target?.actor);   /* a character, or an NPC ally on the party's side (0.27.0) */
   if (step.do === "interact" || step.do === "draw") return { manipulate: true, kind: "Interact" };
   if (step.do === "point-out") return { manipulate: true, kind: "Point Out" };   /* 0.30.0 */
-  if (step.do === "strike") { const s = strikesWithIds(actor).find(x => x.id === step.item)?.strike; return { ranged: !!s?.item?.isRanged, attack: pc, kind: "Strike" }; }
+  if (step.do === "strike") { const s = strikesWithIds(actor).find(x => x.id === step.item)?.strike; return { ranged: !!s?.item?.isRanged, isRanged: !!s?.item?.isRanged, attack: pc, kind: "Strike" }; }
   if (step.do === "ability") { const ab = abilityList(actor).find(a => a.id === step.item), tr = ab?.traits ?? []; if (ab?.followUp) return {}; return { manipulate: tr.includes("manipulate"), kind: ab?.name ?? "" }; }
   if (step.do === "spell") { const sp = spellFor(actor, step)?.spell, tr = [...(sp?.system?.traits?.value ?? [])];
     const found = spellFor(actor, step), tok = actor?.getActiveTokens?.(false, true)?.[0] ?? null;
@@ -3389,6 +3533,7 @@ async function addEarthCover(actor) {
   await actor.createEmbeddedDocuments("Item", [src]);
 }
 async function dropEarthCover(combat, { recognizeOnly = false } = {}) {
+  await dropRxEffects(combat, ["step"]).catch(e => console.warn(`${ID} | effects`, e));   /* 0.37.0: a step's own effects (Curse of Recoil's -1, Anchoring Air's success) */
   for (const c of combat?.combatants ?? []) { const a = c.token?.actor, ids = (a?.itemTypes?.effect ?? []).filter(e => (!recognizeOnly && e.getFlag?.(ID, "earth")) || e.getFlag?.(ID, "recognize")).map(e => e.id); if (ids.length) await a.deleteEmbeddedDocuments("Item", ids).catch(e => console.warn(`${ID} | cover`, e)); }
 }
 /** At the end of a move action that leaves no square (Stand, Drop Prone, a Climb), measured from where it was (a Climb can take it out of reach). */
@@ -3478,7 +3623,7 @@ const damageTypesOf = strike => { const it = strike?.item; return [...Object.val
     attack's own DC plus what the shield adds over the circumstance bonus the target had (review finding 5). */
 async function hitGate(combat, id, i, step, tok, target, what, get) {
   const rec = get(); if (rec.reacted || !target?.actor) return null;
-  const skipped = [], list = reactorsFor(combat, tok, "hit", { target, melee: !!what.melee, damageTypes: what.damageTypes ?? [], skipped }), again = askedBefore(combat, id, i, "hit"); if (!again) await noteSkipped(combat, id, skipped); if (!list.length && !again) return null;
+  const skipped = [], list = reactorsFor(combat, tok, "hit", { target, melee: !!what.melee, damageTypes: what.damageTypes ?? [], strike: what.strike !== false, degree: rec.attack?.degree, skipped }), again = askedBefore(combat, id, i, "hit"); if (!again) await noteSkipped(combat, id, skipped); if (!list.length && !again) return null;
   const res = await askReactions(combat, id, i, "hit", "hit", tok, list, what.kind ?? ""); if (typeof res === "string") return res;
   const used = slug => res.list.some(x => x.answer === "done" && x.slug === slug), change = { reacted: true };
   let degree = rec.attack.degree;
@@ -3490,8 +3635,27 @@ async function hitGate(combat, id, i, step, tok, target, what, get) {
       if (degree < 2) await sayToAll(target, missWords(target.name, "Reactive Shield")); } }
   }
   if (used("shield-block") && degree >= 2) { change.shieldBlock = true; if (!applySetting()) await addNote(combat, id, `${target.name} used Shield Block: apply the damage with the card's Shield Block option.`); }
+  /* Moment B (0.37.0) */
+  let stop = false; const scene = sceneOf(combat), rxHit = {};
+  for (const x of res.list.filter(y => y.answer === "done" && RX3.has(y.slug))) { const r = scene.tokens.get(x.token), a = r?.actor; if (!a) continue;
+    try {
+      await stampFreq(a, x.slug);
+      if (x.slug === "whispers-of-warning" && degree === 2) {
+        const m = game.messages.get(rec.attack.message), check = m?.rolls?.[0], dc = change.attack?.against ?? rec.attack.against ?? m?.flags?.pf2e?.context?.dc?.value;
+        if (!check || dc == null) { await addNote(combat, id, `${x.name} used Whisper of Warning: roll ${tok.name}'s attack again yourself and keep the lower.`); continue; }
+        const again = await new Roll("1d20").evaluate(), kept = rerollLower({ total: check.total, natural: check.dice?.[0]?.total ?? 10 }, again.total), nd = degreeAgainst(kept.total, kept.natural, dc);
+        await watched(() => again.toMessage({ speaker: ChatMessage.implementation.getSpeaker({ token: r }), flavor: `<p>${esc(`Whisper of Warning: ${enemyName(tok)}'s attack is rolled again (${again.total} on the die, ${check.total - (check.dice?.[0]?.total ?? 0) + again.total} in all against AC ${dc}); the lower is kept: ${kept.total}, ${OUTCOMES[nd] ?? "a result"}.`)}</p>` }));
+        if (nd !== degree) { change.attack = { ...(change.attack ?? rec.attack), degree: nd, was: degree, against: dc }; degree = nd; if (nd < 2) await sayToAll(r, missWords(r.name, "Whisper of Warning")); }
+      } else if (x.slug === "sacrifice-armor") rxHit[x.token] = { ...(rxHit[x.token] ?? {}), sacrifice: { less: x.less ?? 0, by: x.name } };
+      else if (x.slug === "hidebound") { await rxEffect(target.actor, { uuid: SPELL_FX.hidebound, level: x.rank, end: "own", by: x.token }); await sayToAll(target, `${x.name} casts Hidebound: ${target.name} has resistance ${x.resist?.value ?? 5} to physical damage (except adamantine) until the start of ${pro("{their}", P(target, combat))} next turn.`); }
+      else if (x.slug === "rebounding-barrier" && x.resist) rxHit[x.token] = { ...(rxHit[x.token] ?? {}), rebound: { ...x.resist, back: reboundBack(x.rank), by: x.name } };
+      else if (KNOWN[x.slug]?.stops) { stop = true; await addNote(combat, id, `${x.name} used ${x.reaction} against ${tok.name}'s hit. Rule on it with ${pro("{their}", P(r, combat))} player (where the hit goes now), then press Do it to roll and apply the damage as usual, or play the rest yourself.`); }
+    } catch (err) { console.error(`${ID} | reaction`, err); await addNote(combat, id, `I couldn't finish ${x.name}'s ${x.reaction} (${err.message}): resolve it yourself.`); }
+  }
+  if (Object.keys(rxHit).length) change.rxHit = rxHit;
   await save(combat, id, { log: { [i]: change } });
   if (degree < 2) return "missed";
+  if (stop) return "ask";
   return res.held ? "held" : null;
 }
 
@@ -3514,19 +3678,27 @@ async function sayToAll(target, words) {
 async function harmGate(combat, id, i, tok, hits) {
   const rec = () => request(combat, id).log?.[i] ?? {}, open = hits.filter(h => h.target?.actor && h.hit > 0 && !rec().harm?.[h.target.id]?.asked); if (!open.length) return null;
   const skipped = [], list = [];
-  for (const h of open) for (const x of reactorsFor(combat, tok, "harm", { target: h.target, skipped }))
-    list.push({ ...x, id: `${x.id}:${h.target.id}`, ally: h.target.id, kind: `${h.target.name} (${h.hit} damage)`, group: x.id, label: h.target.name });
+  for (const h of open) for (const x of reactorsFor(combat, tok, "harm", { target: h.target, damageTypes: h.types ?? [], melee: !!h.melee, close: !!h.close, attack: h.attack, strike: h.strike, skipped })) {
+    if (x.slug === "scintillating-safeguard" && list.some(y => y.group === x.id)) continue;   /* one row: it shields everyone in range it can (up to 5) */
+    list.push({ ...x, id: `${x.id}:${h.target.id}`, ally: h.target.id, kind: `${h.target.name} (${h.hit} damage)`, group: x.id, label: h.target.name }); }
   const again = askedBefore(combat, id, i, "harm"); if (!again) await noteSkipped(combat, id, skipped);
   const change = Object.fromEntries(open.map(h => [h.target.id, { asked: true }]));
   if (list.length || again) {
     const res = await askReactions(combat, id, i, "harm", "harm", tok, list); if (typeof res === "string") return res;
-    for (const used of res.list.filter(x => x.answer === "done" && x.slug === "glimpse-of-redemption")) {
+    for (const used of res.list.filter(x => x.answer === "done" && ["glimpse-of-redemption", "shield-of-reckoning"].includes(x.slug))) {
       const ally = sceneOf(combat).tokens.get(used.ally); if (!ally) continue;
       if (change[used.ally]?.glimpse) { const second = sceneOf(combat).tokens.get(used.token); if (second) await refund(combat, id, second, used.reaction, `${used.name}'s Glimpse of Redemption wasn't needed (${change[used.ally].glimpse.by} had already answered for ${ally.name}): ${pro("{their}", P(second, combat))} reaction is back.`); continue; }
       const c = await glimpseChoice(combat, id, i, tok, ally, used); if (typeof c === "string") return c;
       let guilt = "enfeebled";
       if (c.choice === "refuse" && used.guilt) { const g = await guiltPick(combat, id, i, tok, used); if (!(g in GUILT)) return g; guilt = g; }
-      change[used.ally] = { asked: true, glimpse: { by: used.name, token: used.token, choice: c.choice, who: c.by, ...(c.reason ? { reason: c.reason } : {}), ...(c.choice === "refuse" ? { resist: used.value, guilt } : {}) } };
+      change[used.ally] = { asked: true, glimpse: { by: used.name, token: used.token, choice: c.choice, who: c.by, ...(c.reason ? { reason: c.reason } : {}), ...(c.choice === "refuse" ? { resist: used.value, guilt } : {}) },
+        ...(used.slug === "shield-of-reckoning" ? { reckon: { by: used.name, token: used.token, hardness: used.hardness ?? 0, shieldId: used.shieldId ?? null } } : {}) };
+    }
+    /* Moment C (0.37.0): what each other row does to whose share, kept for harmFor and afterHarm */
+    for (const used of res.list.filter(x => x.answer === "done" && RX3.has(x.slug) && x.slug !== "shield-of-reckoning")) {
+      const r = sceneOf(combat).tokens.get(used.token); await stampFreq(r?.actor, used.slug);
+      const who = used.slug === "scintillating-safeguard" ? open.filter(h => h.target.id === used.token || (r && feetBetween(r, h.target, sceneOf(combat)) <= 30)).slice(0, 5).map(h => h.target.id) : [used.ally];
+      for (const t of who) change[t] = { ...(change[t] ?? { asked: true }), rx: [...(change[t]?.rx ?? []), whole({ slug: used.slug, by: used.name, token: used.token, reaction: used.reaction, level: used.level, rank: used.rank, dc: used.dc ?? null, resist: used.resist ? { ...used.resist, by: `${used.reaction} (${used.name})` } : null })] };
     }
     if (res.held) { await save(combat, id, { log: { [i]: { harm: change } } }); return "held"; }
   }
@@ -3535,32 +3707,83 @@ async function harmGate(combat, id, i, tok, hits) {
 }
 /** What the reactions do to this creature's share of the damage: { repent, resist, less }. less: Interposing Earth, when it is still damaged. */
 function harmFor(combat, id, i, target, hit = 0) {
-  const g = request(combat, id).log?.[i]?.harm?.[target.id]?.glimpse ?? null, earth = earthUsed(combat, id, i, target);
-  return { repent: g?.choice === "repent", resist: g?.choice === "refuse" ? g.resist ?? 0 : 0, less: earth && g?.choice !== "repent" ? Math.min(earthLess(earth.spell?.rank), Math.max(0, hit)) : 0 };
+  const log = request(combat, id).log?.[i] ?? {}, h = log.harm?.[target.id] ?? {}, g = h.glimpse ?? null, earth = earthUsed(combat, id, i, target);
+  const el = earth && g?.choice !== "repent" ? Math.min(earthLess(earth.spell?.rank), Math.max(0, hit)) : 0;
+  /* Moments B and C (0.37.0): resistances on the copy, and flat amounts off the roll (Sacrifice Armor; Shield of Reckoning's block for an ally) */
+  const mine = log.rxHit?.[target.id] ?? {}, resists = [...(h.rx ?? []).map(r => r.resist).filter(Boolean), ...(mine.rebound ? [{ type: mine.rebound.type, value: mine.rebound.value, by: `Rebounding Barrier (${mine.rebound.by})` }] : [])];
+  const sac = g?.choice !== "repent" ? mine.sacrifice?.less ?? 0 : 0, block = h.reckon && g?.choice !== "repent" ? Math.min(h.reckon.hardness ?? 0, Math.max(0, hit - el - sac)) : 0;
+  return { repent: g?.choice === "repent", resist: g?.choice === "refuse" ? g.resist ?? 0 : 0, less: Math.min(Math.max(0, hit), el + sac + block), earth: el, sacrifice: sac, block, resists };
 }
 /** After the damage: the refused monster's condition (enfeebled 2, or stupefied 2 with Weight of Guilt, until the end of its next turn), the line
     for everyone, and the same on the GM's card with who decided. Once per creature per step. */
 async function afterHarm(combat, id, i, tok, target, { hit = 0, was = null, block = false, byHand = false } = {}) {
-  const h = request(combat, id).log?.[i]?.harm?.[target.id] ?? {}, g = h.glimpse ?? null, hm = harmFor(combat, id, i, target, hit); if (h.said || (!g && !hm.less)) return;
+  const h = request(combat, id).log?.[i]?.harm?.[target.id] ?? {}, g = h.glimpse ?? null, hm = harmFor(combat, id, i, target, hit), mine = request(combat, id).log?.[i]?.rxHit?.[target.id] ?? null;
+  if (h.said || (!g && !hm.less && !h.rx?.length && !mine)) return;
   await save(combat, id, { log: { [i]: { harm: { [target.id]: { said: true } } } } });   /* first: a reload can't say or apply it twice */
+  await rxAfter(combat, id, i, tok, target, { hit, was, byHand, hm, h, mine });   /* Moments B and C (0.37.0) */
+  if (!g && !hm.earth) return;
   const refused = g?.choice === "refuse";
   if (refused) { try { await guiltEffect(combat, tok, g.guilt); } catch (e) { console.error(`${ID} | glimpse`, e); await addNote(combat, id, `I couldn't make ${tok.name} ${GUILT[g.guilt]?.name ?? "Enfeebled 2"} (${e.message}): add it yourself, until the end of its next turn.`); } }
   const taken = was == null ? null : Math.max(0, was - hpNow(target)), cond = refused ? GUILT[g.guilt]?.name ?? "Enfeebled 2" : null;
   const decided = !g ? "" : g.who === "rule" ? pro(" (mindless: {they} {refuses|refuse} by the rule)", P(tok, combat)) : g.who === "angel" ? ` (Angel chose${g.reason ? `: ${g.reason}` : ""})` : " (your choice)";
   if (byHand) {   /* automatic damage is off: the GM applies it, so she is told what to apply */
     const parts = [g?.choice === "repent" ? `${tok.name} repented${decided}: don't apply this damage to ${target.name}` : null, refused ? `${tok.name} refused${decided}: apply it to ${target.name} with resistance ${hm.resist} to all damage; ${tok.name} is ${cond} until the end of {their} next turn` : null,
-      hm.less ? `Interposing Earth: take ${hm.less} off what ${target.name} takes; the barrier is destroyed` : null].filter(Boolean);
+      hm.earth ? `Interposing Earth: take ${hm.earth} off what ${target.name} takes; the barrier is destroyed` : null].filter(Boolean);
     const e = enemyName(tok), E = e.replace(/^t/, "T");
     await sayToAll(target, [g?.choice === "repent" ? `${target.name} is unharmed by this: ${e} repented (Glimpse of Redemption).` : null, refused ? `Glimpse of Redemption: ${e} refused, so ${target.name} resists ${hm.resist} of each kind of this damage. ${E} is ${cond} until the end of ${pro("{their}", P(tok, combat))} next turn.` : null,
-      hm.less ? `Interposing Earth: ${target.name} takes ${hm.less} less of this damage, and the barrier is destroyed.` : null].filter(Boolean).join(" "));
+      hm.earth ? `Interposing Earth: ${target.name} takes ${hm.earth} less of this damage, and the barrier is destroyed.` : null].filter(Boolean).join(" "));
     return addNote(combat, id, `${g ? `Glimpse of Redemption (${g.by}). ` : ""}${parts.join(". ")}.`);
   }
-  const words = harmWords({ name: target.name, enemy: enemyName(tok), hit, taken: taken ?? 0, repent: g?.choice === "repent", resist: hm.resist, less: taken > 0 || hm.less >= hit ? hm.less : 0, block });
+  const words = harmWords({ name: target.name, enemy: enemyName(tok), hit, taken: taken ?? 0, repent: g?.choice === "repent", resist: hm.resist, less: taken > 0 || hm.earth >= hit ? hm.earth : 0, block });
   await sayToAll(target, refused ? `${words} ${enemyName(tok).replace(/^t/, "T")} is ${cond} until the end of ${pro("{their}", P(tok, combat))} next turn.` : words);
-  const gmWords = `${harmWords({ name: target.name, enemy: tok.name, hit, taken: taken ?? 0, repent: g?.choice === "repent", resist: hm.resist, less: taken > 0 || hm.less >= hit ? hm.less : 0, block })}${g ? `${decided}${refused ? ` ${tok.name} is ${cond} until the end of ${pro("{their}", P(tok, combat))} next turn.` : ""}` : ""}`;
+  const gmWords = `${harmWords({ name: target.name, enemy: tok.name, hit, taken: taken ?? 0, repent: g?.choice === "repent", resist: hm.resist, less: taken > 0 || hm.earth >= hit ? hm.earth : 0, block })}${g ? `${decided}${refused ? ` ${tok.name} is ${cond} until the end of ${pro("{their}", P(tok, combat))} next turn.` : ""}` : ""}`;
   if (gmWords.trim()) await addNote(combat, id, gmWords);
   /* a Shield Block that the monster's repentance made needless isn't spent (review 13): nothing was applied, so nothing was blocked */
   if (g?.choice === "repent" && block) await refund(combat, id, target, "Shield Block", `${target.name}'s Shield Block wasn't needed (the blow did no harm): ${pro("{their}", P(target, combat))} reaction is back.`);
+}
+/** After the damage (0.37.0, Moments B and C): the line for everyone with each reaction's part, then what each does next: armor broken, the
+    champion's shield damaged, damage or a save back at the attacker, an effect left on the reactor. With automatic damage off, the GM is told
+    what to apply instead (nothing is applied by the module then but the after-effects). */
+async function rxAfter(combat, id, i, tok, target, { hit = 0, was = null, byHand = false, hm = {}, h = {}, mine = null } = {}) {
+  const scene = sceneOf(combat), rx = h.rx ?? [], parts = [], todo = [];
+  for (const r of rx) { const row = KNOWN[r.slug] ?? {};
+    if (r.resist) parts.push(`${r.reaction} (${r.by}): resistance ${r.resist.value} to ${r.resist.type === "all-damage" ? "all of it" : r.resist.type}`);
+    else if (!row.pause) parts.push(`${r.reaction} (${r.by})`); }
+  if (mine?.rebound) parts.push(`Rebounding Barrier (${mine.rebound.by}): resistance ${mine.rebound.value} to ${mine.rebound.type}`);
+  if (hm.sacrifice) parts.push(`Sacrifice Armor (${mine?.sacrifice?.by ?? target.name}): ${hm.sacrifice} less, the armor is broken`);
+  if (hm.block) parts.push(`Shield of Reckoning (${h.reckon?.by}): the shield blocks ${hm.block}`);
+  if (!parts.length && !rx.length) return;
+  const taken = was == null ? null : Math.max(0, was - hpNow(target));
+  if (parts.length) { const line = byHand ? `${target.name}: ${parts.join("; ")}.` : `${target.name} takes ${taken ?? "?"} (the hit was ${hit}; ${parts.join("; ")}).`;
+    await sayToAll(target, line); await addNote(combat, id, byHand ? `Apply ${tok.name}'s damage to ${target.name} with ${parts.join("; ")}.` : line); }
+  /* armor broken (destroyed if it was already damaged), by Sacrifice Armor */
+  if (hm.sacrifice) { const armor = target.actor?.wornArmor; try { if (armor) { const hp = armor.system?.hp ?? {}, damaged = (hp.value ?? 0) < (hp.max ?? 0); await armor.update({ "system.hp.value": damaged ? 0 : Math.min(hp.value ?? 0, armor.system?.hp?.brokenThreshold ?? Math.floor((hp.max ?? 0) / 2)) }); if (damaged) await addNote(combat, id, `${target.name}'s ${armor.name} was already damaged, so Sacrifice Armor destroyed it.`); } }
+    catch (e) { todo.push(`break ${target.name}'s armor yourself (${e.message})`); } }
+  /* the champion's shield takes what its Hardness didn't stop (Shield Block for the ally) */
+  if (hm.block && h.reckon) { const champ = scene.tokens.get(h.reckon.token)?.actor, sh = champ?.items?.get(h.reckon.shieldId), over = Math.max(0, hit - (hm.earth ?? 0) - (hm.sacrifice ?? 0) - (h.reckon.hardness ?? 0));
+    try { if (sh && over) await sh.update({ "system.hp.value": Math.max(0, (sh.system?.hp?.value ?? 0) - over) }); } catch (e) { todo.push(`take ${over} off ${h.reckon.by}'s shield yourself`); } }
+  if (mine?.rebound) { const n = await hitBack(tok, `${mine.rebound.back}[${mine.rebound.type}]`, { by: target, why: `Rebounding Barrier (${mine.rebound.by})` }); if (n) todo.push(n); }
+  for (const r of rx) { const by = scene.tokens.get(r.token), a = by?.actor; if (!by || !a) continue;
+    try {
+      if (r.slug === "blazing-spirit") { const b = blazingBack(r.level); const n = await hitBack(tok, `{${b.dice}[fire],${b.persistent}[persistent,fire]}`, { by, why: `Blazing Spirit (${r.by})` }); if (n) todo.push(n); }
+      else if (r.slug === "calcifying-sand") { await tok.actor?.setFlag?.(ID, `calcified.${a.id}`, Number(game.time?.worldTime) || 0);
+        const d = await monsterSave(tok, "fortitude", r.dc, `Calcifying Sand (${r.by})`), c = d == null ? null : calcifyBy(d);
+        if (d == null) todo.push(`roll ${tok.name}'s Fortitude save against ${r.by}'s class DC ${r.dc} for Calcifying Sand`);
+        else { if (c) await conditionFx(tok.actor, c === "slowed" ? "Slowed" : "Petrified", `Calcifying Sand (${c})`, "ownEnd");
+          await sayToAll(tok, `Calcifying Sand (${r.by}): ${enemyName(tok).replace(/^t/, "T")} ${["critically fails", "fails", "succeeds", "critically succeeds"][d]} at its Fortitude save${c ? ` and is ${c === "slowed" ? "slowed 1" : "petrified"} until the end of its next turn` : ""}.`); } }
+      else if (r.slug === "blood-vendetta") { const d = await monsterSave(tok, "will", r.dc, `Blood Vendetta (${r.by})`);
+        if (d == null) { todo.push(`roll ${tok.name}'s Will save against ${r.by}'s spell DC for Blood Vendetta`); continue; }
+        const b = bloodBy(d), n = Number(bloodDice(r.rank).split("d")[0]), dice = Math.round(n * b.mult);
+        if (dice > 0) { const x = await hitBack(tok, `${dice}d6[persistent,bleed]`, { by, why: `Blood Vendetta (${r.by})` }); if (x) todo.push(x); }
+        if (b.weak) await rxEffect(tok.actor, { uuid: SPELL_FX.bloodFail, end: "fight", by: r.token }); }
+      else if (r.slug === "eat-fire") await rxEffect(a, { uuid: SPELL_FX.eatFire, level: r.rank, end: "turn", by: r.token });   /* the rest of this turn */
+      else if (r.slug === "consume-power" && taken != null && taken < hit) { await rxEffect(a, { uuid: SPELL_FX.consume, end: "ownEnd", by: r.token }); await addNote(combat, id, `${r.by}'s Consume Power prevented damage: +${Math.floor((r.level ?? 1) / 2)} status to the damage of ${pro("{their}", P(by, combat))} next metal impulse before the end of ${pro("{their}", P(by, combat))} next turn.`); }
+      else if (r.slug === "volcanic-escape") { const n = await hitBack(tok, `${volcanicDice(r.level)}[fire]`, { by, why: `Volcanic Escape (${r.by})`, save: "reflex", dc: r.dc }); if (n) todo.push(n); }
+      else if (r.slug === "pyrefowl-rebuke") { const n = await hitBack(tok, `${pyrefowlDice(r.rank)}[fire]`, { by, why: `Pyrefowl Rebuke (${r.by})`, save: "reflex", dc: r.dc }); if (n) todo.push(n); }
+      else if (["blinding-fury", "overselling-flourish"].includes(r.slug)) todo.push(`rule on ${r.by}'s ${r.reaction} with ${pro("{their}", P(by, combat))} player (the save and what it does)`);
+    } catch (e) { console.error(`${ID} | reaction`, e); todo.push(`finish ${r.by}'s ${r.reaction} yourself (${e.message})`); }
+  }
+  if (todo.length) await addNote(combat, id, `Still to do: ${todo.join("; ")}.`);
 }
 /** Give a reaction back that the module ticked for something that then came to nothing: only its own tick for that reaction, never one made by hand. */
 async function refund(combat, id, target, reaction, words) {
@@ -3772,9 +3995,12 @@ async function turnReactions(combat) {
   const now = combat.combatant?.tokenId; if (now && turns(combat).reacted?.[now]) change[`reacted.${now}`] = null;
   if (now && turns(combat).rx?.[now]) change[`rx.${now}`] = null;   /* a party member's reaction comes back when its turn begins (0.27.0) */
   if (now && turns(combat).ready?.[now]) change[`ready.${now}`] = null;   /* a readied action lasts until the start of that character's next turn (0.35.0) */
+  for (const [t, c] of Object.entries(turns(combat).cloaks ?? {})) if (c && c.by === now) change[`cloaks.${t}`] = null;   /* Cloud Dragon's Cloak: 1 round, to its caster's next turn (0.37.0) */
   if (Object.keys(change).length) await saveTurns(combat, change);
   for (const [key, a] of stepAsks) if (a.combat === combat.id) { stepAsks.delete(key); emitSocket({ t: "stepsClose", key }); }   /* the moment has passed (0.34.0) */
   await dropEarthCover(combat).catch(e => console.warn(`${ID} | cover`, e));   /* Interposing Earth's cover never outlives the turn it was used on */
+  await dropRxEffects(combat, ["step", "turn", "own"], now).catch(e => console.warn(`${ID} | effects`, e));   /* 0.37.0: a step's and a turn's effects end; the effects of the creature whose turn begins */
+  await endOwnTurnFx(combat, combat.previous?.tokenId ?? null, now).catch(e => console.warn(`${ID} | effects`, e));   /* "until the end of its next turn" */
   await tickBarriers(combat).catch(e => console.warn(`${ID} | barrier`, e));   /* its barrier's rounds count down at the caster's turns (0.35.0) */
   noteCarried(combat);
 }
