@@ -453,14 +453,14 @@ function checkPlanIt(plan, ctx) {
     /* a one-plus-hands weapon (a bow) is held in one hand and used with two (0.33.2): the other hand must be free when it Strikes */
     if (s.bothToUse && freeHands < 1 && handsOf.get(s.weapon) !== 2) return { ok: false, reason: `${at}: {their} ${s.name} needs both hands to Strike with, and {their} other hand holds ${listWords([...holding.values()].filter(n => n !== s.name)) || "something"}. A "release" step (a free action) drops it first.` };
     if (s.dropped || (s.weapon && released.has(s.weapon)) || (s.sheathed && released.has(s.id))) return { ok: false, reason: `${at}: {their} ${s.name} is on the ground${s.dropped ? "" : " (released earlier in this plan)"}, so {they} can't Strike with it.` };
-    const t = ctx.targets[step.target]; if (!t) return { ok: false, reason: ctx.allies?.[step.target] || ctx.allyLabels?.includes?.(step.target) ? `${at}: "${step.target}" is on {their} side: a Strike needs a creature {they} {fights|fight}.` : `${at}: {they} {doesn't|don't} know of "${step.target}".` };   /* an ally's label said "doesn't know of" until 0.19.0 */
+    const t = ctx.targets[step.target] ?? ctx.slabs?.[step.target]; if (!t) return { ok: false, reason: ctx.allies?.[step.target] || ctx.allyLabels?.includes?.(step.target) ? `${at}: "${step.target}" is on {their} side: a Strike needs a creature {they} {fights|fight}.` : `${at}: {they} {doesn't|don't} know of "${step.target}".` };   /* an ally's label said "doesn't know of" until 0.19.0 */
     const where = steps.some(x => MOVES.includes(x.do)) ? ` from [${here[0]}, ${here[1]}]` : "";
     /* ammunition: shotsLeft is what the shot's own checks will let through (fight.mjs's ammoOf), counted through the plan */
     if (s.shotsLeft != null) { const k = s.stack ?? s.id, n = (shots[k] ?? 0) + 1; if (n > s.shotsLeft) return { ok: false, reason: `${at}: {they} {has|have} ${s.shotsLeft ? `only ${s.shotsLeft} shot${s.shotsLeft === 1 ? "" : "s"}` : "no shots"} left with ${s.name} (${s.ammo ?? "ammunition"}).` }; shots[k] = n; }
     if (s.ranged) { const d = distanceTo(t, null); if (s.maxRange && d > s.maxRange) return { ok: false, reason: `${at}: ${t.name} is ${d} ft away${where}, out of range of ${s.name} (${s.maxRange} ft).` }; }
     else { const d = distanceTo(t, s.reach); if (d > s.reach) return { ok: false, reason: `${at}: ${t.name} is ${d} ft away${where}, out of reach of ${s.name} (${s.reach} ft).` }; }
     steps.push({ do: "strike", item: s.id, itemName: s.name, target: step.target, targetName: t.name ?? step.target, variant: Math.min(attacks, 2), flat: t.flat ?? 0 });
-    attacks++; took = tookProne = false; last = { do: "strike", item: s.id, target: step.target, effects: s.effects ?? [], reach: s.reach, ranged: !!s.ranged, hit: null };
+    attacks++; took = tookProne = false; last = { do: "strike", item: s.id, target: step.target, effects: t.slab ? [] : s.effects ?? [], reach: s.reach, ranged: !!s.ranged, hit: null };   /* a blow at an earth barrier grabs or trips nothing (0.35.0) */
   }
   return { ok: true, steps };
 }
@@ -811,6 +811,7 @@ export function describeChange(c, nameOf = l => l, self = "It", forms = IT) {
     case "sought": return say(`${who} finished Seeking: what {they} {perceives|perceive} now shows what {they} found.`);
     case "surfaced": return say(`${who} came up out of the ground: what {they} {perceives|perceive} now is what {they} {sees|see} at the surface.`);
     case "noShot": return say(`${who} couldn't shoot {their} ${c.item ?? "weapon"}${c.why ? ` (${c.why})` : ""}; ${c.spent ? "the action is spent ({their} flat check was rolled)" : "the action isn't spent"}.`);
+    case "barrier": return "An earth barrier rose or fell on the map: \"barriers\" in the packet shows the slabs standing now.";   /* 0.35.0 */
     case "hurt": return say(`${who} ${was} hurt.`);
     case "healed": return say(`${who} regained HP.`);
     case "actions": return say(`${its} actions this turn are now ${c.now}.`);

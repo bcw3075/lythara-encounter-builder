@@ -15,7 +15,7 @@ import { acceptYield, backInFight, gmSpeak, onRenderSay, prisonerList, refuseYie
 import { answerCommand, checkSides, commandList, dropBeliefs, onSideChange, pointCard, sideList } from "./fight.mjs";
 import { apiAlive, apiSpend, apiWanted, fightRoute, fixRoute, handOff, modelOf, setApiNote, setModelPick, setRoute, wakeAngel } from "./fight.mjs";
 import { acceptEscapeLines, answerLook, dismissLook, escapeOffers, lookNow } from "./fight.mjs";
-import { markUnseen, maskUnseen, chooseFor, onReactionCard, partyReactors, setReactionUsed, doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCombatGone, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, onMemoryCard, onMemoryUpdate, onMemoryHp, notebookOf, previewRemember, rememberAdd, rememberCross, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
+import { barriersOf, clearBarriers, readiedNow, readyAct, removeBarrier, markUnseen, maskUnseen, chooseFor, onReactionCard, partyReactors, setReactionUsed, doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCombatGone, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, onMemoryCard, onMemoryUpdate, onMemoryHp, notebookOf, previewRemember, rememberAdd, rememberCross, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
 
 const CONTROL = "encounters", apps = new Map(), mindsApps = new Map(); let turnsApp = null, historyApp = null, historyTimer = null;
 /* the history window fills in live; many flag writes come in a burst during a turn, so one redraw per quarter second */
@@ -75,7 +75,7 @@ Hooks.on("getSceneControlButtons", controls => {
 Hooks.on("lythara-survey-sheet.encounterDrawn", scene => { markDrawn(scene); });
 Hooks.on("canvasReady", c => { markReady(c.scene?.id); redrawTurns(); });
 /* a party member's ticks last one fight (0.18.0): the runner clears them when the fight is deleted */
-Hooks.on("deleteCombat", combat => { onCombatGone(combat); untickParty(combat).catch(e => console.warn(`${ID} | untick`, e)); });
+Hooks.on("deleteCombat", combat => { onCombatGone(combat); untickParty(combat).catch(e => console.warn(`${ID} | untick`, e)); clearBarriers(combat).catch(e => console.warn(`${ID} | barrier`, e)); });   /* its earth barriers go with it (0.35.0) */
 for (const h of ["createCombat", "deleteCombat", "createCombatant", "updateCombatant", "deleteCombatant", "deleteToken"]) Hooks.on(h, () => { redrawTurns(); });
 Hooks.on("updateCombat", () => { redrawChip(); });
 /* a brief sent from a chat shows up in an open window */
@@ -135,7 +135,7 @@ Hooks.once("ready", () => {
   watchStalls();
   game.socket.on(`module.${ID}`, (data, senderId) => { onSocket(data, senderId); });
   redrawChip();
-  game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty, fight: { current: currentRequest, busy, reactions: openReactions, doReaction, skipReaction, partyReactions: { list: partyReactors, set: setReactionUsed }, choose: chooseFor, perceived, submitPlan, doIt, hold, playMyself, askAngel, changePlan, rollFor, waitForEvent, checkPlan: checkOnly, reportFailure, state: fightState, saveHistory, openHistory, memory: { of: notebookOf, preview: previewRemember, add: rememberAdd, cross: rememberCross },
+  game.modules.get(ID).api = { readMap, summary, findCreatures, submitBrief, prepare, place, build, clear, nextToParty, fight: { current: currentRequest, busy, reactions: openReactions, doReaction, skipReaction, partyReactions: { list: partyReactors, set: setReactionUsed }, ready: { list: readiedNow, act: readyAct }, barriers: { list: barriersOf, remove: removeBarrier }, choose: chooseFor, perceived, submitPlan, doIt, hold, playMyself, askAngel, changePlan, rollFor, waitForEvent, checkPlan: checkOnly, reportFailure, state: fightState, saveHistory, openHistory, memory: { of: notebookOf, preview: previewRemember, add: rememberAdd, cross: rememberCross },
       /* the leader's orders (0.28.0): `orders.preview(combat, tokenId)` says whether that creature may give one now and who would hear it;
          `orders.give(combat, tokenId, order)` is the GM's Give orders box (never Angel's door: Angel's leader orders from its plan, with an "order"
          step); `orders.hear` is her call on one member for this round; `orders.log` and `orders.words` read the band log */

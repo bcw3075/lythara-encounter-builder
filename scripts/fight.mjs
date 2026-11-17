@@ -16,7 +16,7 @@ import { namer } from "./history.mjs";
 import { RUNGS, STORE_MAX, GM_LINE_MAX, evict, forPacket, gmLine, lineKey, render, rethinkFor, rungOf, severity, sideWords, spellWords, witnessLines } from "./memory.mjs";
 import { readMap, partyLevels, partySize, suggestedLevel } from "./builder.mjs";
 import { aimArea, aimWords, alliesCaught, burstReachable, caughtBy, shapeOf, squaresNear } from "./area.mjs";
-import { AC_ROWS, CHOICES, GUILT, KNOWN, MONSTER_REACTIONS, answerWords, barrierWords, acAdds, canReact, castRank, coverInDc, choiceWords, earthLess, glimpseResistance, guiltLines, guiltWords, harmWords, missWords, notAskedWords, shieldGrantsBlock, spentRows, untilNextTurnEnds, readCard, cardTrigger, degreeAgainst, equipTrigger, finished, fits, gateWords, moveTrigger, proneOffTrigger, stepsAnswerWords, reactionStrike, reactionsOf, routeGates, squaresAlong, untilFor } from "./react.mjs";
+import { AC_ROWS, CHOICES, GUILT, KNOWN, MONSTER_REACTIONS, answerWords, barrierStats, barrierEdge, barrierLabel, barrierCardWords, slabHit, slabWords, READY_WAIT_MS, cleanTrigger, readiedWords, acAdds, canReact, castRank, coverInDc, choiceWords, earthLess, glimpseResistance, guiltLines, guiltWords, harmWords, missWords, notAskedWords, shieldGrantsBlock, spentRows, untilNextTurnEnds, readCard, cardTrigger, degreeAgainst, equipTrigger, finished, fits, gateWords, moveTrigger, proneOffTrigger, stepsAnswerWords, reactionStrike, reactionsOf, routeGates, squaresAlong, untilFor } from "./react.mjs";
 import { MAX_TRIES, choiceOut, cleanChoice, cleanMeta, cleanPlan, eventOut, hello, isChoice, listening, live, nextSeq, pickEvent, stale, stallOf, text, waitSeconds } from "./brain.mjs";
 import { esc } from "./journal.mjs";
 import { breaksYield, cleanGmSay, gestureWords, orderHtml, sayHtml, speechFor, speechForPacket, speechLanguage, understands } from "./speech.mjs";
@@ -338,7 +338,9 @@ async function buildPacket(combat, tok, turn = {}) {
   const lost = lostByAllies(combat, tok, others);
   const cmd = commandNow(combat, tok), command = cmd && (cmd.degree >= 2 || cmd.angel) ? commandForPacket(cmd, { from: nameable.has(cmd.by) ? labels[cmd.by] ?? null : null, sees: !cmd.foe || others.some(o => labels[o.id] === cmd.foe && canTarget(o.state)), forms: P(tok, combat) }) : null;
   const turned = turnedPacket(combat, tok, id => nameable.has(id) ? labels[id] ?? null : null); if (turned) you.changedSides = turned;
-  const packet = packetOf({ you, mind: minded.mind, band: banded.band, bandNow: banded.bandNow, orders, speech, command, notebook, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], ground: groundAround(model, square, GROUND_RADIUS, undefined, takeCoverSquares(scene), water, soil && !glides ? (x, y) => !soil(x, y) && !model.blocked[model.idx(x, y)] && !water(x, y) : null),
+  /* earth barriers (0.35.0): what it sees of each slab on the map, its caster by label only when it perceives them */
+  const barriers = a.hasCondition?.("blinded") ? [] : barriersOf(combat, scene.id).map(b => ({ label: b.label, squares: b.squares, by: nameable.has(b.caster) ? labels[b.caster] ?? null : null, ac: b.ac, hardness: b.hardness, hp: `${Math.max(0, b.hp)}/${b.max}` }));
+  const packet = packetOf({ you, mind: minded.mind, band: banded.band, bandNow: banded.bandNow, orders, speech, command, notebook, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], barriers, ground: groundAround(model, square, GROUND_RADIUS, undefined, takeCoverSquares(scene), water, soil && !glides ? (x, y) => !soil(x, y) && !model.blocked[model.idx(x, y)] && !water(x, y) : null),
     allies: allies.map(x => ({ label: labels[x.id], name: nameFor(x), square: squareOf(x, scene), ...(heightUp(x) ? { height: heightUp(x) } : {}), ...(isBelow(x) ? { below: true } : {}), healthWord: wordsFor(x.actor), conditions: visibleConditions(conditionsOn(x.actor)), ...(stoodDown(x) ? { yielded: true } : {}) })),
     others: others.map(o => ({ id: o.id, state: o.state, label: labels[o.id], square: o.square, ...(o.pointed ? { pointed: true } : {}), ...(lost.has(o.id) ? { alliesLost: true } : {}), height: o.pointed ? o.height ?? 0 : heightUp(o.token), offGrid: offGrid(o.token, scene), size: o.token.actor.size, distance: o.distance, gear: gearOf(o.token.actor), conditions: visibleConditions(conditionsOn(o.token.actor)), healthWord: wordsFor(o.token.actor), cover: cover?.getAutoCoverState?.(tok.object, o.token.object) ?? "none", ...(stoodDown(o.token) ? { yielded: true } : {}) })) });
   return { packet, labels: labelsOf(others.map(o => ({ id: o.id, state: o.state, label: labels[o.id] }))), fresh, others, mindHeld: [...minded.held.map(h => h.key), ...banded.held.map(k => `band.${k}`)] };
@@ -593,6 +595,7 @@ export function onTokenFlag(tok, change) {
     which carries on from the record and never repeats a step. */
 export async function onRunnerReady() {
   if (!isRunner()) return;
+  await sweepBarriers().catch(e => console.warn(`${ID} | barrier`, e));   /* earth barriers left by a fight that is gone, or half-made (0.35.0) */
   for (const combat of game.combats.filter(c => c.started)) {
     const r = currentRequest(combat);
     if (r?.state === "running" && !running.has(r.id)) await save(combat, r.id, { state: "stopped", go: false, note: `${game.user.name}'s page reloaded during this turn. Check the chat and HP, then Do it carries on from where it stopped.` });
@@ -626,6 +629,9 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
   /* only what it perceived when asked, and still does: a plan can't name anything else */
   const now = new Map(sense(combat, tok, turns(combat).memory?.[tok.id] ?? {}).map(o => [o.id, o])), targets = {};
   for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && canTarget(o.state)) targets[label] = { name: label, square: o.square, ...(o.state === "hidden" ? {} : placeOf(o.token, scene)), size: sizeOf(o.token), ...heightOf(o.token), ...(o.pointed ? { elev: o.height ?? 0 } : {}), flat: flatDC(o.state),   /* a pointed-out creature: the height it was pointed out at, never where it is now (0.30.0 review 3) */ cat: o.token.actor?.size ?? null, held: !!turns(combat).grips?.[tok.id]?.[tokenId] && isHeld(o.token.actor) }; }
+  /* earth barriers standing on this map (0.35.0): a Strike may be aimed at one, counted to the square on its far side from its caster (the side
+     a monster comes from); a blinded monster sees none */
+  const slabs = {}; if (!actor.hasCondition?.("blinded")) for (const b of barriersOf(combat, scene.id)) slabs[b.label] = { name: "the earth barrier", square: b.squares[1], pos: b.squares[1], span: 1, size: 1, elev: 0, depth: 1, flat: 0, slab: true };   /* only a Strike may name one (review 6) */
   /* moves are worked out only for a plan that has a Stride, Step or Crawl, so trouble there can't stop a plan of Strikes */
   const speed = landSpeed(actor), flySpeed = flySpeedOf(actor), swimSpeed = swimSpeedOf(actor), burrowSpeed = burrowSpeedOf(actor); let route = null;
   if (moves) { try { route = await mover(combat, tok, speed, knownTo(combat, tok, [...now.values()]), flySpeed, swimSpeed, burrowSpeed); } catch (e) { console.error(`${ID} | moves`, e); const why = `I couldn't work out moves here (${e.message}).`; route = () => ({ ok: false, reason: why }); } }
@@ -633,7 +639,7 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
   const vis = visionerApi(), coverFrom = {};
   if (vis) for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && SEES.includes(o.state)) { const l = coverOf(vis, o.token, tok); if (STANDARD.includes(l)) coverFrom[label] = l; } }
   return { pro: P(tok, combat),   /* its own pronoun, for every reason `checkPlan` gives (0.30.1) */
-    actions: Math.max(0, actionsOf(actor, combat) - (req.spent ?? 0) - used.actions), attacksBefore: (req.attacks ?? 0) + used.attacks, strikes, targets,
+    actions: Math.max(0, actionsOf(actor, combat) - (req.spent ?? 0) - used.actions), attacksBefore: (req.attacks ?? 0) + used.attacks, strikes, targets, slabs,
     me: { square: squareOf(tok, scene), ...placeOf(tok, scene), size: sizeOf(tok), ...heightOf(tok), cat: actor.size ?? null }, speed, flySpeed, swimSpeed, waterAt: route?.waterAt, waterIn: route?.waterIn,
     /* Climb and Release (0.15.0): its climb Speed, the trees beside a square, the tree it is up now, what it holds */
     /* Burrow (0.16.0): its burrow Speed, whether it is under the ground now, soil under a footprint, a creature it knows of where it would come up */
@@ -740,7 +746,7 @@ const STONE_NAME = /^stone walls?\b/i;
 const stoneRegions = scene => scene.regions.filter(r => r.getFlag(ID, "stoneWalls") || STONE_NAME.test(r.name ?? ""));
 /** The walls whose material the map doesn't say: anything that stops movement and isn't a door or one of Survey Sheet's (its trunks are wood, its stones,
     ruin walls, outcrops and cave rock are stone). */
-const plainWalls = scene => scene.walls.filter(w => w.move !== CONST.WALL_MOVEMENT_TYPES.NONE && !w.door && !w.flags?.[SURVEY]?.enc);
+const plainWalls = scene => scene.walls.filter(w => w.move !== CONST.WALL_MOVEMENT_TYPES.NONE && !w.door && !w.flags?.[SURVEY]?.enc && !w.flags?.[ID]?.barrier);   /* an earth barrier (0.35.0) is no wall of the map's own */
 /** Whether the walls of a scene have been judged (the scene's flag, or stone-walls regions the GM drew herself). */
 const wallsJudged = scene => !!scene.getFlag(ID, "walls") || stoneRegions(scene).length > 0;
 /** wall -> whether a glider passes through it: Survey Sheet's features yes and its trunks no; a door never (a way through, wood or metal); any other
@@ -1300,8 +1306,8 @@ async function runStrike(combat, id, i, step, tok, target) {
         await record({ attack: { message: message.id, degree, ...(degree !== base ? { was: base, against: dc } : {}), ...(left != null ? { ammoLeft: left } : {}) } });
         if (degree !== base) await addNote(combat, id, `${raised.by}: against AC ${dc} ${step.itemName}'s ${OUTCOMES[base] ?? "result"} becomes a ${OUTCOMES[degree] ?? "different result"}.`);
         if (base >= 2 && degree < 2) await sayToAll(target, missWords(target.name, raised.by));   /* every reduction says why (Rhea, 2026-11-11) */
-        /* Interposing Earth's barrier outlives a miss (0.27.0): the GM's to rule on for its 3 rounds; putting it on the map is a later pass */
-        if (raised.earth && degree < 2) await addNote(combat, id, `Between ${target.name} and ${tok.name}, the earth barrier ${barrierWords(raised.earth.spell?.rank)}`);
+        /* Interposing Earth's barrier outlives a miss: since 0.35.0 it stands on the map as a wall with its picture (Rhea, q-36) */
+        if (raised.earth && degree < 2) await raiseBarrier(combat, id, i, target, tok, raised.earth.spell?.rank).catch(e => { console.error(`${ID} | barrier`, e); return addNote(combat, id, `${target.name}'s earth barrier should stand between ${target.name} and ${tok.name} for 3 rounds, but I couldn't put it on the map (${e.message}): yours to rule on.`); });
       } else if (now === "damage") {
         let hr; try { hr = await hitGate(combat, id, i, step, tok, target, { melee: !strike.item?.isRanged, damageTypes: damageTypesOf(strike) }, get); } catch (e) { console.error(`${ID} | reactions`, e); hr = null; await addNote(combat, id, `I couldn't ask the reactions to ${step.itemName}'s hit (${e.message}); damage went ahead.`); }   /* Shield Block, Reactive Shield (0.20.0) */
         if (hr === "manual") return "next"; if (hr === "held" || hr === "gone") return hr; if (hr === "missed") continue;
@@ -1409,13 +1415,20 @@ async function runStride(combat, id, i, step, tok) {
   }); } finally { if (dig) await setBelow(tok, isBelow(tok)).catch(e => console.warn(`${ID} | burrowing`, e)); } })();   /* hidden only while really below, even if the move failed (0.16.0 review) */
   /* a Stride's waypoint w is route square w + 1: to stop on route square k it moves along waypoints 0..k-1, is asked, then goes on (0.20.0) */
   let charged = null, from = 0, held = false; const add = got => { if (got?.cost != null) charged = { cost: (charged?.cost ?? 0) + got.cost }; else if (!charged) charged = got; };
+  /* someone readied (0.35.0): the move goes a square at a time, so a Now! stops it in the square it was entering. Not under the ground. */
+  /* a Now! stops it in the square it was entering, waits for the readied action, then it goes on unless it can't (as after a reaction) */
+  const watchReady = !dig && readiedNow(combat).length > 0;
+  const goAll = async wps => { if (!watchReady) { add(await go(wps)); return null; }
+    for (const w of wps) { add(await go([w]));
+      if (request(combat, id)?.readied) { const r = await waitReadied(combat, id, true); if (r !== "ok") return r; if (stopped()) return "stopped"; } }
+    return null; };
   for (const g of gates.filter(g => g.k > 0)) {
-    add(await go(waypoints.slice(from, g.k))); from = g.k;
+    const ga = await goAll(waypoints.slice(from, g.k)); if (ga === "manual" || ga === "gone") { await finish({ moved: { to: squareOf(tok, scene), cost: charged?.cost ?? null } }); return ga === "gone" ? "gone" : "next"; } if (ga) { held = true; break; } from = g.k;
     const res = await askReactions(combat, id, i, `move:${g.k}`, "move", tok, g.list);
     if (res === "manual" || res === "gone") { await finish({ moved: { to: squareOf(tok, scene), cost: charged?.cost ?? null } }); return res === "gone" ? "gone" : "next"; }
     if (stopped()) { held = true; break; }   /* it can't go on: it stops where it is */
   }
-  if (!held && from < waypoints.length) add(await go(waypoints.slice(from)));
+  if (!held && from < waypoints.length) { const ga = await goAll(waypoints.slice(from)); if (ga === "gone") { await finish({ moved: { to: squareOf(tok, scene), cost: charged?.cost ?? null } }); return "gone"; } }
   await finish({ moved: { to: squareOf(tok, scene), cost: charged?.cost ?? null } });
   if (dig && surfaceTaken) await addNote(combat, id, `${tok.name} couldn't come up at square ${step.to[0]}, ${step.to[1]}: something is there. {They} {stays|stay} below ground.`);
   if (fly && tok.getFlag(ID, "climbing")) await setClimbing(tok, null).catch(e => console.warn(`${ID} | climbing`, e));   /* it flew off its tree: not holding on any more */
@@ -2244,9 +2257,9 @@ async function awaitAreaSaves(combat, id, i, step, tok) {
   const known = new Map([...Object.entries(r.labels ?? {}).map(([l, t]) => [t, l]), ...Object.entries(alliesByLabel(combat, tok)).map(([l]) => [tokenIdOf(combat, r, l), l])]);
   const results = Object.entries(saves).filter(([t]) => known.has(t)).map(([t, d]) => `${known.get(t)} ${CHECK_OUTCOMES[d]}`).join(", ");
   let gm = step.critText ? `Anything ${step.itemName}'s text gives beyond its damage for each degree is yours to apply from its card.` : null;
-  /* Interposing Earth's barrier outlives a save that takes no damage (0.27.0): the GM's to rule on for its 3 rounds */
+  /* Interposing Earth's barrier outlives a save that takes no damage: since 0.35.0 it stands on the map (Rhea, q-36), between the caster and the monster */
   const stands = (r.gates?.[i]?.before?.list ?? []).filter(x => x.answer === "done" && x.slug === "interposing-earth" && !(SAVE_MULT[saves[x.token]] > 0));
-  if (stands.length) gm = [gm, ...stands.map(x => `${x.name}'s earth barrier ${barrierWords(x.spell?.rank)}`)].filter(Boolean).join(" ");
+  for (const x of stands) { const caster = scene.tokens.get(x.token); if (caster) await raiseBarrier(combat, id, i, caster, tok, x.spell?.rank).catch(e => { console.error(`${ID} | barrier`, e); gm = [gm, `${x.name}'s earth barrier should stand for 3 rounds, but I couldn't put it on the map (${e.message}): yours to rule on.`].filter(Boolean).join(" "); }); }
   await saveTurns(combat, { [`requests.${id}.log.${i}.saves`]: saves, [`requests.${id}.log.${i}.rows`]: Object.keys(saves), [`requests.${id}.log.${i}.waiting`]: null, [`requests.${id}.log.${i}.results`]: results,
     ...Object.fromEntries(rows.map(t => [`requests.${id}.rollFor.${t}`, null])), ...(gm ? { [`requests.${id}.note`]: joinNote(combat, id, gm) } : {}) });
   return "saved";
@@ -2433,11 +2446,16 @@ async function runTurn(combat, requestId) {
       if (step.do === "ability" && look.next?.do === "ability" && (look.next.mode !== step.mode || look.next.target !== step.target)) { step = look.next; r.steps[i] = step; await save(combat, requestId, { steps: r.steps }); }
       /* an area as it checks out now: where it stands and who it catches */
       if (step.do === "spell" && step.area?.aim && look.next?.do === "spell" && JSON.stringify(look.next.area) !== JSON.stringify(step.area)) { step = look.next; r.steps[i] = step; await save(combat, requestId, { steps: r.steps }); }
+      /* someone readied (0.35.0): the step waits a moment for a Now!, then for the readied action; after one, the look runs again */
+      { const rw = await readyWindow(combat, requestId); if (await readyEnd(combat, requestId, i, rw.w)) return; if (rw.took) { i--; continue; } }
       /* out of hiding just before anything but Hide, Sneak, Step or an attack (Rhea, 2026-11-07, A) */
       if (revealsBefore(step)) await comeOut(combat, requestId, tok, actWords(step)).catch(e => console.warn(`${ID} | out of hiding`, e));
     }
     let work = null, blind = false;
-    if (step.do === "strike") {
+    const slab = step.do === "strike" ? barrierByLabel(combat, step.target) : null;
+    if (slab || (step.do === "strike" && request(combat, requestId).log?.[i]?.slab)) work = () => runSlabStrike(combat, requestId, i, step, tok, slab);   /* a Strike at an earth barrier (0.35.0); one done before a reload counts as done */
+    else if (step.do === "strike" && step.target?.startsWith?.("B") && !r.labels?.[step.target]) return save(combat, requestId, { state: "stopped", note: `The earth barrier ${tok.name} meant to strike is gone.` });
+    else if (step.do === "strike") {
       const target = sceneOf(combat).tokens.get(r.labels[step.target]); if (!target) return save(combat, requestId, { state: "stopped", note: `${step.targetName} is gone.` });
       /* a creature it knows only from a pointed-out square that is wrong (0.30.0): the blow goes at the empty square */
       blind = wrongBelief(combat, tok, target); work = blind ? () => runBlindMiss(combat, requestId, i, step, tok, target) : () => runStrike(combat, requestId, i, step, tok, target);
@@ -2527,7 +2545,9 @@ async function runTurn(combat, requestId) {
         return save(combat, requestId, { pos: i + 1, coverSettled: i + 1, state: end ? "done" : "ready", ...(end ? { gmEnded: true } : { gmWait: true }) }); }   /* gmWait: ticking Auto doesn't run past it (0.17.0 review) */
     }
     if (request(combat, requestId).state === "manual") return;
-    if (i + 1 >= r.steps.length) { await save(combat, requestId, { pos: i + 1, coverSettled: i + 1, state: "done" }); return endAfter(combat, requestId); }
+    if (i + 1 >= r.steps.length) {
+      { const rw = await readyWindow(combat, requestId); if (await readyEnd(combat, requestId, i + 1, rw.w)) return; }   /* a readied action set off by its last step (0.35.0) */
+      await save(combat, requestId, { pos: i + 1, coverSettled: i + 1, state: "done" }); return endAfter(combat, requestId); }
     /* an order is speech, not an action: it costs no Next step press and no pause (0.28.0, design review 6) */
     if (step.do === "order" || step.do === "say") { await save(combat, requestId, { pos: i + 1, coverSettled: i + 1 }); continue; }
     if (!tok.getFlag(ID, "auto")) return save(combat, requestId, { pos: i + 1, coverSettled: i + 1, state: "ready" });   /* Next step */
@@ -2542,6 +2562,8 @@ async function lookAgain(combat, r, i, tok) {
   if (r.nbEdit && canRethink(combat, r, i, tok)) return { changes: [{ who: "gm", what: "notebook" }], gm: true };   /* the GM crossed out or added a notebook line while a step ran (0.25.0) */
   const changes = changesSince(r.seen, situationNow(combat, tok, r.labels));
   if (changes.length) return { changes };
+  /* an earth barrier rose or fell since the plan was made (0.35.0): it sees a new wall, or one gone */
+  if (r.packet && !tok.actor?.hasCondition?.("blinded")) { const was = (r.packet.barriers ?? []).map(b => b.label).sort().join(), now = barriersOf(combat, sceneOf(combat).id).map(b => b.label).sort().join(); if (was !== now) return { changes: [{ who: "me", what: "barrier" }] }; }
   /* a heal or a casting by someone else that it perceived since this plan was asked for (0.25.0, review 4: never a line that follows from its own step) */
   const saw = rethinkFor(books(combat)[tok.id], { rung: rungOf(r.packet?.mind?.pick?.mind), after: r.nbAt ?? r.at ?? 0 }); if (saw.length) return { changes: [...new Map(saw.map(x => [`${x.who}|${x.what}`, { who: x.who, what: x.what }])).values()] };
   const left = (r.plan?.steps ?? []).slice(i), rest = checkPlan({ steps: left }, await gather(combat, r, spentBy(r.steps.slice(0, i)), { moves: hasMove(left), spells: hasSpell(left), before: i > 0 ? { step: r.steps[i - 1], rec: r.log?.[i - 1] ?? {} } : null }));
@@ -2926,7 +2948,8 @@ export const reactionUsed = (combat, tokenId) => turns(combat).rx?.[tokenId] ?? 
 export function partyReactors(combat) {
   const out = []; if (!combat?.started) return out;
   for (const c of combat.combatants) { const t = c.token, a = t?.actor; if (!t || !a || c.defeated || a.alliance !== "party" || !reactsLikeParty(a)) continue;
-    out.push({ id: t.id, name: t.name, used: reactionUsed(combat, t.id), delaying: !!c.getFlag(HUD, "delayed"), mine: !game.user.isGM && !!a.testUserPermission?.(game.user, "OWNER") }); }
+    const ready = turns(combat).ready?.[t.id] ?? null, waiting = Object.entries(turns(combat).requests ?? {}).find(([, r]) => r?.readied?.tokens?.includes(t.id) && r.round === combat.round)?.[0] ?? null;
+    out.push({ id: t.id, name: t.name, used: reactionUsed(combat, t.id), delaying: !!c.getFlag(HUD, "delayed"), mine: !game.user.isGM && !!a.testUserPermission?.(game.user, "OWNER"), ready, waiting }); }
   return out;
 }
 const writeUsed = (combat, tokenId, v) => saveTurns(combat, { [`rx.${tokenId}`]: v ? whole({ round: combat.round, at: Date.now(), ...v }) : null });
@@ -2950,6 +2973,84 @@ export function onReactionCard(message) {
   const used = item.type === "spell" ? item.system?.time?.value === "reaction" && !!f.casting : ["action", "feat"].includes(item.type) && item.system?.actionType?.value === "reaction";
   if (used) markUsed(combat, tok.id, item.name, "card").catch(e => console.warn(`${ID} | reaction box`, e));
 }
+/* ---------- Ready (0.35.0; Rhea, 2026-11-16, q-37: ""Now!" button (Recommended)") ---------- */
+/* A Ready card posted by a party member marks them readied (`turns.ready.<token id>`: the round, and the trigger the player types on the chip, may be
+   blank). While anyone readied still has their reaction, each monster step waits READY_WAIT_MS before it resolves (and once after the last), and a
+   move goes a square at a time. Now! ticks the reaction box, clears Readied and puts the character on the turn in hand (`readied`): the running step
+   waits where it is (before the step, or in the square a move was entering), as it waits for a reaction question, until that player's Done or her
+   Continue; then the look before the step runs again (a move goes on from where it stopped). A turn not running when Now! comes waits the same way
+   once Do it or Auto runs it. Readied clears at that character's next turn (or a round later if that turn never comes), on Now!, or by Clear on her
+   card. Rules: Ready, Player Core pg. 417, checked on Archives of Nethys 2026-11-16 (it uses the reaction; it lasts until the start of the reader's
+   next turn). */
+async function setReady(combat, tok) {
+  if (!isRunner() || !combat?.started || tok.actor?.alliance !== "party" || !reactsLikeParty(tok.actor) || !combat.combatants.some(c => c.tokenId === tok.id)) return;
+  const was = turns(combat).ready?.[tok.id];
+  await saveTurns(combat, { [`ready.${tok.id}`]: whole({ round: combat.round, at: Date.now(), trigger: was?.trigger ?? "" }) });
+}
+/** Who is readied and can still act on it now: their reaction unused, in this fight, standing, and readied this round or the last (a readied
+    action lasts until the start of their next turn: a character whose turn never came isn't readied for ever). [{ id, name, trigger }] */
+export function readiedNow(combat) {
+  const out = []; if (!combat?.started) return out;
+  for (const [id, v] of Object.entries(turns(combat).ready ?? {})) { if (!v) continue; const c = combat.combatants.find(x => x.tokenId === id), t = c?.token;
+    if (!t?.actor || c.defeated || reactionUsed(combat, id) || isDown(t.actor) || (Number(v.round) || 0) < combat.round - 1) continue; out.push({ id, name: t.name, trigger: v.trigger ?? "" }); }
+  return out;
+}
+/** The chip's and the card's buttons: a player's go to the runner by socket; on the runner they act at once. op: "text" (the trigger), "now",
+    "done" (also her Continue, with the turn's request id), "clear" (a GM's). */
+export async function readyAct(combat, tokenId, op, text = "", requestId = null) {
+  if (!["text", "now", "done", "clear"].includes(op)) return;
+  if (op === "clear" && !game.user.isGM) return;
+  if (isRunner()) return readyNowOn(combat, tokenId, op, text, game.user, requestId);
+  emitSocket({ t: "ready", combat: combat.id, token: tokenId, op, text: op === "text" ? cleanTrigger(text) : "", request: requestId });
+}
+async function readyNowOn(combat, tokenId, op, text, from, requestId = null) {
+  if (op === "done") {
+    /* her Continue ends the wait for everyone on that turn; a player's Done only for their own character, on this round's turn */
+    const reqs = Object.entries(turns(combat).requests ?? {}).map(([id, x]) => ({ ...x, id }));
+    const r = from?.isGM && requestId ? reqs.find(x => x.id === requestId && x.readied) : reqs.find(x => x.round === combat.round && x.readied?.tokens?.includes(tokenId));
+    if (!r) return;
+    const left = from?.isGM && requestId ? [] : r.readied.tokens.filter(t => t !== tokenId);
+    await save(combat, r.id, { readied: left.length ? whole({ ...r.readied, tokens: left, names: r.readied.names.filter((_, k) => r.readied.tokens[k] !== tokenId) }) : null });
+    return;
+  }
+  const t = sceneOf(combat)?.tokens.get(tokenId); if (!t) return;
+  const was = turns(combat).ready?.[tokenId];
+  if (op === "text") { if (was) await saveTurns(combat, { [`ready.${tokenId}`]: whole({ ...was, trigger: cleanTrigger(text) }) }); return; }   /* the whole record: never a field on one just cleared */
+  if (op === "clear") { await saveTurns(combat, { [`ready.${tokenId}`]: null }); return; }
+  /* now */
+  if (!was || reactionUsed(combat, tokenId)) return;
+  await saveTurns(combat, { [`ready.${tokenId}`]: null, [`rx.${tokenId}`]: whole({ round: combat.round, at: Date.now(), by: "ready", reaction: "Ready", user: from?.name ?? null }) });   /* Now! ticks the box: Ready is the reaction */
+  const r = currentRequest(combat);
+  if (!r || r.reaction || ["done", "manual", "fled"].includes(r.state)) return;   /* no monster turn to wait: the player acts, the box shows it */
+  const rd = r.readied ?? { tokens: [], names: [], moved: false };
+  await save(combat, r.id, { readied: whole({ ...rd, tokens: [...rd.tokens, tokenId], names: [...rd.names, t.name], at: Date.now() }) });
+}
+/** While a readied action is being taken (Now! pressed), the step waits where it is. Returns "ok" once everyone readied pressed Done (or she pressed
+    Continue), "manual" (Play it myself) or "gone" (the turn moved on). moved: it waits in the middle of a move. */
+async function waitReadied(combat, id, moved = false) {
+  if (moved && request(combat, id)?.readied && !request(combat, id).readied.moved) await save(combat, id, { "readied.moved": true });
+  for (;;) {
+    const n = request(combat, id); if (!n?.readied?.tokens?.length) return "ok";
+    if (n.state === "manual") return "manual"; if (turnMovedOn(combat, n)) return "gone";
+    await new Promise(r => setTimeout(r, 250));
+  }
+}
+/** Before a monster step resolves, while someone is readied: wait READY_WAIT_MS for a Now!, and then for the readied action. "ok" to go on with the
+    step (the caller looks again if a readied action was taken: `took`), "manual", "gone", or "held" (Hold pressed meanwhile). */
+async function readyWindow(combat, id) {
+  let took = false;
+  if (request(combat, id)?.readied) { took = true; const w = await waitReadied(combat, id); if (w !== "ok") return { w }; }
+  if (!readiedNow(combat).length) return { w: "ok", took };
+  const end = Date.now() + READY_WAIT_MS;
+  while (Date.now() < end) {
+    await new Promise(r => setTimeout(r, 150)); const n = request(combat, id);
+    if (!n || n.state === "manual") return { w: "manual" }; if (turnMovedOn(combat, n)) return { w: "gone" }; if (n.hold) return { w: "held" };
+    if (n.readied) { const w = await waitReadied(combat, id); return w === "ok" ? { w: "ok", took: true } : { w }; }
+  }
+  return { w: "ok", took };
+}
+/** What the turn does after the wait: null to go on, or the request's ending. */
+const readyEnd = (combat, id, i, w) => w === "manual" ? save(combat, id, { state: "manual" }).then(() => true) : w === "gone" ? save(combat, id, { state: "stopped", pos: i, note: joinNote(combat, id, `The turn moved on during a readied action, before step ${i + 1}.`) }).then(() => true) : w === "held" ? save(combat, id, { state: "held", hold: false, pos: i, note: "Held before the next step." }).then(() => true) : null;
 /* Attack rolls made while a question is open, from any page (the createChatMessage hook): a Reactive Strike's critical hit disrupts a manipulate action.
    Collected on the runner by the hook, not compared by clocks (review finding 14). */
 const rxWatch = new Map();
@@ -3050,7 +3151,7 @@ async function beforeAction(combat, id, i, step, tok, target) {
   for (const x of res.list) if (x.answer === "done" && x.slug === "interposing-earth" && x.gate === "area") { const a = sceneOf(combat).tokens.get(x.token)?.actor;
     try { if (a && !(a.itemTypes?.effect ?? []).some(e => e.getFlag?.(ID, "earth"))) await addEarthCover(a);   /* once: a step held and started again comes back here (review 9) */
       /* an area the GM resolves from its card (review 2): the cover stays until the turn moves on, and the 2 off is hers to take */
-      if (a && step.mode !== "area") await addNote(combat, id, `${x.name} used Interposing Earth against ${step.itemName}: ${pro("{they} {has|have} cover for {their} save", P(sceneOf(combat).tokens.get(x.token ?? x.id), combat))} until this turn ends; take ${earthLess(x.spell?.rank)} off the damage ${pro("{they} {takes|take}", P(sceneOf(combat).tokens.get(x.token ?? x.id), combat))} yourself (the barrier is then destroyed), or it ${barrierWords(x.spell?.rank)}.`); } catch (e) { console.error(`${ID} | cover`, e); await addNote(combat, id, `I couldn't give ${x.name} cover from Interposing Earth (${e.message}): add 2 to ${pro("{their}", P(sceneOf(combat).tokens.get(x.token ?? x.id), combat))} Reflex save.`); } }
+      if (a && step.mode !== "area") await addNote(combat, id, `${x.name} used Interposing Earth against ${step.itemName}: ${pro("{they} {has|have} cover for {their} save", P(sceneOf(combat).tokens.get(x.token ?? x.id), combat))} until this turn ends; take ${earthLess(x.spell?.rank)} off the damage ${pro("{they} {takes|take}", P(sceneOf(combat).tokens.get(x.token ?? x.id), combat))} yourself (the barrier is then destroyed), or if none is taken it stands for 3 rounds (AC 5, Hardness ${barrierStats(x.spell?.rank).hardness}, ${barrierStats(x.spell?.rank).hp} HP): yours to put on the map and rule on, since you resolve this area.`); } catch (e) { console.error(`${ID} | cover`, e); await addNote(combat, id, `I couldn't give ${x.name} cover from Interposing Earth (${e.message}): add 2 to ${pro("{their}", P(sceneOf(combat).tokens.get(x.token ?? x.id), combat))} Reflex save.`); } }
   if (downNow(tok)) return "down";
   if (res.held) return "held";
   const struck = new Set(res.list.filter(x => x.answer === "done" && KNOWN[x.slug]?.reach).map(x => x.actor));
@@ -3074,6 +3175,119 @@ function beforeKinds(actor, step, target) {
 function acRaised(combat, id, i, target) {
   const rows = (request(combat, id)?.gates?.[i]?.before?.list ?? []).filter(x => x.answer === "done" && AC_ROWS.includes(x.slug) && x.token === target?.id).sort((a, b) => KNOWN[b.slug].ac - KNOWN[a.slug].ac);
   return { bonus: rows.length ? KNOWN[rows[0].slug].ac : 0, by: rows.map(x => x.reaction).join(" and ") || "A reaction", earth: rows.find(x => x.slug === "interposing-earth") ?? null };
+}
+/* ---------- Interposing Earth's barrier on the map (0.35.0; Rhea, 2026-11-16, q-36: "Wall plus picture (Recommended)") ---------- */
+/* When the caster isn't damaged, the barrier stays: a wall on the square edge between the caster and the source (nothing moves across it; Visioner's
+   cover override on the wall gives standard cover behind it, both ways, and it doesn't block sight: a 5-ft slab hides nobody) and a slab picture on
+   the edge with its HP and rounds. Records live on the fight (`turns.barriers.<key>`); the wall and the pictures carry `flags.<ID>.barrier` so they
+   can be found and removed after the fight is gone. Rules: Rage of Elements pg. 95, checked on Archives of Nethys 2026-11-16. */
+const SLAB_FILL = "#8b6a43", SLAB_EDGE = "#3b2a17";
+/** The barriers standing now (one cut half-made by a reload is left out; its parts go with the fight's end). */
+export const barriersOf = (combat, sceneId = null) => Object.entries(turns(combat)?.barriers ?? {}).filter(([, b]) => b && !b.raising && (!sceneId || b.scene === sceneId)).map(([key, b]) => ({ ...b, key }));
+const barrierByLabel = (combat, label) => label ? barriersOf(combat).find(b => b.label === label) ?? null : null;
+const senseNone = () => (CONST.EDGE_SENSE_TYPES ?? CONST.WALL_SENSE_TYPES).NONE;
+/** The two pictures of a barrier: the slab on the edge and its label above it. */
+function barrierPics(scene, b) {
+  const px = scene.grid.size, d = scene.dimensions, t = Math.max(6, Math.round(px * 0.12)), [ax, ay] = [d.sceneX + b.edge[0][0] * px, d.sceneY + b.edge[0][1] * px], upright = b.edge[0][0] === b.edge[1][0];
+  const flags = { [ID]: { barrier: { combat: b.combat, key: b.key } } }, w = Math.round(px * 2.6), h = Math.round(px * 0.34);
+  const slab = { x: upright ? ax - t / 2 : ax, y: upright ? ay : ay - t / 2, shape: { type: "r", width: upright ? t : px, height: upright ? px : t }, fillType: CONST.DRAWING_FILL_TYPES.SOLID, fillColor: SLAB_FILL, fillAlpha: 1, strokeWidth: 2, strokeColor: SLAB_EDGE, strokeAlpha: 1, locked: true, flags };
+  const cx = upright ? ax : ax + px / 2, top = upright ? ay : ay - t / 2;
+  const text = { x: Math.round(cx - w / 2), y: Math.round(top - h - 6), shape: { type: "r", width: w, height: h }, fillType: CONST.DRAWING_FILL_TYPES.SOLID, fillColor: "#111111", fillAlpha: 0.75, strokeWidth: 0, text: barrierLabel(b), fontSize: Math.max(12, Math.round(px * 0.2)), textColor: "#ffffff", locked: true, flags };
+  return [slab, text];
+}
+/** Put the barrier on the map, once per caster and step (a reload never makes two), and say so on the card. caster: the token that cast it; source:
+    the monster whose attack or area it answered. */
+async function raiseBarrier(combat, id, i, caster, source, rank) {
+  if (!isRunner()) return;
+  const scene = sceneOf(combat), key = `${id}-${i}-${caster.id}`; if (!scene || turns(combat).barriers?.[key]) return;
+  const q = placeOf(source, scene), e = barrierEdge({ pos: squareOf(caster, scene), span: sizeOf(caster) }, { x: q.pos[0] + q.span / 2, y: q.pos[1] + q.span / 2 });   /* the grid square it mostly stands on: the wall goes on a grid line (review 9) */
+  const st = barrierStats(rank), label = `B${Object.keys(turns(combat).barriers ?? {}).length + 1}`, px = scene.grid.size, d = scene.dimensions;
+  const b = { key, label, combat: combat.id, scene: scene.id, caster: caster.id, casterName: caster.name, source: source.id, side: e.side, edge: [e.a, e.b], squares: [e.near, e.far], ac: st.ac, hardness: st.hardness, hp: st.hp, max: st.hp, left: st.rounds, rank: Number(rank) || 1, round: combat.round,
+    ...(combat.combatant?.tokenId === caster.id ? { ticked: `${combat.round}` } : {}) };   /* raised on the caster's own turn: that turn's start has passed (review nit) */
+  await saveTurns(combat, { [`barriers.${key}`]: whole({ ...b, raising: true }) });   /* marked first: a reload in the middle finds it and tidies up, never draws two */
+  const flags = { [ID]: { barrier: { combat: combat.id, key } } }, none = senseNone();
+  const [wall] = await scene.createEmbeddedDocuments("Wall", [{ c: [d.sceneX + e.a[0] * px, d.sceneY + e.a[1] * px, d.sceneX + e.b[0] * px, d.sceneY + e.b[1] * px], move: CONST.WALL_MOVEMENT_TYPES.NORMAL, sight: none, light: none, sound: none, flags: { ...flags, [VISIONER]: { coverOverride: "standard", provideCover: true } } }]);
+  const pics = await scene.createEmbeddedDocuments("Drawing", barrierPics(scene, b));
+  await saveTurns(combat, { [`barriers.${key}`]: whole({ ...b, wall: wall?.id ?? null, pics: pics.map(x => x.id) }) });
+  await addNote(combat, id, pro(barrierCardWords(caster.name, b), P(caster, combat)));
+}
+/** Change a barrier's record: the whole record read again and written back, so a field never lands on one just removed (review 8). */
+async function putBarrier(combat, key, change) { const now = turns(combat).barriers?.[key]; if (!now) return null; const b = { ...now, ...change }; await saveTurns(combat, { [`barriers.${key}`]: whole(b) }); return { ...b, key }; }
+/** Redraw a barrier's label after its HP or rounds changed. */
+async function showBarrier(combat, b) {
+  const scene = game.scenes.get(b.scene), pic = scene?.drawings.get(b.pics?.[1]); if (pic) await pic.update({ text: barrierLabel(b) }).catch(e => console.warn(`${ID} | barrier`, e));
+}
+/** Take a barrier off the map and out of the fight's records. why: a short reason for the card's note, or null. */
+async function dropBarrier(combat, key, why = null) {
+  const b = turns(combat).barriers?.[key]; if (!b) return;
+  const scene = game.scenes.get(b.scene);
+  if (scene) { const walls = scene.walls.filter(w => w.flags?.[ID]?.barrier?.key === key).map(w => w.id), pics = scene.drawings.filter(x => x.flags?.[ID]?.barrier?.key === key).map(x => x.id);
+    if (walls.length) await scene.deleteEmbeddedDocuments("Wall", walls).catch(e => console.warn(`${ID} | barrier`, e));
+    if (pics.length) await scene.deleteEmbeddedDocuments("Drawing", pics).catch(e => console.warn(`${ID} | barrier`, e)); }
+  await saveTurns(combat, { [`barriers.${key}`]: null });
+  const r = currentRequest(combat); if (why && r) await addNote(combat, r.id, `${b.casterName}'s earth barrier is gone: ${why}.`);
+}
+/** Remove now, from her card (any GM). */
+export async function removeBarrier(combat, key) { if (!game.user.isGM) throw new Error("Only a GM can do this."); await dropBarrier(combat, key, "you removed it"); }
+/** A fight that ended (End Encounter, or the fight deleted): every barrier it made goes, found by the flag on the map (the fight's records are gone). */
+export async function clearBarriers(combat) {
+  if (!isRunner() && !(game.user === game.users.activeGM && !runner()?.active)) return;   /* the runner, or the active GM while it is away (review 7) */
+  for (const scene of game.scenes) {
+    const walls = scene.walls.filter(w => w.flags?.[ID]?.barrier?.combat === combat.id).map(w => w.id), pics = scene.drawings.filter(x => x.flags?.[ID]?.barrier?.combat === combat.id).map(x => x.id);
+    if (walls.length) await scene.deleteEmbeddedDocuments("Wall", walls).catch(e => console.warn(`${ID} | barrier`, e));
+    if (pics.length) await scene.deleteEmbeddedDocuments("Drawing", pics).catch(e => console.warn(`${ID} | barrier`, e));
+  }
+}
+/** On the runner's start: barriers of fights that are gone, and parts of one whose raising a reload cut off, are taken off the map (review 7). */
+async function sweepBarriers() {
+  for (const scene of game.scenes) {
+    const stale = x => { const f = x.flags?.[ID]?.barrier; if (!f) return false; const c = game.combats.get(f.combat); return !c || !c.getFlag(ID, "turns")?.barriers?.[f.key] || !!c.getFlag(ID, "turns").barriers[f.key].raising; };
+    const walls = scene.walls.filter(stale).map(w => w.id), pics = scene.drawings.filter(stale).map(x => x.id);
+    if (walls.length) await scene.deleteEmbeddedDocuments("Wall", walls).catch(e => console.warn(`${ID} | barrier`, e));
+    if (pics.length) await scene.deleteEmbeddedDocuments("Drawing", pics).catch(e => console.warn(`${ID} | barrier`, e));
+  }
+}
+/** At the start of a caster's turn one round comes off; at none left the barrier goes (a duration in rounds counts down at its caster's turns). */
+async function tickBarriers(combat) {
+  const now = combat.combatant?.tokenId; if (!now) return;
+  /* a caster with no turn of its own any more (removed from the fight or defeated): its rounds come off at the start of each round instead (review 14) */
+  const turnless = b => !combat.combatants.some(c => c.tokenId === b.caster && !c.defeated);
+  for (const b of barriersOf(combat).filter(x => x.caster === now || (turnless(x) && combat.turn === 0))) {
+    if (b.ticked === `${combat.round}`) continue;   /* once a turn, whatever redraws */
+    const left = b.left - 1; if (left <= 0) { await dropBarrier(combat, b.key, "its 3 rounds are over"); continue; }
+    const nb = await putBarrier(combat, b.key, { left, ticked: `${combat.round}` }); if (nb) await showBarrier(combat, nb);
+  }
+}
+/** A monster's Strike at a barrier (0.35.0): rolled against the barrier's AC with no creature targeted; on a hit its damage less the Hardness comes
+    off the barrier's HP, and it crumbles at 0. Recorded before and after the roll, so a reload never rolls it twice. */
+async function runSlabStrike(combat, id, i, step, tok, b) {
+  const record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {};
+  if (get().slab) return "next";   /* done before a reload (the barrier may be gone since) */
+  if (!b) return "gone";
+  const strike = strikesWithIds(tok.actor).find(x => x.id === step.item)?.strike; if (!strike) throw new Error(`${tok.name} has no ${step.itemName} now.`);
+  const ammo = await ammoOf(tok.actor, strike).catch(() => null), own = !!ammo?.stack;
+  if (get().started) { await addNote(combat, id, `${tok.name}'s ${step.itemName} at the earth barrier may already be in chat: check its cards and the barrier's HP, then press Next step.`); return "ask"; }
+  if (ammo && !ammo.unreadable && (shotsFor(combat, tok, step.item, ammo) ?? 1) < 1) return "noShot";
+  if (!stepGate("attack", id)) return "stopped";
+  if (!(await ensureScene(combat) && tok.object)) throw new Error(cantOpen());
+  stopAiming(); pending = { tokenId: tok.id, waiters: new Map() };
+  let degree = 0, rolled = 0, attack = null;
+  try {
+    await record({ started: true });
+    const shot = await watched(async () => { const card = waitFor("attack-roll"), roll = await strike.variants[step.variant].roll({ event: clickWith("showCheckDialogs"), ...(own ? { options: ["skip-post-processing"] } : {}) }); if (!roll) return { roll: null }; return { message: await card, roll }; });
+    if (!shot.roll) { await record({ started: false }); if (ammo) return "noShot"; throw new Error(`${step.itemName} didn't roll.`); }
+    if (own) await takeAmmo(tok.actor, ammo);
+    const check = shot.message.rolls?.[0] ?? shot.roll; attack = shot.message.id;
+    degree = degreeAgainst(check.total, check.dice?.[0]?.total, b.ac);
+    if (degree >= 2) { const dm = await watched(async () => { const card = waitFor("damage-roll"); await strike[degree === 3 ? "critical" : "damage"]({ event: clickWith("showDamageDialogs"), mapIncreases: step.variant }); return card; }); rolled = Math.floor(dm.rolls?.[0]?.total ?? 0); }
+  } finally { pending = null; }
+  /* the barrier's HP first, then the step's record: a reload between them asks the GM instead of losing the damage (review 15) */
+  const dealt = degree >= 2 ? slabHit(rolled, b.hardness) : 0, now = turns(combat).barriers?.[b.key], hp = now ? now.hp - dealt : null;
+  if (now && hp <= 0) await dropBarrier(combat, b.key, `${tok.name} broke it`);
+  else if (now && dealt) { const nb = await putBarrier(combat, b.key, { hp }); if (nb) await showBarrier(combat, nb); }
+  await record({ attack: { message: attack, degree }, slab: { key: b.key, degree, rolled, dealt } });
+  await sayToAll(tok, slabWords({ who: moverName(tok), outcome: OUTCOMES[degree], rolled, dealt, hardness: b.hardness, hp: hp ?? 0, max: b.max, gone: !now }));
+  return "next";
 }
 /** Interposing Earth used by this creature against this step (a Strike at it, or an area that catches it): its row, or null. */
 const earthUsed = (combat, id, i, target) => (request(combat, id)?.gates?.[i]?.before?.list ?? []).find(x => x.answer === "done" && x.slug === "interposing-earth" && x.token === target?.id) ?? null;
@@ -3113,6 +3327,14 @@ export function onSocket(data, senderId) {
     if (!from.isGM && !t.actor.testUserPermission(from, "OWNER")) return;
     if (t.actor.alliance !== "party" || !reactsLikeParty(t.actor) || !combat.combatants.some(c => c.tokenId === t.id)) return;
     writeUsed(combat, t.id, data.used ? { by: "hand", user: from.name } : null).catch(e => console.warn(`${ID} | reaction box`, e));
+    return;
+  }
+  /* Ready (0.35.0): the trigger typed on the chip, Now! and Done, only for a character the sender owns (Clear: a GM only) */
+  if (data.t === "ready") {
+    if (!isRunner()) return;
+    const combat = game.combats.get(data.combat), t = sceneOf(combat)?.tokens.get(data.token), from = game.users.get(senderId); if (!combat?.started || !t?.actor || !from) return;
+    if (!from.isGM && (!t.actor.testUserPermission(from, "OWNER") || data.op === "clear")) return;
+    readyNowOn(combat, t.id, data.op, data.text, from, typeof data.request === "string" ? data.request : null).catch(e => console.warn(`${ID} | ready`, e));
     return;
   }
   /* "Two Steps, or a Stride?" (0.34.0): only from a player who owns the mover */
@@ -3457,9 +3679,11 @@ async function turnReactions(combat) {
   for (const r of openReactions(combat)) if (r.state === "ready" && !running.has(r.id)) { change[`requests.${r.id}.state`] = "done"; change[`requests.${r.id}.lapsed`] = true; change[`requests.${r.id}.go`] = false; }
   const now = combat.combatant?.tokenId; if (now && turns(combat).reacted?.[now]) change[`reacted.${now}`] = null;
   if (now && turns(combat).rx?.[now]) change[`rx.${now}`] = null;   /* a party member's reaction comes back when its turn begins (0.27.0) */
+  if (now && turns(combat).ready?.[now]) change[`ready.${now}`] = null;   /* a readied action lasts until the start of that character's next turn (0.35.0) */
   if (Object.keys(change).length) await saveTurns(combat, change);
   for (const [key, a] of stepAsks) if (a.combat === combat.id) { stepAsks.delete(key); emitSocket({ t: "stepsClose", key }); }   /* the moment has passed (0.34.0) */
   await dropEarthCover(combat).catch(e => console.warn(`${ID} | cover`, e));   /* Interposing Earth's cover never outlives the turn it was used on */
+  await tickBarriers(combat).catch(e => console.warn(`${ID} | barrier`, e));   /* its barrier's rounds count down at the caster's turns (0.35.0) */
   noteCarried(combat);
 }
 /** What everyone in the fight holds now, for items changing hands (read on every turn change; an item never seen is not guessed at). */
@@ -3548,6 +3772,7 @@ export async function onActionCard(message) {
   const opts = [...(c.options ?? []), ...(o?.rollOptions ?? [])], read = readCard(html, opts, (c.traits ?? []).map(x => x?.name ?? x)), traits = new Set(read.traits);
   let item = null; if (o?.uuid) { try { item = fromUuidSync(o.uuid); } catch { item = null; } }
   const name = item?.name ?? read.title ?? null, slug = read.slug ?? (name ? game.pf2e.system.sluggify(name) : null);
+  if (slug === "ready") return setReady(combat, tok);   /* a Ready card (0.35.0): the character is readied, and Ready itself triggers nothing */
   let consumable = null, srcName = null;
   if (o?.type === "consumable") {
     if (read.itemCard) return;   /* an item shown in chat, not used (review finding 4) */

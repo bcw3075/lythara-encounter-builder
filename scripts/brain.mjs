@@ -148,7 +148,7 @@ export function stallOf(req, { now, auto = false, machineMs = STALL_MS.machine }
   /* a request with no packet, or refused for the last time, waits on the GM, not on the thinker */
   const gm = req.state === "requested" && (!req.packet || (req.tries ?? 0) >= MAX_TRIES);
   /* waiting for a player's reaction (0.20.0) is a wait on a person, whatever the step's state */
-  if (req.react) { const waited = now - req.since; return waited >= STALL_MS.person ? { kind: "person", state: "reacting", since: req.since, waited } : null; }
+  if (req.react || req.readied) { const waited = now - req.since;   /* a readied action (0.35.0) is a wait on a person too */ return waited >= STALL_MS.person ? { kind: "person", state: "reacting", since: req.since, waited } : null; }
   /* a monster's repent-or-refuse (0.27.0): Angel's to answer within the machine's time, or the GM's on her card */
   if (req.choice && !req.choice.answer) { const waited = now - req.since, mine = !!req.choice.angel && !req.choice.gaveUp; return waited >= (mine ? machineMs : STALL_MS.person) ? { kind: mine ? "machine" : "person", state: "choosing", since: req.since, waited } : null; }
   const kind = gm ? "person" : STALL_KIND[req.state] ?? (req.state === "ready" && auto ? "person" : null); if (!kind) return null;

@@ -253,9 +253,46 @@ export const shieldGrantsBlock = (shield = {}) => shield.slug === "metal-carapac
 export const glimpseResistance = level => 2 + Math.max(0, Math.round(Number(level) || 0));
 /** Interposing Earth: how much comes off the damage when the barrier is destroyed (8 from 4th rank). */
 export const earthLess = rank => (Number(rank) || 1) >= 4 ? 8 : 2;
-/** Interposing Earth's barrier when it outlives the attack or the save (Rage of Elements pg. 95; from 4th rank Hardness 8 and 20 HP): the GM's to
-    rule on for its 3 rounds. Read after "the earth barrier" or "...'s earth barrier". */
-export const barrierWords = rank => `stands for 3 rounds (AC 5, Hardness ${(Number(rank) || 1) >= 4 ? 8 : 2}, ${(Number(rank) || 1) >= 4 ? 20 : 5} HP): yours to rule on.`;
+/* ---------- Interposing Earth's barrier on the map (0.35.0; Rhea, 2026-11-16, q-36: "Wall plus picture") ---------- */
+/** The barrier's numbers by the rank it was cast at (Rage of Elements pg. 95, checked on Archives of Nethys 2026-11-16: AC 5, Hardness 2, 5 HP;
+    heightened 4th: Hardness 8, 20 HP). It lasts 3 rounds: one comes off at the start of each of the caster's turns (a spell's duration in rounds). */
+export const barrierStats = rank => (Number(rank) || 1) >= 4 ? { ac: 5, hardness: 8, hp: 20, rounds: 3 } : { ac: 5, hardness: 2, hp: 5, rounds: 3 };
+/** Where the barrier stands: on the border between the caster's space and the square next to it toward the source ("between you and the source of
+    the triggering effect"), one square long (5 ft). caster: { pos: [x, y], span }; src: the source's centre in squares { x, y }. Returns { side
+    (east, west, north or south of the caster), a, b (the edge's two grid points, in squares), near (the caster's square at that edge), far (the
+    square across it, the source's side) }. The side is the axis the source is furthest along (east or west on a tie); along the edge, the row or
+    column of the caster's space nearest the source. */
+export function barrierEdge(caster = {}, src = {}) {
+  const n = Math.max(1, Number(caster.span) || 1), [px, py] = caster.pos ?? [0, 0], cx = px + n / 2, cy = py + n / 2;
+  const dx = (Number(src.x) || 0) - cx, dy = (Number(src.y) || 0) - cy, clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    const row = clamp(Math.floor(Number(src.y) || 0), py, py + n - 1), east = dx >= 0, x = east ? px + n : px;
+    return { side: east ? "east" : "west", a: [x, row], b: [x, row + 1], near: [east ? x - 1 : x, row], far: [east ? x : x - 1, row] };
+  }
+  const col = clamp(Math.floor(Number(src.x) || 0), px, px + n - 1), south = dy > 0, y = south ? py + n : py;
+  return { side: south ? "south" : "north", a: [col, y], b: [col + 1, y], near: [col, south ? y - 1 : y], far: [col, south ? y : y - 1] };
+}
+/** The words on the slab's picture, for everyone. */
+export const barrierLabel = b => `Earth barrier ${Math.max(0, b.hp)}/${b.max} HP · ${b.left} round${b.left === 1 ? "" : "s"}`;
+/** The GM's line for a barrier that stands (pronoun markers: the caster's). */
+export const barrierCardWords = (name, b) => `${name}'s earth barrier stands on the edge ${b.side} of {them}: a wall no one can pass, cover behind it, AC ${b.ac}, Hardness ${b.hardness}, ${b.hp} HP, ${b.left} round${b.left === 1 ? "" : "s"} left (one comes off at the start of each of {their} turns).`;
+/** What a blow at the barrier takes off its HP: the damage less its Hardness (an object's Hardness, Player Core). */
+export const slabHit = (rolled, hardness = 2) => Math.max(0, Math.floor(Number(rolled) || 0) - (Number(hardness) || 0));
+/** The line for everyone after a monster's Strike at a barrier. who: the monster as players may name it. */
+export function slabWords({ who = "A creature", outcome = "miss", rolled = 0, dealt = 0, hardness = 2, hp = 0, max = 5, gone = false } = {}) {
+  const hit = ["hit", "critical hit"].includes(outcome);
+  return `${who} struck the earth barrier: ${outcome}${hit ? `, ${rolled} damage, ${dealt} after its Hardness ${hardness}` : ""}. ${gone ? "It was already gone." : hp > 0 ? `It stands at ${hp}/${max} HP.` : "It crumbles."}`;
+}
+
+/* ---------- Ready (0.35.0; Rhea, 2026-11-16, q-37: the Now! button) ---------- */
+/** While someone has an action readied, each monster step waits this long before it goes on, so the player can press Now! (sample 4). */
+export const READY_WAIT_MS = 3000;
+/** The trigger as the player typed it on the chip: one line, short. */
+export const cleanTrigger = text => String(text ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
+/** The amber line on the monster's card while someone is readied. */
+export const readyWords = (name, trigger) => `${name} has an action readied${trigger ? `: "${trigger}"` : ""}. Each step waits ${READY_WAIT_MS / 1000} s before it goes on, so ${name}'s player can press Now!`;
+/** The line once Now! was pressed: the turn waits for the readied action. */
+export const readiedWords = (name, moved = false) => `${name}'s readied action: the turn waits${moved ? " (the monster stopped in the square it was entering)" : ""}. ${name}'s player makes it, then Done.`;
 /** The lowest rank a reaction spell can be cast at now. slots: [{ rank, left }]; base: the spell's own rank. Null when none is left. */
 export function castRank(base = 1, slots = []) {
   return slots.filter(s => s.rank >= base && s.left > 0).sort((a, b) => a.rank - b.rank)[0]?.rank ?? null;
