@@ -170,3 +170,4 @@ appliedDamage.updates
 worker.mjs
 apiModels
 apiPollS
+preCreateItem
