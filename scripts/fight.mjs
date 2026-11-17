@@ -1311,7 +1311,7 @@ async function runStrike(combat, id, i, step, tok, target) {
         if (raised.earth && degree < 2) await raiseBarrier(combat, id, i, target, tok, raised.earth.spell?.rank).catch(e => { console.error(`${ID} | barrier`, e); return addNote(combat, id, `${target.name}'s earth barrier should stand between ${target.name} and ${tok.name} for 3 rounds, but I couldn't put it on the map (${e.message}): yours to rule on.`); });
       } else if (now === "damage") {
         let hr; try { hr = await hitGate(combat, id, i, step, tok, target, { melee: !strike.item?.isRanged, damageTypes: damageTypesOf(strike) }, get); } catch (e) { console.error(`${ID} | reactions`, e); hr = null; await addNote(combat, id, `I couldn't ask the reactions to ${step.itemName}'s hit (${e.message}); damage went ahead.`); }   /* Shield Block, Reactive Shield (0.20.0) */
-        if (hr === "manual") return "next"; if (hr === "held" || hr === "gone" || hr === "ask") return hr; if (hr === "missed") continue;
+        if (hr === "manual") return "next"; if (hr === "held" || hr === "gone" || hr === "ask" || hr === "stopped") return hr; if (hr === "missed") continue;
         const degree = get().attack.degree; aimAt(target); await record({ damageStarted: true });
         const message = await watched(async () => { const card = waitFor("damage-roll"); await strike[degree === 3 ? "critical" : "damage"]({ event: clickWith("showDamageDialogs"), target: target.object, mapIncreases: step.variant }); return card; });
         await record({ damage: { message: message.id } });
@@ -2129,7 +2129,7 @@ async function runSpell(combat, id, i, step, tok, target) {
       } else if (now === "damage") {
         /* a spell attack's hit (0.27.0): Shield Block against its physical damage, asked before the damage as for a Strike */
         if (step.mode === "attack") { let hr; try { hr = await hitGate(combat, id, i, step, tok, target, { melee: false, strike: false, damageTypes: Object.values(spell.system.damage ?? {}).map(d => d?.type).filter(Boolean), kind: step.itemName }, get); } catch (e) { console.error(`${ID} | reactions`, e); hr = null; await addNote(combat, id, `I couldn't ask the reactions to ${step.itemName}'s hit (${e.message}); damage went ahead.`); }
-          if (hr === "manual") return "next"; if (hr === "held" || hr === "gone" || hr === "ask") return hr; if (hr === "missed") continue; }   /* review 1 (0.37.0): Whisper of Warning can make it a miss */
+          if (hr === "manual") return "next"; if (hr === "held" || hr === "gone" || hr === "ask" || hr === "stopped") return hr; if (hr === "missed") continue; }   /* review 1 (0.37.0): Whisper of Warning can make it a miss */
         aimAt(target); await record({ damageStarted: true });
         /* the damage at the rank it was cast at (PF2e reads that from the card's button, which a script has none of) */
         const message = await watched(async () => { const card = waitFor("damage-roll"); const v = (step.rank !== spell.rank ? spell.loadVariant?.({ castRank: step.rank }) : null) ?? spell; await v.rollDamage(clickWith("showDamageDialogs"), step.mode === "attack" ? step.variant ?? 0 : undefined); return card; });
@@ -3660,7 +3660,7 @@ async function hitGate(combat, id, i, step, tok, target, what, get) {
   if (Object.keys(rxHit).length) change.rxHit = rxHit;
   await save(combat, id, { log: { [i]: change } });
   if (degree < 2) return "missed";
-  if (stop) return "ask";
+  if (stop) return "stopped";   /* 0.37.1 (seen live 2026-11-17): "ask" added "Step N may not have finished… play the rest yourself" to the row's own "press Do it" note */
   return res.held ? "held" : null;
 }
 
