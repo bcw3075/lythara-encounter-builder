@@ -3188,11 +3188,14 @@ const barrierByLabel = (combat, label) => label ? barriersOf(combat).find(b => b
 const senseNone = () => (CONST.EDGE_SENSE_TYPES ?? CONST.WALL_SENSE_TYPES).NONE;
 /** The two pictures of a barrier: the slab on the edge and its label above it. */
 function barrierPics(scene, b) {
-  const px = scene.grid.size, d = scene.dimensions, t = Math.max(6, Math.round(px * 0.12)), [ax, ay] = [d.sceneX + b.edge[0][0] * px, d.sceneY + b.edge[0][1] * px], upright = b.edge[0][0] === b.edge[1][0];
-  const flags = { [ID]: { barrier: { combat: b.combat, key: b.key } } }, w = Math.round(px * 2.6), h = Math.round(px * 0.34);
-  const slab = { x: upright ? ax - t / 2 : ax, y: upright ? ay : ay - t / 2, shape: { type: "r", width: upright ? t : px, height: upright ? px : t }, fillType: CONST.DRAWING_FILL_TYPES.SOLID, fillColor: SLAB_FILL, fillAlpha: 1, strokeWidth: 2, strokeColor: SLAB_EDGE, strokeAlpha: 1, locked: true, flags };
+  /* seen on a player's page (test build 2): tokens on both squares hid a slab drawn at the ground, and the tree canopy (tiles at 20 ft) hid the label,
+     which also wrapped. So the slab stands 5 ft up, its own height (above creatures on the ground, below anything flying over it), and the label
+     sits above everything, one line wide. */
+  const px = scene.grid.size, d = scene.dimensions, t = Math.max(8, Math.round(px * 0.16)), [ax, ay] = [d.sceneX + b.edge[0][0] * px, d.sceneY + b.edge[0][1] * px], upright = b.edge[0][0] === b.edge[1][0];
+  const flags = { [ID]: { barrier: { combat: b.combat, key: b.key } } }, w = Math.round(px * 3.4), h = Math.round(px * 0.34);
+  const slab = { x: upright ? ax - t / 2 : ax, y: upright ? ay : ay - t / 2, elevation: 5, shape: { type: "r", width: upright ? t : px, height: upright ? px : t }, fillType: CONST.DRAWING_FILL_TYPES.SOLID, fillColor: SLAB_FILL, fillAlpha: 1, strokeWidth: 2, strokeColor: SLAB_EDGE, strokeAlpha: 1, locked: true, flags };
   const cx = upright ? ax : ax + px / 2, top = upright ? ay : ay - t / 2;
-  const text = { x: Math.round(cx - w / 2), y: Math.round(top - h - 6), shape: { type: "r", width: w, height: h }, fillType: CONST.DRAWING_FILL_TYPES.SOLID, fillColor: "#111111", fillAlpha: 0.75, strokeWidth: 0, text: barrierLabel(b), fontSize: Math.max(12, Math.round(px * 0.2)), textColor: "#ffffff", locked: true, flags };
+  const text = { x: Math.round(cx - w / 2), y: Math.round(top - h - 6), elevation: 1000, shape: { type: "r", width: w, height: h }, fillType: CONST.DRAWING_FILL_TYPES.SOLID, fillColor: "#111111", fillAlpha: 0.75, strokeWidth: 0, text: barrierLabel(b), fontSize: Math.max(12, Math.round(px * 0.19)), textColor: "#ffffff", locked: true, flags };
   return [slab, text];
 }
 /** Put the barrier on the map, once per caster and step (a reload never makes two), and say so on the card. caster: the token that cast it; source:
