@@ -129,3 +129,10 @@ The gate counts the open ones; above 8 open at a release's start, that release m
 - (u-121) [0.37.0] open: From u-117 [0.36.0]: the earth barrier, not seen live: one raised by an area save that took no damage (awaitAreaSaves); a barrier by a Large caster; clearBarriers by the active GM while the runner is away; Earth Glide ignoring the barrier's wall when judging walls (code read and unit tests only)
 - (u-122) [0.37.0] open: From u-76 [0.27.0]: Interposing Earth and reaction spells, not seen live: a save that takes no damage leaving the barrier's note; an area the GM resolves from its card (the cover kept and the note); the spell asked before a monster's Reactive Strike; its cast drawing an Auto monster's Reactive Strike while the turn's action steps aside; a prepared or focus caster's reaction spell; a 4th-rank cast's 8 off the damage (the 4th-rank barrier itself was seen); the impulse itself making the shield (the companion module's shield item was added by script)
 - (u-123) [0.37.0] open: From u-118 [0.36.0]: pronouns not read on screen: fleeing, flying, swimming, climbing and burrowing notes, Take Cover and stealth notes, spells and areas, a reload's notes, the party's reaction notes other than the 0 HP note and the barrier's note
+- (u-124) [0.37.0] open: Shield Block was never reached; Shield Block against a hit and against a monster's Reactive Strike (r-6, r-18) still unseen on 0.37.0
+- (u-125) [0.37.0] open: Glimpse of Redemption against a mindless monster (r-23) unseen on 0.37.0
+- (u-126) [0.37.0] open: Interposing Earth (r-27) not offered for a ranged Strike at a party member; not investigated
+- (u-127) [0.37.0] open: Apparition Cloud flat check (r-51) unseen
+- (u-128) [0.37.0] open: Wooden Double Pause row (r-52) unseen
+- (u-129) [0.37.0] open: Blazing Spirit, Blood Vendetta, Warping Pull Pause row (r-53) unseen
+- (u-130) [0.37.0] open: reaction effects ending on time (r-54) not watched
