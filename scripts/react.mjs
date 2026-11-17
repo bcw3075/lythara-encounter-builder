@@ -14,6 +14,7 @@ import { IT, pro } from "./pronoun.mjs";
     Reactive Shield (Player Core pg. 140): an enemy hits you with a melee Strike, while wielding a shield; you Raise a Shield, and the bonus counts
       against that attack.
     Nimble Dodge (Player Core): a creature targets you with an attack and you can see it; +2 circumstance to AC against that attack. */
+const PHYS = ["bludgeoning", "piercing", "slashing"], PHYSICAL = PHYS;
 export const KNOWN = {
   "reactive-strike": { name: "Reactive Strike", gates: ["move", "stay", "manipulate", "ranged"], reach: true },
   "attack-of-opportunity": { name: "Reactive Strike", gates: ["move", "stay", "manipulate", "ranged"], reach: true },
@@ -46,13 +47,83 @@ export const KNOWN = {
   "shadow-siphon": { name: "Shadow Siphon", gates: ["cast"], spell: true, range: 60, damaging: true, counter: "siphon" },
   "mimic-spell": { name: "Mimic Spell", gates: ["cast"], spell: true, sees: true, range: 120, tradition: true, pause: true },
   "spell-riposte": { name: "Spell Riposte", gates: ["cast"], spell: true, target: true, pause: true },
-  "redirect-teleportation": { name: "Redirect Teleportation", gates: ["cast"], sees: true, range: 60, teleport: true, pause: true }
+  "redirect-teleportation": { name: "Redirect Teleportation", gates: ["cast"], sees: true, range: 60, teleport: true, pause: true },
+  /* Moments A, B and C (0.37.0; the full reactions pass, release 3). Read from PF2e's compendium on 2026-11-16 (Rhea: "Compendium first"), the legacy
+     ones and Whisper of Warning checked on Archives of Nethys the same day.
+     A, before a monster's attack roll:
+     Apparition Cloud (War of Immortals pg. 26, animist 12): you are targeted by an attack, your familiar adjacent or in your space; you are concealed
+       from it (DC 5 flat check).
+     Cloud Dragon's Cloak (Rage of Elements pg. 70, spell 3, 60 ft): you or an ally is targeted by a ranged attack; hidden for it (DC 11 flat check) and
+       for all ranged attacks against it for 1 round.
+     Curse of Recoil (Battlecry! pg. 85, spell 1, 120 ft): an enemy you can see is about to make a ranged attack; its Will save: success off-guard,
+       failure also -1 status to the attack, critical failure -2 to its ranged attacks until its next turn; off-guard until the start of its next turn.
+     Anchoring Air (Lost Omens High Seas, spell 4): a melee Strike against you; its Reflex save: success -2 circumstance to that attack, failure -2 to
+       all its attacks until the end of its turn, critical failure also immobilized until the start of its next turn.
+     Unexpected Transposition (Impossible Magic, spell 6: a Strike at you; swap places) and Body of Air (Rage of Elements, kineticist 14: an enemy you
+       observe targets you with an attack; Vapor Form) are the player's (Pause).
+     B, a hit, before damage:
+     Whisper of Warning (War of Immortals pg. 26, animist 12, once per 10 minutes): you would be hit, not critically; the attacker rolls again, lower kept.
+     Sacrifice Armor (Advanced Player's Guide pg. 120, champion 8, legacy): hit by a Strike with physical damage; the damage is less by twice the
+       armor's level; the armor is broken (destroyed if it was already damaged).
+     Hidebound (Howl of the Wild, spell 2, 60 ft): a creature is hit by a Strike with physical damage; resistance 5 physical (+3 per 2 ranks), except
+       adamantine, until the start of its next turn.
+     Rebounding Barrier (Legends pg. 37, spell 4, legacy): you are hit by a physical Strike; resistance 10 (+2 a rank) to one physical type it deals, and
+       the attacker takes 5 (+1 a rank) of that type.
+     Wooden Double (crit hit; Step, a block takes it), Drop Dead (120 ft), Champion's Sacrifice (devotion 6, 30 ft, an ally hit by a Strike) and Vanish
+       Weapon (a melee weapon Strike at you that hits or misses, not critically) are the player's (Pause).
+     C, damage about to be applied:
+     Shield of Reckoning (Player Core 2, champion 10, once a round): an enemy's attack against an ally fits both Shield Block and your champion's
+       reaction: you Shield Block for the ally and use your champion's reaction.
+     Blazing Spirit (War of Immortals pg. 25, animist 6, once per 10 minutes): a creature damages you with a melee attack; resistance = your level,
+       and it takes 1d6 fire and 1 persistent fire (2 at 12th, 3 at 18th).
+     Calcifying Sand (Rage of Elements, kineticist 4, incapacitation): an unarmed or non-reach melee attack damages you; resistance = level to its
+       physical damage; its Fortitude save against your class DC: failure slowed 1, critical failure petrified, until the end of its next turn; it can't
+       set this off again for 1 hour.
+     Consume Power (kineticist 6): acid, electricity, fire or sonic; resistance = level to one of them.
+     Deflecting Wave (kineticist 1): acid, bludgeoning, fire or slashing from an enemy's effect, not off-guard to it; resistance = level (bludgeoning,
+       slashing) or twice it (acid, fire), the highest once.
+     Preemptive Reconfiguration (Ancestry Guide pg. 77, level 9, once a day, legacy): bludgeoning, piercing or slashing; resistance = level to that type.
+     Eat Fire (Rage of Elements, cantrip): you would take fire damage; resistance 5 fire (+5 every 3 ranks) until the end of the turn.
+     Scintillating Safeguard (Player Core 2, spell 6, 30 ft): physical or energy damage to you or creatures in range; up to 5 of them resist 10 (+1 a
+       rank) one type of it.
+     Blood Vendetta (Player Core pg. 318, spell 2, 30 ft): a creature deals piercing, slashing or bleed damage to you, and you can bleed; it takes 2d6
+       persistent bleed (+2d6 per 2 ranks) by its Will save (none, half, full and weakness 1 to piercing and slashing, double).
+     Warping Pull (spell 2, 30 ft: teleport, resistance 5 a 2 ranks), Volcanic Escape (kineticist 6: in your kinetic aura; Leap, and the enemy's basic
+       Reflex), Pyrefowl Rebuke (spell 2: within 10 ft, a Strike; Fly, and its basic Reflex), Blinding Fury (spell 6) and Overselling Flourish (spell 1)
+       are the player's (Pause); the damage and saves after Done are the module's. */
+  "apparition-cloud": { name: "Apparition Cloud", gates: ["attack"], target: true, familiar: true, flat: 5 },
+  "cloud-dragons-cloak": { name: "Cloud Dragon's Cloak", gates: ["attack"], spell: true, guard: 60, ranged: true, flat: 11 },
+  "curse-of-recoil": { name: "Curse of Recoil", gates: ["ranged"], spell: true, sees: true, range: 120, save: "will" },
+  "anchoring-air": { name: "Anchoring Air", gates: ["attack"], spell: true, target: true, melee: true, save: "reflex" },
+  "unexpected-transposition": { name: "Unexpected Transposition", gates: ["attack"], spell: true, target: true, strike: true, pause: true, stops: true },
+  "body-of-air": { name: "Body of Air", gates: ["attack"], target: true, sees: true, pause: true, stops: true },
+  "whispers-of-warning": { name: "Whisper of Warning", gates: ["hit"], target: true, notCrit: true, freq: 600, reroll: true },
+  "sacrifice-armor": { name: "Sacrifice Armor", gates: ["hit"], target: true, strike: true, physical: true, armor: true },
+  "hidebound": { name: "Hidebound", gates: ["hit"], spell: true, guard: 60, strike: true, physical: true },
+  "rebounding-barrier": { name: "Rebounding Barrier", gates: ["hit"], spell: true, target: true, strike: true, physical: true },
+  "wooden-double": { name: "Wooden Double", gates: ["hit"], spell: true, target: true, critOnly: true, pause: true, stops: true },
+  "drop-dead": { name: "Drop Dead", gates: ["hit"], spell: true, guard: 120, pause: true, stops: true },
+  "champions-sacrifice": { name: "Champion's Sacrifice", gates: ["hit"], spell: true, guard: 30, other: true, strike: true, pause: true, stops: true },
+  "vanish-weapon": { name: "Vanish Weapon", gates: ["hit"], spell: true, target: true, strike: true, melee: true, notCrit: true, pause: true, stops: true },
+  "shield-of-reckoning": { name: "Shield of Reckoning", gates: ["harm"], ally: true, aura: "champions-aura", needs: "raised", physical: true, attack: true },
+  "blazing-spirit": { name: "Blazing Spirit", gates: ["harm"], target: true, melee: true, attack: true, freq: 600 },
+  "calcifying-sand": { name: "Calcifying Sand", gates: ["harm"], target: true, close: true, attack: true },
+  "consume-power": { name: "Consume Power", gates: ["harm"], target: true, dmg: ["acid", "electricity", "fire", "sonic"] },
+  "deflecting-wave": { name: "Deflecting Wave", gates: ["harm"], target: true, dmg: ["acid", "bludgeoning", "fire", "slashing"], aware: true },
+  "preemptive-reconfiguration": { name: "Preemptive Reconfiguration", gates: ["harm"], target: true, dmg: PHYS, freq: 86400 },
+  "eat-fire": { name: "Eat Fire", gates: ["harm"], spell: true, target: true, dmg: ["fire"] },
+  "scintillating-safeguard": { name: "Scintillating Safeguard", gates: ["harm"], spell: true, guard: 30 },
+  "blood-vendetta": { name: "Blood Vendetta", gates: ["harm"], spell: true, target: true, dmg: ["piercing", "slashing", "bleed"], range: 30, bleeds: true },
+  "warping-pull": { name: "Warping Pull", gates: ["harm"], spell: true, guard: 30, other: true, pause: true },
+  "volcanic-escape": { name: "Volcanic Escape", gates: ["harm"], target: true, aura: "kinetic-aura", own: true, pause: true },
+  "pyrefowl-rebuke": { name: "Pyrefowl Rebuke", gates: ["harm"], spell: true, target: true, strike: true, range: 10, pause: true },
+  "blinding-fury": { name: "Blinding Fury", gates: ["harm"], spell: true, target: true, range: 60, pause: true },
+  "overselling-flourish": { name: "Overselling Flourish", gates: ["harm"], spell: true, target: true, range: 60, pause: true }
 };
 /** Reactions the player makes with the usual tools after React, then presses Done (Reactive Strike's roll, and the "Pause" rows of the pass). */
 export const makesItself = slug => !!(KNOWN[slug]?.reach || KNOWN[slug]?.pause);
 /** The rows that are asked before an attack and raise AC against it (circumstance bonuses, so only the best counts). */
 export const AC_ROWS = Object.keys(KNOWN).filter(k => KNOWN[k].ac);
-const PHYSICAL = ["bludgeoning", "piercing", "slashing"];
 
 /** The trigger line of a reaction's description (HTML), in plain words, or null. */
 export function triggerOf(html = "") {
@@ -92,6 +163,21 @@ export function fits(slug, gate, who = {}, what = {}) {
   if (row.damaging && !what.damaging) return false;
   if (row.teleport && !what.teleport) return false;
   if (row.tradition && (!what.tradition || what.tradition !== who.tradition || !(Number(what.rank) <= Number(who.spellRank)))) return false;
+  /* Moments A to C (0.37.0): who adds { distTarget (ft from the reactor to the creature attacked), isAllyOfTarget, familiarNear, offGuard, canBleed,
+     freqOk, inAura }; what adds { ranged, strike, degree (the hit's), close (unarmed or a non-reach melee weapon), attack (the harm came from an attack) } */
+  if (row.guard && !(who.isTarget ? !row.other : who.isAllyOfTarget && Number(who.distTarget) <= row.guard)) return false;   /* you, or an ally within range */
+  if (row.ranged && !what.ranged) return false;
+  if (row.strike && what.strike === false) return false;
+  if (row.attack && what.attack === false) return false;
+  if (row.notCrit && what.degree !== 2) return false;
+  if (row.critOnly && what.degree !== 3) return false;
+  if (row.close && !what.close) return false;
+  if (row.dmg && what.damageTypes?.length && !what.damageTypes.some(t => row.dmg.includes(t))) return false;   /* unknown types: offer it */
+  if (row.familiar && !who.familiarNear) return false;
+  if (row.aware && who.offGuard) return false;
+  if (row.bleeds && who.canBleed === false) return false;
+  if (row.freq && who.freqOk === false) return false;
+  if (row.own && !who.inAura) return false;   /* in your own aura (Volcanic Escape: your kinetic aura) */
   return true;
 }
 /** Where along a move the "move" gates fall. route: squares from where it stands to where it ends; mover: { size, elev }; reactors: [{ id, pos, span,
@@ -422,4 +508,79 @@ export function recognizeWords(degree, spell = "the spell", rank = 1) {
   if (degree === 2) return `You recognize it: ${spell} (${RANK_WORD(rank)} rank).`;
   if (degree === 1) return "You don't recognize the spell.";
   return "You think you recognize it, but you are wrong: the GM tells you which spell you think it is.";
+}
+
+/* ---------- Moments A to C (0.37.0): the numbers ---------- */
+const lvl = n => Math.max(1, Math.round(Number(n) || 1)), rnk = n => Math.max(1, Math.min(10, Math.round(Number(n) || 1)));
+/** A cantrip's rank: half the caster's level, rounded up. */
+export const cantripRank = level => Math.max(1, Math.ceil(lvl(level) / 2));
+/** What a row's resistance is, worked out for this damage: { type, value } or null. types: the damage types of the triggering damage, biggest first. */
+export function resistFor(slug, { level = 1, rank = 1, types = [] } = {}) {
+  const L = lvl(level), R = rnk(rank), has = t => types.includes(t), first = list => types.find(t => list.includes(t)) ?? null;
+  switch (slug) {
+    case "hidebound": return { type: "physical", value: 5 + 3 * Math.floor((R - 2) / 2), except: "adamantine" };
+    case "rebounding-barrier": { const t = first(PHYS); return t ? { type: t, value: 10 + 2 * (R - 4) } : null; }
+    case "blazing-spirit": return { type: "all-damage", value: L };
+    case "calcifying-sand": return { type: "physical", value: L };
+    case "consume-power": { const t = first(["acid", "electricity", "fire", "sonic"]); return t ? { type: t, value: L } : null; }
+    case "deflecting-wave": { const best = ["acid", "fire", "bludgeoning", "slashing"].find(has); return best ? { type: best, value: ["acid", "fire"].includes(best) ? 2 * L : L } : null; }
+    case "preemptive-reconfiguration": { const t = first(PHYS); return t ? { type: t, value: L } : null; }
+    case "eat-fire": return { type: "fire", value: 5 * Math.ceil(R / 3) };
+    case "scintillating-safeguard": { const t = types.find(x => x !== "bleed" && x !== "untyped") ?? null; return t ? { type: t, value: 4 + R } : null; }
+    case "warping-pull": return { type: "all-damage", value: 5 * Math.floor(R / 2) };
+    default: return null;
+  }
+}
+/** Whisper of Warning: the attack rolled again, the lower kept. Returns the kept { total, natural }. */
+export function rerollLower(old = {}, natural = 10) {
+  const mod = (Number(old.total) || 0) - (Number(old.natural) || 0), again = { total: mod + natural, natural };
+  return again.total < old.total || (again.total === old.total && natural < old.natural) ? again : { total: old.total, natural: old.natural };
+}
+/** Sacrifice Armor: the damage taken is less by twice the armor's level. */
+export const sacrificeLess = armorLevel => 2 * Math.max(0, Math.round(Number(armorLevel) || 0));
+/** What the attacker takes back: Rebounding Barrier 5 (+1 a rank), Blazing Spirit's dice and persistent fire, Blood Vendetta's persistent bleed. */
+export const reboundBack = rank => 5 + (rnk(rank) - 4);
+export const blazingBack = level => { const n = lvl(level) >= 18 ? 3 : lvl(level) >= 12 ? 2 : 1; return { dice: `${n}d6`, persistent: n }; };
+export const bloodDice = rank => `${2 + 2 * Math.floor((rnk(rank) - 2) / 2)}d6`;
+export const volcanicDice = level => `${Math.floor((lvl(level) - 6) / 4) + 1}d6`;
+export const pyrefowlDice = rank => `${1 + Math.floor((rnk(rank) - 2) / 2)}d6`;
+/** Blood Vendetta's persistent bleed by the attacker's Will save (0 critical failure .. 3 critical success): the multiplier on the dice, and the weakness. */
+export const bloodBy = degree => ({ mult: [2, 1, 0.5, 0][degree] ?? 1, weak: degree <= 1 });
+/** Calcifying Sand by the attacker's Fortitude save: the condition until the end of its next turn, or null. */
+export const calcifyBy = degree => degree === 0 ? "petrified" : degree === 1 ? "slowed" : null;
+/** Curse of Recoil and Anchoring Air by the monster's save: what it does to the attack. */
+export function curseBy(slug, degree) {
+  if (slug === "curse-of-recoil") return degree === 3 ? null : { offGuard: true, penalty: degree === 1 ? -1 : degree === 0 ? -2 : 0, lasting: degree === 0 };
+  if (slug === "anchoring-air") return degree === 3 ? null : degree === 2 ? { penalty: -2, thisAttack: true } : { penalty: -2, turn: true, immobilized: degree === 0 };
+  return null;
+}
+const SAVE_WORD = ["critically fails", "fails", "succeeds", "critically succeeds"];
+/** The line for everyone after a monster's save against one of these (PR-10: every change says why). */
+export function curseWords(slug, who = "A creature", degree = 1, reactor = "Someone") {
+  const c = curseBy(slug, degree), name = KNOWN[slug]?.name ?? slug, save = slug === "anchoring-air" ? "Reflex" : "Will";
+  if (!c) return `${reactor} casts ${name}: ${who} critically succeeds at its ${save} save and is unaffected.`;
+  if (slug === "curse-of-recoil") return `${reactor} casts ${name}: ${who} ${SAVE_WORD[degree]} at its Will save${c.penalty ? `, so its ranged attack takes ${c.penalty} (status)${c.lasting ? ", and so do its ranged attacks until the start of its next turn" : ""}` : ""}; it is off-guard until the start of its next turn.`;
+  return `${reactor} casts ${name}: ${who} ${SAVE_WORD[degree]} at its Reflex save, so ${c.thisAttack ? "this attack takes -2 (circumstance)" : `its attacks take -2 (circumstance) until the end of its turn${c.immobilized ? ", and it is immobilized until the start of its next turn" : ""}`}.`;
+}
+/** The flat check a row asks of the attack: Apparition Cloud's DC 5 (concealed), Cloud Dragon's Cloak's DC 11 (hidden). */
+export const flatOf = slug => KNOWN[slug]?.flat ?? 0;
+/** What each of these would do, in numbers worked out at the moment (the line under its button). x: the row with { level, rank, resist, less, flat }. */
+export function rxDetail(x = {}) {
+  const row = KNOWN[x.slug] ?? {};
+  if (row.pause) return "then make it yourself";
+  if (row.flat) return `the attack needs a DC ${row.flat} flat check to hit you${x.slug === "cloud-dragons-cloak" ? " (and ranged attacks at them for 1 round)" : ""}`;
+  if (row.save) return `${row.save === "will" ? "Will" : "Reflex"} save against your spell DC${x.dc ? ` ${x.dc}` : ""}`;
+  if (row.reroll) return "the attack is rolled again and the lower result kept";
+  if (row.armor) return `${x.less ?? 0} less damage; your armor is broken`;
+  if (x.slug === "shield-of-reckoning") return `your shield blocks up to ${x.hardness ?? 0} for the ally, and your champion's reaction too`;
+  const r = x.resist;
+  const back = x.slug === "rebounding-barrier" ? `; the attacker takes ${reboundBack(x.rank)}` : x.slug === "blazing-spirit" ? `; the attacker takes ${blazingBack(x.level).dice} fire and ${blazingBack(x.level).persistent} persistent fire` : x.slug === "calcifying-sand" ? "; the attacker's Fortitude save (slowed or petrified)" : x.slug === "blood-vendetta" ? `; the attacker takes ${bloodDice(x.rank)} persistent bleed by its Will save` : "";
+  if (r) return `resistance ${r.value} to ${r.type === "all-damage" ? "this damage" : `${r.type}${r.type === "physical" ? " damage" : ""}`}${back}`;
+  return back.replace(/^; /, "");
+}
+/** The window's sentence for one of these. who: the monster as the reactor may see it; ally: the creature attacked, when it isn't the reactor. */
+export function rxWords(x = {}, who = "A creature", ally = null) {
+  const gate = KNOWN[x.slug]?.gates?.[0];
+  const what = gate === "attack" ? (ally ? `${who} attacks ${ally}` : `${who} attacks you`) : gate === "ranged" ? `${who} is about to make a ranged attack` : gate === "hit" ? (ally ? `${who}'s Strike hits ${ally}` : `${who} hits you`) : (ally ? `${who} is about to damage ${ally}` : `${who} is about to damage you`);
+  return `${what}. React with ${x.reaction ?? KNOWN[x.slug]?.name}?`;
 }
