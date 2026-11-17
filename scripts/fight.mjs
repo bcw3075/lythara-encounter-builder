@@ -3947,6 +3947,9 @@ async function afterDrop(combat, id, i, tok, target, guard, { was = null, dealt 
     const share = martyrShare(guard.before, dmg);
     await sayToAll(target, `${guard.by} casts Martyr's Intervention: ${target.name} stays at 1 HP (the blow was ${dmg}), ${guard.by} takes the other ${share}, and both are wounded.`);
     try { if (share > 0 && by?.actor) { const DamageRoll = CONFIG.Dice.rolls.find(r => r.name === "DamageRoll"), roll = await new DamageRoll(`${share}`).evaluate(); await watched(() => by.actor.applyDamage({ damage: roll, token: by })); }   /* an evaluated roll: PF2e reads its totals */
+      /* the caster's wounded comes after the knock-out has settled: Workbench puts Dying on (1 + wounded) a moment after the HP drops, and read the new
+         wounded value when it came first (seen in test build 2: the caster went to Dying 2 instead of 1) */
+      if (by?.actor && (by.actor.hitPoints?.value ?? 1) <= 0) for (let t = 0; t < 20 && !by.actor.hasCondition?.("dying"); t++) await sleep(100);
       for (const a of [target.actor, by?.actor]) if (a) await a.increaseCondition("wounded"); }
     catch (e) { console.error(`${ID} | martyr`, e); await addNote(combat, id, `I couldn't finish Martyr's Intervention (${e.message}): give ${guard.by} ${share} damage and make both wounded yourself.`); }
     await addNote(combat, id, `${guard.by}'s Martyr's Intervention: ${target.name} stays at 1 HP; ${guard.by} took the other ${share} of the ${dmg} damage, and both are wounded 1 (or 1 more).`);
