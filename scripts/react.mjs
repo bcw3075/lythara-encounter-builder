@@ -406,13 +406,14 @@ export function castWords(x = {}, who = "A creature", spell = "a spell", gm = fa
 export function castDetail(x = {}) {
   if (x.slug?.startsWith("counterspell") || x.slug === "shadow-siphon") return `counteract check ${x.mod >= 0 ? "+" : ""}${x.mod} vs DC ${x.dc}${x.slug === "shadow-siphon" ? "; on a success its damage is halved" : ""}`;
   if (x.slug === "nullify") return `counteracted automatically; you lose ${x.rank}d8 HP`;
-  if (x.slug === "recognize-spell") return x.auto ? "you know it at once (roll only for a critical success)" : `${x.skillName ?? "skill"} ${x.mod >= 0 ? "+" : ""}${x.mod}, rolled in secret`;
+  if (x.slug === "recognize-spell") return x.auto ? "you know it at once; the roll is only for a critical success" : `${x.skillName ?? "skill"} ${x.mod >= 0 ? "+" : ""}${x.mod}, rolled in secret`;
   if (KNOWN[x.slug]?.pause) return "then make it yourself";
   return "";
 }
 /** The public line after a counteract check (PR-10: every reduction says why). */
 export function counterLine({ who = "Someone", reaction = "Counterspell", monster = "A creature", spell = "spell", total = 0, dc = 0, degree = 1, ok = false, halved = false } = {}) {
   const deg = ["Critical failure", "Failure", "Success", "Critical success"][degree] ?? "Failure";
+  monster = String(monster).replace(/^A creature$/, "a creature");   /* mid-sentence (seen live in test build 1: "on A creature's Fear") */
   return `${who} uses ${reaction} on ${monster}'s ${spell}: counteract check ${total} vs DC ${dc}, ${deg.toLowerCase()}. ${ok ? (halved ? "The spell still works, but its damage is halved." : "The spell is lost.") : "The spell goes on."}`;
 }
 /** What Recognize Spell tells the player, by degree (0 to 3). */

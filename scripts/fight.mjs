@@ -2499,7 +2499,8 @@ async function runTurn(combat, requestId) {
     const stayFrom = ["stand", "drop-prone", "climb"].includes(step.do) && tok.object ? { at: placeOf(tok, sceneOf(combat)).pos, elev: heightUp(tok) } : null;   /* a Climb is asked from where it was (review finding 16) */
     if (work) {
       let result; try { result = await work(); } catch (e) { console.error(e); result = "ask"; await save(combat, requestId, { note: e.message }); }
-      if (!["wait", "held", "stopped", "gm"].includes(result)) await dropEarthCover(combat).catch(e => console.warn(`${ID} | cover`, e));   /* Interposing Earth's cover lasts for the step it answered */
+      if (!["wait", "held", "stopped", "gm"].includes(result)) await dropEarthCover(combat).catch(e => console.warn(`${ID} | cover`, e));
+      else if (result === "gm") await dropEarthCover(combat, { recognizeOnly: true }).catch(e => console.warn(`${ID} | recognize`, e));   /* the save is rolled: Recognize Spell's +1 goes (seen live in test build 1: it stayed to the turn's end) */   /* Interposing Earth's cover lasts for the step it answered */
       if (result === "stopped") return save(combat, requestId, { state: "stopped" });
       if (result === "held") return save(combat, requestId, { state: "held", hold: false, note: "Held after the reactions, before the damage." });   /* a Hold during the reactions to a hit (0.20.0) */
       if (result === "gone") return save(combat, requestId, { state: "stopped", note: "The turn moved on while reactions were being asked." });
@@ -3190,7 +3191,7 @@ async function castAnswers(combat, id, i, step, tok, list, cast) {
       } else if (x.slug === "nullify") {
         const hp = await new Roll(`${Math.max(1, cast.rank)}d8`).evaluate(), now = a.hitPoints?.value ?? 0, left = Math.max(0, now - hp.total);
         await a.update({ "system.attributes.hp.value": left });
-        const line = `${x.name} uses Nullify on ${cast.monster}'s ${cast.name}: it is counteracted automatically, and the feedback costs ${x.name} ${hp.total} HP (${cast.rank}d8).`;
+        const line = `${x.name} uses Nullify on ${String(cast.monster).replace(/^A creature$/, "a creature")}'s ${cast.name}: it is counteracted automatically, and the feedback costs ${x.name} ${hp.total} HP (${cast.rank}d8).`;
         await watched(() => hp.toMessage({ speaker: ChatMessage.implementation.getSpeaker({ token: scene.tokens.get(x.token) }), flavor: `<p>${esc(line)}</p>` }));
         await addNote(combat, id, line); result = "countered";
         if (left === 0) await addNote(combat, id, `${x.name} is at 0 HP from Nullify: apply Dying as for any drop to 0 (it is HP lost, so the module didn't).`);   /* review 8 */
@@ -3200,7 +3201,7 @@ async function castAnswers(combat, id, i, step, tok, list, cast) {
         const degree = recognizeDegree(degreeAgainst(r.total, nat, x.rdc), { prof: x.prof, rank: cast.rank, rarity: x.rarity }), words = recognizeWords(degree, cast.name, cast.rank);
         const users = answerersOf(a); if (users.length) emitSocket({ t: "told", users, title: `Recognize Spell: ${x.name}`, lines: [words] });
         await addNote(combat, id, `${x.name}'s Recognize Spell (rolled in secret: ${r.total} vs DC ${x.rdc}, ${CHECK_OUTCOMES[degree]}): ${degree === 0 ? `tell ${pro("{them}", P(scene.tokens.get(x.token), combat))} it is another spell of your choice.` : users.length ? `told ${pro("{them}", P(scene.tokens.get(x.token), combat))}: "${words}"` : `tell ${pro("{them}", P(scene.tokens.get(x.token), combat))}: "${words}"`}`);
-        if (degree === 3) await a.createEmbeddedDocuments("Item", [{ name: "Recognize Spell (+1)", type: "effect", img: "icons/svg/eye.svg", system: { rules: ["ac", "saving-throw"].map(selector => ({ key: "FlatModifier", selector, type: "circumstance", value: 1, label: "Recognize Spell" })), duration: { value: -1, unit: "unlimited" } }, flags: { [ID]: { recognize: true } } }]);   /* against this spell only: gone when the step ends */
+        if (degree === 3) await a.createEmbeddedDocuments("Item", [{ name: "Recognize Spell (+1)", type: "effect", img: "icons/svg/eye.svg", system: { rules: ["ac", "saving-throw"].map(selector => ({ key: "FlatModifier", selector, type: "circumstance", value: 1, label: "Recognize Spell", slug: "leb-recognize-spell" })), duration: { value: -1, unit: "unlimited" } }, flags: { [ID]: { recognize: true } } }]);   /* against this spell only: gone when the step ends */
       } else if (KNOWN[x.slug]?.pause) { result = result ?? "paused"; await addNote(combat, id, `${x.name} used ${x.reaction} against ${tok.name}'s ${cast.name}. Rule on it with ${pro("{their}", P(scene.tokens.get(x.token), combat))} player (the counteract and what happens to the spell), then press Do it to cast the spell anyway, or play the rest yourself.`); }
     } catch (err) { console.error(`${ID} | cast reaction`, err); await addNote(combat, id, `I couldn't finish ${x.name}'s ${x.reaction} (${err.message}): resolve it yourself.`); result = result ?? "paused"; }
   }
@@ -3387,8 +3388,8 @@ async function addEarthCover(actor) {
   delete src._id; choice.selection = { bonus: COVER_BONUS.standard, level: "standard" }; src.name = "Interposing Earth (cover)"; foundry.utils.setProperty(src, `flags.${ID}.earth`, true);
   await actor.createEmbeddedDocuments("Item", [src]);
 }
-async function dropEarthCover(combat) {
-  for (const c of combat?.combatants ?? []) { const a = c.token?.actor, ids = (a?.itemTypes?.effect ?? []).filter(e => e.getFlag?.(ID, "earth") || e.getFlag?.(ID, "recognize")).map(e => e.id); if (ids.length) await a.deleteEmbeddedDocuments("Item", ids).catch(e => console.warn(`${ID} | cover`, e)); }
+async function dropEarthCover(combat, { recognizeOnly = false } = {}) {
+  for (const c of combat?.combatants ?? []) { const a = c.token?.actor, ids = (a?.itemTypes?.effect ?? []).filter(e => (!recognizeOnly && e.getFlag?.(ID, "earth")) || e.getFlag?.(ID, "recognize")).map(e => e.id); if (ids.length) await a.deleteEmbeddedDocuments("Item", ids).catch(e => console.warn(`${ID} | cover`, e)); }
 }
 /** At the end of a move action that leaves no square (Stand, Drop Prone, a Climb), measured from where it was (a Climb can take it out of reach). */
 async function stayGate(combat, id, i, step, tok, from) {
