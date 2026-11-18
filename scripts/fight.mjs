@@ -2443,6 +2443,7 @@ function endAfter(combat, requestId) {
   setTimeout(async () => {
     try {
       while (game.paused) await new Promise(r => setTimeout(r, 300));   /* paused: the turn ends once the GM unpauses, if it is still this monster's */
+      for (let t = 0; t < 400 && (running.has(requestId) || condLater.has(requestId) || request(combat, requestId)?.react); t++) await new Promise(r => setTimeout(r, 300));   /* a Comforting Presence question on the finished turn (0.39.2, review 1): the turn waits for it, at most 2 minutes */
       const n = request(combat, requestId);
       if (n?.state !== "done" || !combat.started || combat.round !== r.round || combat.combatant?.id !== r.combatantId || currentRequest(combat) || !tok.getFlag(ID, "auto")) return;   /* Auto read again: unticked in the 2 s, the GM ends it */
       await combat.nextTurn();
@@ -3328,7 +3329,7 @@ async function askReactions(combat, id, i, key, gate, tok, list, kind = "", gmKi
   const who = moverName(tok), start = request(combat, id), watchKey = `${combat.id}.${id}.${i}.${key}`, rolls = [];
   /* each row is worded by its own gate (a question can hold rows of several: a Strike in reach asks Reactive Strike and Nimble Dodge together) */
   const asked = list.map(x => { const users = answerersOf(sceneOf(combat).tokens.get(x.token)?.actor ?? game.actors.get(x.actor)), g = x.gate ?? (x.slug === "nimble-dodge" ? "attack" : gate), k = x.kind ?? kind;
-    return { ...strip(x), to: users.length ? "player" : "gm", users, words: x.words ?? gateWords(g, who, { kind: k, reaction: x.reaction }), gmWords: x.gmWords ?? gateWords(g, tok.name, { kind: x.gmKind ?? (x.kind ? k : gmKind ?? k), reaction: x.reaction, whom: x.name }) }; });   /* a spell's name only on her card (0.36.0, review 5) */   /* the GM's card names the monster (seen live: "A creature" on her own card) */
+    return { ...strip(x), to: users.length ? "player" : "gm", users, words: x.words ?? gateWords(g, who, { kind: k, reaction: x.reaction }), gmWords: x.gmWords ?? gateWords(g, tok.name, { kind: x.gmKind ?? (x.kind ? k : gmKind ?? k), reaction: x.reaction, whom: x.name || "a creature" }) }; });   /* a spell's name only on her card (0.36.0, review 5) */   /* the GM's card names the monster (seen live: "A creature" on her own card) */
   /* the countdown is for players' windows only: a row the GM answers on her card waits for React, Pass or Continue (Rhea, 2026-11-09, 0.20.1) */
   const until = untilFor(asked, reactionTimer(), clock());
   /* `since` moves on: waiting for a reaction is a wait on a person for the stall check (brain.mjs stallOf, review finding 9) */

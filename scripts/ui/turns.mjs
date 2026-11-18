@@ -1,7 +1,7 @@
 /* The Monster Turns window: GM only. Who's ticked, and the plan card for the turn in hand. PF2e HUD's tracker is left alone. */
 import { LINE_LABEL, MINDS } from "../minds.mjs";
 import { BAND_GO, HELD_LABEL } from "../bands.mjs";
-import { CHANGEABLE, NOTE_MAX, SIDES, WORD, applyEdits, changeProblem, planPrint, describeChanges, describeStep, editableParts, isMove, listWords, stepLabels, tookTurn } from "../turn.mjs";
+import { CHANGEABLE, NOTE_MAX, SIDES, WORD, applyEdits, changeProblem, planPrint, describeChanges, describeStep, editableParts, finishedOf, isMove, listWords, stepLabels, tookTurn } from "../turn.mjs";
 import { tickGroups, groupChanges } from "./ticks.mjs";
 import { esc } from "../journal.mjs";
 /* her own words and names, never read for pronoun markers by the window's net (0.32.0 review 2): a brace as an HTML entity isn't a marker */
@@ -168,6 +168,10 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
       return `<div class="leb-card leb-mreact" data-request="${id}"><p><b>Reaction</b>: ${esc(line)}</p>${body}${rxHtml(x.react)}${pro(choiceHtml(x, m?.name, on), formsFor(c, x.tokenId))}${x.note ? `<p class="leb-warn">${esc(x.note)}</p>` : ""}${btns}</div>`; }).join("");
     const mOther = monsterReactionsLeft(c), mOtherLine = c.started && mOther.length ? `<p class="leb-other">Monsters' other reactions are yours to play: ${mOther.map(o => `${esc(o.name)}'s ${esc(o.reaction)}${o.trigger ? ` (${esc(o.trigger)})` : ""}`).join("; ")}.</p>` : "";
     const left = !r && lastNote(c); if (left) card = `<div class="leb-card"><p class="leb-warn">${esc(named(left.note))}</p></div>`;
+    /* a question on a turn whose last step is done (0.39.2, Comforting Presence after a Fear clicked on from its card): its rows and Continue, under
+       the turn's note (review 2: `currentRequest` leaves done turns out, so a GM row there was never drawn) */
+    const fin = !r ? finishedOf(c.getFlag(ID, "turns")?.requests ?? {}, c.round, c.combatant?.id) : null;
+    if (fin?.react) card += `<div class="leb-card" data-request="${fin.id}">${rxHtml(fin.react)}</div>`;
     /* fight memory (0.25.0): every other creature that keeps a notebook has its fold-out too, so the ones she plays can be read and corrected */
     const rest = c.started ? c.combatants.filter(x => x.token && x.token.id !== r?.tokenId).map(x => this._nbHtml(c, x.token.id, nameOf, x.token.name)).filter(Boolean) : [], notebooks = rest.length ? `<div class="leb-nbs">${rest.join("")}</div>` : "";
     /* the party's reaction boxes (0.27.0; Rhea, 2026-11-11): tick = used this round, with how it was ticked; hers to click for anyone; each clears
@@ -399,7 +403,7 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     root.querySelectorAll("[data-barrier] [data-bar]").forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); el.disabled = true; removeBarrier(c, el.closest("[data-barrier]").dataset.barrier).catch(e => ui.notifications.error(e.message)); }));
     root.querySelectorAll(".leb-prr input[type=checkbox]").forEach(el => el.addEventListener("change", () => { el.disabled = true; setReactionUsed(c, el.closest("[data-rxtoken]").dataset.rxtoken, el.checked).catch(e => { ui.notifications.error(e.message); if (this.rendered) this.render(); }); }));
     /* the countdown: only the turn in hand, only while it runs (review finding 3) */
-    clearTimeout(this._rxTick); const cur = c ? currentRequest(c) : null, ticking = [cur, ...(c ? Object.values(c.getFlag(ID, "turns")?.requests ?? {}).filter(x => x?.reaction && x.state === "running") : [])].find(x => x?.react && countingDown(x.react.list, x.react.answers ?? {}, x.react.until, clock())); if (ticking) this._rxTick = setTimeout(() => { if (this.rendered) this.render(); }, 1000);
+    clearTimeout(this._rxTick); const cur = c ? currentRequest(c) ?? finishedOf(c.getFlag(ID, "turns")?.requests ?? {}, c.round, c.combatant?.id) : null, ticking = [cur, ...(c ? Object.values(c.getFlag(ID, "turns")?.requests ?? {}).filter(x => x?.reaction && x.state === "running") : [])].find(x => x?.react && countingDown(x.react.list, x.react.answers ?? {}, x.react.until, clock())); if (ticking) this._rxTick = setTimeout(() => { if (this.rendered) this.render(); }, 1000);
     /* fight memory (0.25.0): the fold-outs stay open across redraws; a line typed in the add box is kept and a redraw waits while she types */
     this._nbOpen ??= new Set(); this._nbDraft ??= {}; this._nbPrev ??= {};
     /* a press on a fold-out's title holds a redraw until the release, so the click that opens or closes it isn't lost (0.29.1 review 6); the title
