@@ -199,6 +199,9 @@ Player reactions during a monster's turn: Reactive Strike, Shield Block, Reactiv
 - **Test tip:** one Nimble Dodge question per Strike: untick the reactor's box between Strikes (the API's `partyReactions` `set`, with false) or let its own turn pass; a second Strike in the same round is (rightly) not asked.
 
 - **A dropped weapon's Strike is still a PF2e Strike** (PF2e 8.7.0, 0.39.1): every place that lists an NPC's Strikes (a plan's, a packet's, a Reactive Strike's) must leave out `droppedWeapon` ones; `meleeOf` forgot until it was seen live.
+- **Continue on the card skips the players' rows** (0.39.1, a test driver mistake met live): pressing Continue while a moment's question has player windows open answers them all "continue" and the damage goes on with nobody asked (the harm moment showed no Glimpse). A test passes the GM's rows and waits for the players' windows to be answered or to time out.
+- **Glimpse of Redemption needs the attacker inside the champion's aura too** (PR-8): a test with the monster 60 feet away asked nothing; place it within 15 feet of the champion.
+
 ## Open items
 - A Fly, Swim or Burrow passing through someone's reach later on its route isn't asked (only where it starts); burrowing down in its own square isn't asked.
 - A Sneak that starts observed is a move action too; it isn't asked yet (Sneak usually starts hidden, when no one can react).
