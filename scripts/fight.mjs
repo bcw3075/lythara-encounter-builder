@@ -203,7 +203,8 @@ function abilityList(actor) {
       traits: [...(i.system.traits?.value ?? [])], usesLeft: f ? (f.value ?? f.max ?? null) : null, followUp: FOLLOW_UPS[slug] ?? null, effect: FOLLOW_UPS[slug] ? slug : null };
   });
   /* A Strike can list Grab or Knockdown with no matching item on the creature (PF2e's attack effects don't need one): it can still use it, as the rules say */
-  for (const { strike } of strikesWithIds(actor)) for (const e of strike.item?.system?.attackEffects?.value ?? []) {
+  /* a Strike whose weapon lies on the ground lends none (u-141, 0.39.9; Rhea, 2026-11-18): the follow-up goes with the Strike that is gone */
+  for (const { strike } of strikesWithIds(actor)) for (const e of droppedWeapon(actor, strike) ? [] : strike.item?.system?.attackEffects?.value ?? []) {
     if (!FOLLOW_UPS[e] || list.some(a => a.id === e)) continue;
     const free = e.startsWith("improved-");
     list.push({ item: null, id: e, name: e.split("-").map(w => w[0].toUpperCase() + w.slice(1)).join(" "), kind: free ? "free" : "action", cost: free ? 0 : 1, traits: [], usesLeft: null, followUp: FOLLOW_UPS[e], effect: e });
@@ -1783,7 +1784,9 @@ async function settleCover(combat, id, upto, tok, from = request(combat, id)?.co
   const r = request(combat, id); if (!r?.steps || !endsCover(r.steps, r.log, upto, from) || !(takingCover(tok) || ownCover(tok).length)) return;
   let last = null; for (let k = upto - 1; k >= 0 && !last; k--) if (r.steps[k]?.do === "strike" || (["ability", "spell"].includes(r.steps[k]?.do) && r.steps[k].attack) || isMove(r.steps[k]) || r.steps[k]?.do === "climb") last = r.steps[k];   /* a Climb leaves its space too (0.33.1, review) */
   let note; try { note = await watched(() => endTakeCover(tok, isMove(last) || last?.do === "climb" ? "movement" : "attack")); } catch (e) { console.error(`${ID} | take cover`, e); note = `I couldn't end ${tok.name}'s Take Cover (${e.message}): check Visioner's card.`; }
-  await save(combat, id, { coverSettled: upto, ...(note ? { note: [request(combat, id).note, note].filter(Boolean).join(" ") } : {}) });
+  /* once a turn (0.39.9; Rhea, 2026-11-18, after two shots showed it twice): a turn's note that already warns about this Take Cover gets no second warning */
+  const had = request(combat, id).note ?? "", told = note && [`${tok.name}'s Take Cover`, `end ${tok.name}'s Take Cover`, `${tok.name} attacked, which ends`, `${tok.name} moved, which ends`].some(w => had.includes(w));
+  await save(combat, id, { coverSettled: upto, ...(note && !told ? { note: [had, note].filter(Boolean).join(" ") } : {}) });
 }
 /* ---------- abilities ---------- */
 /* Rhea, 2026-11-07: the Strike follow-ups (Grab, Knockdown, Push, Pull, and their Improved free-action forms) run for real: PF2e's own Grapple, Trip, Shove or
@@ -4815,12 +4818,24 @@ async function settleBandsNow(combat) {
     /* B-11 (0.39.7, Rhea, 2026-11-18): the one who took over hands the band back when the leader the module acted on (`orig`) is on its side and
        standing again, whether it got back up or came back from a side change. The fall is forgotten, so a second fall is acted on afresh. The
        packets already read it that way at once (bandlib `leaderOf` with `standing`); this clears what the fight stored. */
-    const was0 = fightBand(combat, band.key), back = was0?.orig && (was0.leader?.token || was0.fell?.pick === "next") ? membersOf(scene, band.key).find(t => t.id === was0.orig) : null;
-    if (back && leadsAgain(back)) { const at0 = `flags.${ID}.bands.${band.key}`;
+    /* 0.39.9 (Rhea, 2026-11-18): a band that fell apart or fights harder re-forms too when the leader gets back up, if most of its members that
+       follow a leader were Drilled or Trained before the fall (`fell.reforms`, decided at the fall: orders.mjs `reformsOnReturn`). Falls apart: the
+       plan comes back and the members the fall made Loose get the Discipline they had. Fights harder: the objective and "never gives up" stay; the
+       leader gives orders again from its next turn. Either way the fall is forgotten, so a second one is acted on afresh. A Loose band undoes nothing. */
+    const was0 = fightBand(combat, band.key), pick0 = was0?.fell?.pick ?? null, heired = !!was0?.leader?.token || pick0 === "next", reform = !!was0?.fell?.reforms && (pick0 === "apart" || pick0 === "harder");
+    const back = was0?.orig && (heired || reform) ? membersOf(scene, band.key).find(t => t.id === was0.orig) : null;
+    if (back && leadsAgain(back)) { const at0 = `flags.${ID}.bands.${band.key}`, restored = [];
       change[`${at0}.leader`] = gone(); change[`${at0}.fell`] = gone(); change[`${at0}.orig`] = gone(); change[`flags.${ID}.turns.leads.${band.key}`] = back.id;
-      change[`flags.${ID}.turns.orders.last.${band.key}`] = gone();   /* as when the heir took over: the leader may give its own order this round too */
-      if (was0.leader?.token && turns(combat).turned?.[band.key]?.token === was0.leader.token) change[`flags.${ID}.turns.turned.${band.key}`] = gone();   /* the heir changed sides before the band was handed back: nobody's fall to act on (review) */
-      change[`flags.${ID}.turns.orders.log.${lineKey(Date.now(), Object.keys(change).length % 36, foundry.utils.randomID(3))}`] = { k: "leaderBack", band: band.key, r: combat.round, at: Date.now(), was: back.id, heir: was0.leader?.token ?? null };
+      if (heired) {
+        change[`flags.${ID}.turns.orders.last.${band.key}`] = gone();   /* as when the heir took over: the leader may give its own order this round too */
+        if (was0.leader?.token && turns(combat).turned?.[band.key]?.token === was0.leader.token) change[`flags.${ID}.turns.turned.${band.key}`] = gone();   /* the heir changed sides before the band was handed back: nobody's fall to act on (review) */
+      } else if (pick0 === "apart") {
+        change[`${at0}.planGone`] = gone(); const own = combat.getFlag(ID, "minds")?.own ?? {};
+        /* only a line the fall wrote and nobody has changed since: one the GM set in the meantime stays hers */
+        for (const [id, prev] of Object.entries(was0.fell.loosened ?? {})) { const now = own[id]?.discipline; if (now?.by !== "module" || now.pick !== "loose" || !scene.tokens.get(id)) continue;   /* one gone from the map stays as it is (review 5) */
+          change[`flags.${ID}.minds.own.${id}.discipline`] = prev && typeof prev === "object" ? whole(prev) : gone(); restored.push(id); }
+      }
+      change[`flags.${ID}.turns.orders.log.${lineKey(Date.now(), Object.keys(change).length % 36, foundry.utils.randomID(3))}`] = { k: "leaderBack", band: band.key, r: combat.round, at: Date.now(), was: back.id, heir: was0.leader?.token ?? null, pick: heired ? "next" : pick0, restored };
       continue; }
     /* a leader that changed sides (0.30.0, R3-15): "If the leader falls" fires once, as for any fall; it no longer counts as a member, so the
        marked leader reads as gone and a guessed one is silently passed over: the books (`turned`) say who it was */
@@ -4842,7 +4857,8 @@ async function settleBandsNow(combat) {
     const out = fallOutcome({ pick, state, leaderId: lead.tok?.id ?? null, second: secondOf(scene, band)?.id ?? null, dropper: dropper?.label ?? null,
       members: members.map(t => ({ id: t.id, level: t.actor?.level ?? 0, speaks: langsOf(t.actor).length > 0, discipline: disciplineOf(scene, t, combat), standing: !fellWord(t) && !(t.hidden && !t.getFlag(ID, "escaped") && !isBelow(t)) })) });
     const at = `flags.${ID}.bands.${band.key}`;
-    change[`${at}.fell`] = whole({ was, state, round: combat.round, pick });
+    const own0 = combat.getFlag(ID, "minds")?.own ?? {};   /* what each member the fall makes Loose had in this fight's layer, for a band that re-forms (0.39.9) */
+    change[`${at}.fell`] = whole({ was, state, round: combat.round, pick, ...(out.reforms ? { reforms: true } : {}), ...(out.loosen.length ? { loosened: Object.fromEntries(out.loosen.map(id => [id, own0[id]?.discipline ?? null])) } : {}) });
     if (!lead0.took && was !== "gone") change[`${at}.orig`] = was;   /* the leader this fall is of, kept for B-11: the heir hands the band back to it (a later fall of the heir leaves it) */
     if (useTurned) change[`flags.${ID}.turns.turned.${band.key}.done`] = true;
     if (out.leader) { change[`${at}.leader`] = whole({ token: out.leader }); change[`flags.${ID}.turns.orders.last.${band.key}`] = gone(); }   /* the new leader may give its own order on its turn, this round too (R3-2) */

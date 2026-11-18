@@ -145,12 +145,21 @@ export function dropperOf({ dropped = null, book = {}, labels = {}, isEnemy = ()
     leaves nobody to avenge): the plan's objective becomes killing whoever dropped it, and nobody gives up. "Plan stands" and "Breaks and runs"
     change nothing here: the thinker is told the pick in words, as in tier 3a. */
 export function fallOutcome({ pick = null, state = null, members = [], leaderId = null, second = null, dropper = null } = {}) {
-  const out = { leader: null, loosen: [], planGone: false, objective: null, never: [] }, up = (members ?? []).filter(m => m.id !== leaderId && m.standing);
+  const out = { leader: null, loosen: [], planGone: false, objective: null, never: [], reforms: false }, up = (members ?? []).filter(m => m.id !== leaderId && m.standing);
   if (!state) return out;
   if (pick === "next") { const s = up.find(m => m.id === second && PLANNED.includes(m.discipline)); out.leader = s ? s.id : nextInLine(members, leaderId); }
   else if (pick === "apart") { out.planGone = true; out.loosen = up.filter(m => m.discipline === "trained" || m.discipline === "drilled").map(m => m.id); }
   else if (pick === "harder" && (state === "down" || state === "dead")) { out.objective = dropper ? `kill ${dropper}, who struck the leader down` : "kill whoever struck the leader down"; out.never = up.filter(m => PLANNED.includes(m.discipline)).map(m => m.id); }
+  /* 0.39.9: only a fall that changed something has anything to re-form (review 1: a "harder" leader that fled set nothing) */
+  if (out.planGone || out.objective) out.reforms = reformsOnReturn(up, leaderId);
   return out;
+}
+/** Whether a band re-forms when its leader gets back up (0.39.9; Rhea, 2026-11-18): by its Discipline, which belongs to each kind, so a mixed band
+    goes by most of its members still standing that follow a leader, as they were before the fall, the leader not counted; a tie re-forms ("Most of
+    its members (Recommended)"; review 4: the fallen don't count, the caller passes those standing). Drilled and Trained re-form, Loose doesn't; a band with nobody who follows a leader has nothing to re-form. */
+export function reformsOnReturn(members = [], leaderId = null) {
+  const follow = (members ?? []).filter(m => m.id !== leaderId && PLANNED.includes(m.discipline)), firm = follow.filter(m => m.discipline === "trained" || m.discipline === "drilled").length;
+  return firm > 0 && firm >= follow.length - firm;
 }
 /** The line a member who no longer gives up carries in this fight's layer of its mind. */
 export const NEVER_GIVES_UP = "Never, now: the band's leader was struck down, and this one fights on to the end.";
@@ -159,7 +168,7 @@ export const NEVER_GIVES_UP = "Never, now: the band's leader was struck down, an
 const FELL = { down: "is down", dead: "is dead", fled: "has fled the fight", gone: "is gone", yielded: "has given {themself} up", turned: "has changed sides" };
 /** One entry of the band log for the GM. nameOf(tokenId) → a name; named(text) turns labels into names; langName(slug) → "Goblin".
     Entries: { k: "order", band, r, by, from, o, words (as the leader meant it, in labels), say, lang, heard: [ids], missed: { id: why }, msg }
-    and { k: "fell", band, r, was, state, pick, leader, loosen, objective, never } and { k: "leaderBack", band, r, was (the leader), heir }. */
+    and { k: "fell", band, r, was, state, pick, leader, loosen, objective, never } and { k: "leaderBack", band, r, was (the leader), heir, pick, restored: [ids whose Discipline came back] }. */
 export function logWords(e, { nameOf = id => id, named = s => s, langName = l => l, bandName = "", formsOf = () => IT } = {}) {   /* formsOf(tokenId): that creature's own pronoun */
   const list = xs => xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`, band = bandName ? ` (${bandName})` : "";
   if (e?.k === "order") {
@@ -175,7 +184,10 @@ export function logWords(e, { nameOf = id => id, named = s => s, langName = l =>
     if (e.pick === "stands") return `${who} The plan stands, and nobody changes it.`;
     return `${who} The band has no pick for this: each is told its leader fell.`;
   }
-  if (e?.k === "leaderBack") return pro(`${nameOf(e.was)}${band}, the leader, is back in the fight and leads {their} band again; ${e.heir ? `${nameOf(e.heir)} no longer leads` : "the one who led in {their} place no longer leads"}.`, formsOf(e.was));   /* B-11 (0.39.7) */
+  if (e?.k === "leaderBack") {   /* B-11 (0.39.7); the band that fell apart or fights harder (0.39.9) */
+    if (e.pick === "apart") return pro(`${nameOf(e.was)}${band}, the leader, is back in the fight and the band re-forms: its plan is back${(e.restored ?? []).length ? `, and the Discipline of ${list(e.restored.map(nameOf))} is back to what it was` : ""}.`, formsOf(e.was));
+    if (e.pick === "harder") return pro(`${nameOf(e.was)}${band}, the leader, is back in the fight and gives the orders again from {their} next turn; the band still fights harder, and nobody gives up.`, formsOf(e.was));
+    return pro(`${nameOf(e.was)}${band}, the leader, is back in the fight and leads {their} band again; ${e.heir ? `${nameOf(e.heir)} no longer leads` : "the one who led in {their} place no longer leads"}.`, formsOf(e.was)); }
   if (SPEECH_LOG.includes(e?.k)) return speechLogWords(e, { nameOf, formsOf });   /* yielding (0.29.0): not a band's line, but the same log */
   if (COMMAND_LOG.includes(e?.k)) return commandLogWords(e, { nameOf, named, formsOf });   /* 0.30.0: a failed command the GM answered */
   if (SIDE_LOG.includes(e?.k)) return sideLogWords(e, { nameOf, bandName, formsOf });   /* 0.30.0: a creature changed sides, or a player got it */

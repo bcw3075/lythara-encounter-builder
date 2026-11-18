@@ -10,6 +10,7 @@ Take Cover: rule B for when it is allowed, Visioner's per-creature cover, when i
 ## Decisions
 - **Take Cover (2026-11-07):** allowed by **rule B**: prone, a wall or thick trunk next to its space (thin trunks, lesser cover under 3 ft, don't count; she can change that), or standard or greater cover already from a creature it sees. What it does: **Visioner's per-creature cover** (her option 1), set through Visioner's public `setCover(..., { takeCover: true })`: standard or greater becomes greater, less becomes standard, prone with none greater against ranged only. It ends on the monster's own attack or a move off its square, and the runner accepts Visioner's "Take Cover Should End" card itself. PF2e's own Effect: Cover is only the fallback with Visioner off (one bonus against everyone, never ends).
 
+- **The "Take Cover should have ended" warning once a turn (0.39.9; Rhea, 2026-11-18: "once per turn").** Two shots showed it twice. `settleCover` adds a warning about this creature's Take Cover to the turn's note only when the note holds none yet (any of its three wordings); a re-plan keeps the same request, so it is once for the whole turn.
 ## How it works
 - **Burrow (0.16.0):** going down into the ground or coming up out of it leaves its space, so it ends Take Cover (`endsCover`), as a Fly that changes height does.
 - **Going up or down ends it too (0.15.0):** `endsCover` counts a Climb that moved or fell, and a Fly that changed height on its own square (a gap since 0.13.0, found by the 0.15.0 review): leaving its space vertically is leaving its space, as `checkPlan` already assumed.
@@ -45,5 +46,6 @@ Record every id below in the release's change record when this feature, or a fea
 - **A Take Cover begun before a reload always goes to the GM:** cover is set creature by creature, so "Taking Cover now" doesn't prove it reached them all. Steps already settled for ending it are marked (`coverSettled`, saved with `pos`), or a Take Cover the GM gives between steps would be ended for an earlier Strike.
 
 ## Open items
+- Once a turn means once a turn (0.39.9 review 2): a Take Cover the GM gives between steps that Visioner then fails to end gets no second warning that turn, and a note in the same turn that names this creature's Take Cover counts as the warning. Rhea may want a second warning for a fresh Take Cover.
 - Take Cover not tested live: ending on unconscious (Visioner's own hook), PF2e's prone effect against a real ranged Strike, Visioner really off in the world (simulated on one page), a Large creature by a wall; invisible map-edge walls count as cover (known gap).
 - Whether Visioner's greater cover from one thin trunk is too generous, for Rhea to judge.
