@@ -2,7 +2,7 @@
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. It runs Strikes, Strides, Steps, Crawls, Fly, Swim, Climb, Release, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek, Interact, Delay and fleeing off the map; what is still to come is in the repo's docs/features and the project's plan doc. */
 import { handedOn, withoutAsks, couldSetOff, untouched, settleFrom, settleWait, CHANGEABLE, NOTE_MAX, changeProblem, describeStep, nameWords, noteForThinker, planPrint } from "./turn.mjs";
-import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, SAVE_MULT, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, shouldSink, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, damageOptions, describeChanges, doneStep, nextCommand, nextPoint, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract, nextClimb, climbResult, tookTurn } from "./turn.mjs";
+import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, SAVE_MULT, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, shouldSink, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, finishedOf, damageOptions, describeChanges, doneStep, nextCommand, nextPoint, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract, nextClimb, climbResult, tookTurn } from "./turn.mjs";
 import { BURROW_DEPTH, FT, distanceBetween, burrowWorld, crossesWalls, cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, heightWhenCut, rockSquares, routeWordsIt, routeWords, swimWorld, glideWorld, treeTop, treesBeside, wallSquares, waterKinds, waterUnder } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, visibleConditions } from "./perceive.mjs";
 import { giveOwn, kindFacts, mindLayers, mindOf, partyPeople, pronounOf, setLines } from "./library.mjs";
@@ -3328,7 +3328,7 @@ async function askReactions(combat, id, i, key, gate, tok, list, kind = "", gmKi
   const who = moverName(tok), start = request(combat, id), watchKey = `${combat.id}.${id}.${i}.${key}`, rolls = [];
   /* each row is worded by its own gate (a question can hold rows of several: a Strike in reach asks Reactive Strike and Nimble Dodge together) */
   const asked = list.map(x => { const users = answerersOf(sceneOf(combat).tokens.get(x.token)?.actor ?? game.actors.get(x.actor)), g = x.gate ?? (x.slug === "nimble-dodge" ? "attack" : gate), k = x.kind ?? kind;
-    return { ...strip(x), to: users.length ? "player" : "gm", users, words: x.words ?? gateWords(g, who, { kind: k, reaction: x.reaction }), gmWords: x.gmWords ?? gateWords(g, tok.name, { kind: x.gmKind ?? (x.kind ? k : gmKind ?? k), reaction: x.reaction }) }; });   /* a spell's name only on her card (0.36.0, review 5) */   /* the GM's card names the monster (seen live: "A creature" on her own card) */
+    return { ...strip(x), to: users.length ? "player" : "gm", users, words: x.words ?? gateWords(g, who, { kind: k, reaction: x.reaction }), gmWords: x.gmWords ?? gateWords(g, tok.name, { kind: x.gmKind ?? (x.kind ? k : gmKind ?? k), reaction: x.reaction, whom: x.name }) }; });   /* a spell's name only on her card (0.36.0, review 5) */   /* the GM's card names the monster (seen live: "A creature" on her own card) */
   /* the countdown is for players' windows only: a row the GM answers on her card waits for React, Pass or Continue (Rhea, 2026-11-09, 0.20.1) */
   const until = untilFor(asked, reactionTimer(), clock());
   /* `since` moves on: waiting for a reaction is a wait on a person for the stall check (brain.mjs stallOf, review finding 9) */
@@ -4465,20 +4465,22 @@ export function onItemHands(item, change) {
 /** Prone came off (the runner's `deleteItem` hook): if no Stand card comes with it, the GM is asked whether it stood up. */
 /* Moment H (0.39.0): a party-side creature becoming frightened or stupefied during a monster's turn. While a step runs it is kept by request and
    asked when the step ends (`condGate` after the step); while the turn waits (for Next step, a ruling, a save the GM rolls) it is asked at once,
-   the turn kept from going on meanwhile (0.39.0 review 4: frightened is usually clicked on from a card after the step). In memory: a reload of the
+   the turn kept from going on meanwhile (0.39.0 review 4: frightened is usually clicked on from a card after the step); and once the last step is done
+   while it is still the monster's turn (0.39.2: a Fear that is the whole turn left its condition unasked). In memory: a reload of the
    runner's page loses what wasn't asked yet. `comforting`: the user's own rise from Comforting Presence asks nothing (review 7). */
 const condSeen = new Map(), comforting = new Set(), condLater = new Map();
 export function onConditionGained(item) {
   if (!isRunner() || item?.type !== "condition" || !KNOWN["comforting-presence"].conds.includes(item.slug) || !item.actor || !reactsLikeParty(item.actor) || comforting.has(item.actor.id)) return;
-  for (const c of game.combats) { if (!c.started) continue; const cr = currentRequest(c), tok = tokenIn(c, item.actor);
-    if (!cr || !tok || ["done", "manual"].includes(cr.state)) continue;
+  for (const c of game.combats) { if (!c.started) continue; const cr = currentRequest(c) ?? finishedOf(turns(c).requests, c.round, c.combatant?.id), tok = tokenIn(c, item.actor);   /* 0.39.2: also once its last step is done, while it is still its turn */
+    if (!cr || !tok || cr.state === "manual") continue;
     for (const k of [...condSeen.keys()]) if (k !== cr.id) condSeen.delete(k);   /* only the turn in hand's */
     const l = condSeen.get(cr.id) ?? []; if (!l.some(x => x.token === tok.id && x.cond === item.slug)) l.push({ token: tok.id, cond: item.slug }); condSeen.set(cr.id, l);
     if (!running.has(cr.id) && cr.state !== "running") { clearTimeout(condLater.get(cr.id)); condLater.set(cr.id, setTimeout(() => { condLater.delete(cr.id); condNow(c, cr.id).catch(e => console.error(`${ID} | reactions`, e)); }, 1500)); } }   /* conditions clicked on together make one question */
 }
 /** Comforting Presence asked while the monster's turn waits: the request is marked running (Do it waits) while the question is open. */
 async function condNow(combat, id) {
-  const r = request(combat, id); if (!r || running.has(id) || ["done", "manual", "running"].includes(r.state) || !condSeen.get(id)?.length) return;
+  const r = request(combat, id); if (!r || running.has(id) || ["manual", "running"].includes(r.state) || !condSeen.get(id)?.length) return;
+  if (r.state === "done" && finishedOf(turns(combat).requests, combat.round, combat.combatant?.id)?.id !== id) return;   /* a finished turn only while it is still its turn (0.39.2) */
   const tok = sceneOf(combat)?.tokens.get(r.tokenId); if (!tok) return;
   running.add(id); try { await condGate(combat, id, Math.max(0, (r.pos ?? 1) - 1), tok, `cond-${clock().toString(36)}`); } finally { running.delete(id); }
 }

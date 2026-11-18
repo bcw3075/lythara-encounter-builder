@@ -388,11 +388,13 @@ export function coverInDc(options = []) {
 /** What a reaction that raises AC adds to a DC: only what it beats of the circumstance bonus already counted (circumstance bonuses don't stack).
     bonus: the reaction's; had: the best circumstance bonus already in the DC. */
 export const acAdds = (bonus, had) => Math.max(0, (Number(bonus) || 0) - Math.max(0, Number(had) || 0));
-/** What the reactor is told, in a sentence. who: the mover as the reactor may see it ("The Sod Hound" or "A creature"); kind: the monster's action. */
-export function gateWords(gate, who, { kind = "", reaction = "" } = {}) {
-  const W = { move: `${who} is moving out of a square in your reach`, stay: `${who} ${kind || "uses a move action"} in your reach`, manipulate: `${who} uses a manipulate action in your reach${kind ? ` (${kind})` : ""}`,
-    ranged: `${who} makes a ranged attack in your reach`, attack: `${who} attacks you`, hit: `${who}'s ${kind || "Strike"} hits you`,
-    harm: `${who} is about to damage ${kind || "your ally"}, and both are in your champion's aura`, area: `${who}'s ${kind || "spell"} is about to catch you in its area`,
+/** What the reactor is told, in a sentence. who: the mover as the reactor may see it ("The Sod Hound" or "A creature"); kind: the monster's action.
+    whom (0.39.2): the reactor's name, for the GM's card, which never says "you" (close-out sitting 1: "Goblin Warrior attacks you." on her card). */
+export function gateWords(gate, who, { kind = "", reaction = "", whom = "" } = {}) {
+  const you = whom || "you", reach = whom ? "in reach" : "in your reach", aura = whom ? `${whom}'s champion's aura` : "your champion's aura";
+  const W = { move: `${who} is moving out of a square ${reach}`, stay: `${who} ${kind || "uses a move action"} ${reach}`, manipulate: `${who} uses a manipulate action ${reach}${kind ? ` (${kind})` : ""}`,
+    ranged: `${who} makes a ranged attack ${reach}`, attack: `${who} attacks ${you}`, hit: `${who}'s ${kind || "Strike"} hits ${you}`,
+    harm: `${who} is about to damage ${kind || (whom ? "an ally" : "your ally")}, and both are in ${aura}`, area: `${who}'s ${kind || "spell"} is about to catch ${you} in its area`,
     cast: `${who} is casting ${kind || "a spell"}`, save: `${who}'s ${kind || "spell"} calls for a save`, saved: `A save against ${who}'s ${kind || "spell"} went badly` };
   return `${W[gate] ?? who}. React with ${reaction}?`;
 }

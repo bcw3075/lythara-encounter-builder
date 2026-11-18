@@ -1130,6 +1130,12 @@ export function absorbOwn(seen = [], before = [], after = [], own = null) {
 export function currentOf(requests = {}, round, combatantId) {
   return Object.entries(requests).map(([id, r]) => ({ id, ...r })).filter(r => !["done", "manual"].includes(r.state) && !r.reaction && r.round === round && r.combatantId === combatantId).at(-1) ?? null;   /* a monster's reaction (0.21.0) is its own request, never the turn's */
 }
+/** The turn's request once its plan is carried out but the turn hasn't moved on yet (0.39.2, close-out sitting 1): the monster's last step is done
+    and the GM is still applying what it did (frightened clicked on from a spell's card). A delayed one is no finished turn, nor a reaction. */
+export function finishedOf(requests = {}, round, combatantId) {
+  const last = Object.entries(requests).map(([id, r]) => ({ id, ...r })).filter(r => !r.reaction && r.round === round && r.combatantId === combatantId).at(-1) ?? null;
+  return last?.state === "done" && !last.delayed ? last : null;
+}
 /** Whether the GM has taken this turn herself with Play it myself: this turn's latest request (reactions aside) is "manual". `currentOf` never
     answers a manual request, so the Give orders box asks here (0.28.0 live test: the box never came up for a ticked leader). */
 export function tookTurn(requests = {}, round, combatantId) {
