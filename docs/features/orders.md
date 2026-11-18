@@ -35,6 +35,7 @@ Settled by Angel, told to Rhea with the samples or in the release note, hers to 
 - **The deafened leader:** speech isn't an action, so its order needs no flat check; a deafened hearer gets nothing (the review's reading of the rule).
 - **The leader keeps its own orders** like any hearer, so its later packets say what it last ordered.
 - **An order stands until another takes its place.** A new objective replaces the old one; a call to fall back takes the objective's place and the other way round; each kind keeps the latest order for its job (four kinds at most). A band that falls apart loses its standing orders with its plan, and a band that fights harder loses the fallen leader's last order to the whole band (the new objective takes its place). A new leader's band keeps the orders it had, and the new leader may give its own on its turn, in that round too.
+- **A job order whose kind has all fallen by the time its step runs is not given** (seen live 2026-11-18, 0.39.2): the plan is dropped and asked again with the reason in words, and the round's order is not used up.
 - **The order costs no Next step press and no Auto pause:** the plan goes straight on to its next step. It must come before the leader's last action (review 7: a re-plan with no actions left would end the turn before it speaks).
 - **A named second** is a select on the band's page in Monster Minds, under the Leader. It is used only by "Next in line takes over".
 - **Fights harder needs someone to avenge:** the objective names the enemy whose blow took the leader to 0 hit points, when one of the leader's own side, awake, saw that enemy at that moment (kept from that blow's own card, because a creature that is down writes nothing in its notebook); when nobody of its side saw the striker, or the card names nobody (lasting damage), the enemy whose blow the leader's notebook has last and for sure; with neither, "whoever struck the leader down". A leader that fled or whose token is gone leaves the plan as it is. "Plan stands" and "Breaks and runs" still only tell the thinker in words.
@@ -84,7 +85,6 @@ Settled by Angel, told to Rhea with the samples or in the release note, hers to 
 
 ## Open items
 - A creature brought to 0 by hit points typed by hand, or by anything else that posts no damage card, leaves `dropped` as it was: usually nothing, so the notebook decides.
-- An order for a kind's job that was approved while that kind still had someone to take it is still given if they have all fallen by the time its step runs (it uses up the round's order).
 - The Second select on a band's page offers a creature that follows no leader (an animal); it is passed over at the fall.
 - Telepathy, and a language a creature understands but can't speak, aren't told apart: the sheet's language list decides both who can speak and who understands.
 - The hearers her page shows before an order is given are worked out on her page: without the fight's map open there, only conditions, languages and her calls show (the window says so); the runner's own test on the fight's map is the one that counts.
