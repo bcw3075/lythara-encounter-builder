@@ -58,3 +58,5 @@ Settled by Angel, told to Rhea in the release note, hers to change:
 - An animal that becomes a player's after it was commanded keeps the command on its row until the fight ends (the module no longer plays its turn).
 - A Delay by the animal on its commanded turn keeps the command for the turn it comes back to in the same round; one that comes back in a later round has lost it.
 - The GM may lower the DC for a friendly animal or a treat (the rule's own words): not offered; she can re-roll by hand.
+- Two GMs answering one failed command at the same instant (Play it myself and Let Angel plan it) both land: the command reads `own` and `angel`, the animal is ticked and Angel is asked for its turn (seen live in 0.39.5, presses timed to the same millisecond from two pages; u-155).
+- A runner reload right after the Nature roll leaves no record of the command: the next Do it doesn't roll again, it stops with "may not have finished" and the GM plays the rest (seen live in 0.39.5).
