@@ -3249,7 +3249,16 @@ export async function readyAct(combat, tokenId, op, text = "", requestId = null)
   if (isRunner()) return readyNowOn(combat, tokenId, op, text, game.user, requestId);
   emitSocket({ t: "ready", combat: combat.id, token: tokenId, op, text: op === "text" ? cleanTrigger(text) : "", request: requestId });
 }
-async function readyNowOn(combat, tokenId, op, text, from, requestId = null) {
+/* Ready presses run one after another per fight (0.39.6, B-10: two Now! in the same instant each read `readied`, then each wrote it back with only
+   their own token, and one was lost). A failed press never stops the line. */
+const readyLine = new Map();
+function readyNowOn(combat, tokenId, op, text, from, requestId = null) {
+  const key = combat?.id, run = (readyLine.get(key) ?? Promise.resolve()).catch(() => {}).then(() => readyNowRun(combat, tokenId, op, text, from, requestId));
+  const tail = run.catch(() => {}); readyLine.set(key, tail);
+  tail.then(() => { if (readyLine.get(key) === tail) readyLine.delete(key); });
+  return run.then(v => v);   /* a fresh promise: a caller that drops it still gets the unhandled-rejection signal, and a null combat is a rejection (as before) */
+}
+async function readyNowRun(combat, tokenId, op, text, from, requestId = null) {
   if (op === "done") {
     /* her Continue ends the wait for everyone on that turn; a player's Done only for their own character, on this round's turn */
     const reqs = Object.entries(turns(combat).requests ?? {}).map(([id, x]) => ({ ...x, id }));
