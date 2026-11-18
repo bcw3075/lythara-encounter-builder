@@ -349,6 +349,8 @@ async function buildPacket(combat, tok, turn = {}) {
 function fallenWord(tok) { const a = tok?.actor; if (!a) return "gone";
   /* asleep is not fallen: the builder puts Unconscious on a monster built asleep, and its band must not run while the boss sleeps (0.26.0 review 1) */
   return tok.getFlag(ID, "escaped") ? "fled" : isDeadNow(a) ? "dead" : (a.hitPoints?.value ?? 1) <= 0 || a.hasCondition?.("dying") ? "down" : null; }
+/** Standing for leading (B-11, 0.39.7): not fallen as the band counts it, and not hidden by the GM (a hidden leader is never acted on, so the heir keeps leading). */
+const leadsAgain = tok => !fellWord(tok) && !(tok?.hidden && !tok.getFlag(ID, "escaped"));
 /** A creature that has yielded in a fight still going (0.29.0): its token's flag, or null. `prisonerOf`: its yield was accepted. `stoodDown`:
     either. `fellWord`: fallen as its band counts it, a leader that gave itself up included (its band acts on that as on a fall). */
 const liveFlag = (tok, key) => { const y = tok?.getFlag?.(ID, key); return y && game.combats.get(y.combat)?.started ? y : null; };
@@ -4705,7 +4707,7 @@ export const bandLog = combat => Object.entries(ordersOf(combat).log ?? {}).filt
 /** A creature's band as an order sees it: whether it leads now, the others, those who follow orders and still stand, and the kinds. Null without a band. */
 function orderFacts(combat, tok) {
   const scene = sceneOf(combat), band = tok ? bandOf(scene, tok) : null; if (!band) return null;
-  const lead = leaderOf(scene, band, combat), members = membersOf(scene, band.key).filter(t => t.id !== tok.id), follows = t => PLANNED.includes(disciplineOf(scene, t, combat)) && !fellWord(t);
+  const lead = leaderOf(scene, band, combat, { standing: leadsAgain }), members = membersOf(scene, band.key).filter(t => t.id !== tok.id), follows = t => PLANNED.includes(disciplineOf(scene, t, combat)) && !fellWord(t);
   const fell = fightBand(combat, band.key)?.fell, turnedAway = fell?.state === "turned" && !lead.took && lead.tok?.id !== fell.was;   /* its leader changed sides: nobody leads by the guess now (0.33.1, review) */
   return { band, leads: !turnedAway && lead.tok?.id === tok.id && follows(tok), members, followers: members.filter(follows), groups: jobGroups(scene, band) };
 }
@@ -4810,6 +4812,16 @@ async function settleBands(combat) {
 async function settleBandsNow(combat) {
   const scene = sceneOf(combat), change = {}, fresh = {};
   for (const band of bandsOf(scene)) {
+    /* B-11 (0.39.7, Rhea, 2026-11-18): the one who took over hands the band back when the leader the module acted on (`orig`) is on its side and
+       standing again, whether it got back up or came back from a side change. The fall is forgotten, so a second fall is acted on afresh. The
+       packets already read it that way at once (bandlib `leaderOf` with `standing`); this clears what the fight stored. */
+    const was0 = fightBand(combat, band.key), back = was0?.orig && (was0.leader?.token || was0.fell?.pick === "next") ? membersOf(scene, band.key).find(t => t.id === was0.orig) : null;
+    if (back && leadsAgain(back)) { const at0 = `flags.${ID}.bands.${band.key}`;
+      change[`${at0}.leader`] = gone(); change[`${at0}.fell`] = gone(); change[`${at0}.orig`] = gone(); change[`flags.${ID}.turns.leads.${band.key}`] = back.id;
+      change[`flags.${ID}.turns.orders.last.${band.key}`] = gone();   /* as when the heir took over: the leader may give its own order this round too */
+      if (was0.leader?.token && turns(combat).turned?.[band.key]?.token === was0.leader.token) change[`flags.${ID}.turns.turned.${band.key}`] = gone();   /* the heir changed sides before the band was handed back: nobody's fall to act on (review) */
+      change[`flags.${ID}.turns.orders.log.${lineKey(Date.now(), Object.keys(change).length % 36, foundry.utils.randomID(3))}`] = { k: "leaderBack", band: band.key, r: combat.round, at: Date.now(), was: back.id, heir: was0.leader?.token ?? null };
+      continue; }
     /* a leader that changed sides (0.30.0, R3-15): "If the leader falls" fires once, as for any fall; it no longer counts as a member, so the
        marked leader reads as gone and a guessed one is silently passed over: the books (`turned`) say who it was */
     const tn = turns(combat).turned?.[band.key] ?? null, lead0 = leaderOf(scene, band, combat), useTurned = !!tn && !tn.done;   /* `done` is written with the fall itself: a later fall of the heir rewrites `fell.was`, which so can't say (0.30.0 review 1) */
@@ -4831,6 +4843,7 @@ async function settleBandsNow(combat) {
       members: members.map(t => ({ id: t.id, level: t.actor?.level ?? 0, speaks: langsOf(t.actor).length > 0, discipline: disciplineOf(scene, t, combat), standing: !fellWord(t) && !(t.hidden && !t.getFlag(ID, "escaped") && !isBelow(t)) })) });
     const at = `flags.${ID}.bands.${band.key}`;
     change[`${at}.fell`] = whole({ was, state, round: combat.round, pick });
+    if (!lead0.took && was !== "gone") change[`${at}.orig`] = was;   /* the leader this fall is of, kept for B-11: the heir hands the band back to it (a later fall of the heir leaves it) */
     if (useTurned) change[`flags.${ID}.turns.turned.${band.key}.done`] = true;
     if (out.leader) { change[`${at}.leader`] = whole({ token: out.leader }); change[`flags.${ID}.turns.orders.last.${band.key}`] = gone(); }   /* the new leader may give its own order on its turn, this round too (R3-2) */
     else if (heirGone) change[`${at}.leader`] = gone();
@@ -5460,7 +5473,7 @@ async function checkSidesNow(combat) {
     }
   }
   /* who leads each band as things stand, for the next look; not in the pass its leader turned in (the band hasn't been settled yet) */
-  for (const band of bandsOf(scene)) { if (change[`turned.${band.key}`]) continue; const lead = leaderOf(scene, band, combat).tok?.id ?? null; if (lead && t.leads?.[band.key] !== lead) change[`leads.${band.key}`] = lead; }
+  for (const band of bandsOf(scene)) { if (change[`turned.${band.key}`]) continue; const lead = leaderOf(scene, band, combat, { standing: leadsAgain }).tok?.id ?? null; if (lead && t.leads?.[band.key] !== lead) change[`leads.${band.key}`] = lead; }
   log.forEach((e, k) => { change[`orders.log.${lineKey(Date.now(), k % 36, foundry.utils.randomID(3))}`] = { r: combat.round, at: Date.now(), ...e }; });
   if (Object.keys(change).length) await saveTurns(combat, change);
   if (flipped) await settleBandsNow(combat);   /* already in the queue the bands are settled in: "If the leader falls" at once */

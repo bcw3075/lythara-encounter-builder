@@ -171,6 +171,10 @@ export function bandForPacket({ discipline = "loose", nature = {}, plan = {}, me
   const body = Object.keys(out).filter(k => k !== "leader"); if (!body.length && !out.leader) return { band: null, held: [...new Set(held)] };
   return { band: { ...(Object.keys(pick).length ? { pick } : {}), ...out }, held: [...new Set(held)] };
 }
+/** Does the one who took over (0.28.0, "Next in line takes over") still lead? Not once the leader that fell is standing again (B-11, 0.39.7, Rhea,
+    2026-11-18: "a leader who gets back up, or comes back from a side change, takes over again"). heir, base: token ids (the heir the fight
+    stored, the leader the mark or the guess names); baseStanding: the base leader is on the band's side and not fallen as the fight counts it. */
+export const heirLeads = ({ heir = null, base = null, baseStanding = false } = {}) => !!heir && (!base || base === heir || !baseStanding);
 /** What a member is told once its leader has fallen (R3-10: the band knows at once): how, and for "Next in line takes over" who leads now. Only for
     members that follow a leader. state: "down" | "dead" | "fled" | "gone" (its token is no longer on the map). next: the new leader's label, "you", or
     null when nobody is left to lead. Out: the packet's `bandNow`, or null. */

@@ -159,7 +159,7 @@ export const NEVER_GIVES_UP = "Never, now: the band's leader was struck down, an
 const FELL = { down: "is down", dead: "is dead", fled: "has fled the fight", gone: "is gone", yielded: "has given {themself} up", turned: "has changed sides" };
 /** One entry of the band log for the GM. nameOf(tokenId) → a name; named(text) turns labels into names; langName(slug) → "Goblin".
     Entries: { k: "order", band, r, by, from, o, words (as the leader meant it, in labels), say, lang, heard: [ids], missed: { id: why }, msg }
-    and { k: "fell", band, r, was, state, pick, leader, loosen, objective, never }. */
+    and { k: "fell", band, r, was, state, pick, leader, loosen, objective, never } and { k: "leaderBack", band, r, was (the leader), heir }. */
 export function logWords(e, { nameOf = id => id, named = s => s, langName = l => l, bandName = "", formsOf = () => IT } = {}) {   /* formsOf(tokenId): that creature's own pronoun */
   const list = xs => xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`, band = bandName ? ` (${bandName})` : "";
   if (e?.k === "order") {
@@ -175,6 +175,7 @@ export function logWords(e, { nameOf = id => id, named = s => s, langName = l =>
     if (e.pick === "stands") return `${who} The plan stands, and nobody changes it.`;
     return `${who} The band has no pick for this: each is told its leader fell.`;
   }
+  if (e?.k === "leaderBack") return pro(`${nameOf(e.was)}${band}, the leader, is back in the fight and leads {their} band again; ${e.heir ? `${nameOf(e.heir)} no longer leads` : "the one who led in {their} place no longer leads"}.`, formsOf(e.was));   /* B-11 (0.39.7) */
   if (SPEECH_LOG.includes(e?.k)) return speechLogWords(e, { nameOf, formsOf });   /* yielding (0.29.0): not a band's line, but the same log */
   if (COMMAND_LOG.includes(e?.k)) return commandLogWords(e, { nameOf, named, formsOf });   /* 0.30.0: a failed command the GM answered */
   if (SIDE_LOG.includes(e?.k)) return sideLogWords(e, { nameOf, bandName, formsOf });   /* 0.30.0: a creature changed sides, or a player got it */

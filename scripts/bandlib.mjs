@@ -5,7 +5,7 @@
 import { ID } from "./builder.mjs";
 import { builtRef, briefOf, kindFacts, libraryGet, mindLayers, partyPeople, writeBrief } from "./library.mjs";
 import { assemble } from "./minds.mjs";
-import { PLANNED, applyBand, bandForPacket, bandId, cleanBand, cleanBands, guessLeader, leaderFell, natureOf, nextInLine, shiftSpots } from "./bands.mjs";
+import { PLANNED, applyBand, bandForPacket, bandId, cleanBand, cleanBands, guessLeader, heirLeads, leaderFell, natureOf, nextInLine, shiftSpots } from "./bands.mjs";
 export { PLANNED };
 
 const gmOnly = () => { if (!game.user.isGM) throw new Error("Only a GM can do this."); };
@@ -35,13 +35,22 @@ const fact = (scene, t, combat) => ({ id: t.id, level: t.actor?.level ?? 0, spea
 /** Who leads a band: the monster marked (in the Monster Minds window or by the brief), else the module's guess (bands.mjs `guessLeader`: the
     highest-level member that follows a leader and can speak), counted over every member, fallen or not, so the guess doesn't move on when the leader
     drops. Out: { tok, guessed, gone } (`gone`: one was marked and its token is no longer on the scene); `tok` null when the band has no leader. */
-export function leaderOf(scene, band, combat = null) {
+export function leaderOf(scene, band, combat = null, { standing = null } = {}) {
   if (!band) return { tok: null, guessed: false, gone: false }; const members = membersOf(scene, band.key), mark = band.leader;
-  /* the one who took over in this fight (0.28.0: "Next in line takes over", acted on by the module) leads for as long as its token is there */
-  const took = fightBand(combat, band.key)?.leader?.token, heir = took ? members.find(t => t.id === took) : null; if (heir) return { tok: heir, guessed: false, gone: false, took: true };
-  if (mark) { const tok = mark.token ? members.find(t => t.id === mark.token) : members.find(t => { const r = builtRef(scene, t); return r?.row === mark.row && r.n === mark.n; }); return { tok: tok ?? null, guessed: false, gone: !tok }; }
-  const id = guessLeader(members.map(t => fact(scene, t, combat)));
-  return { tok: id ? scene.tokens.get(id) : null, guessed: true, gone: false };
+  const base = () => {
+    if (mark) { const tok = mark.token ? members.find(t => t.id === mark.token) : members.find(t => { const r = builtRef(scene, t); return r?.row === mark.row && r.n === mark.n; }); return { tok: tok ?? null, guessed: false, gone: !tok }; }
+    const id = guessLeader(members.map(t => fact(scene, t, combat))); return { tok: id ? scene.tokens.get(id) : null, guessed: true, gone: false };
+  };
+  /* the one who took over in this fight (0.28.0: "Next in line takes over", acted on by the module) leads for as long as its token is there, and
+     the leader that fell is not standing again (B-11, 0.39.7: given `standing`, the fight's own test, the leader that got back up leads again) */
+  const fb = fightBand(combat, band.key), took = fb?.leader?.token, heir = took ? members.find(t => t.id === took) : null;
+  if (heir) {
+    /* `orig`: the leader the module acted on the fall of (written with the fall). A fight that began before 0.39.7 has none, and its heir leads as before. */
+    const orig = standing && fb.orig ? members.find(t => t.id === fb.orig) ?? null : null;
+    if (heirLeads({ heir: heir.id, base: orig?.id ?? null, baseStanding: !!orig && !!standing(orig) })) return { tok: heir, guessed: false, gone: false, took: true };
+    return { tok: orig, guessed: false, gone: false };
+  }
+  return base();
 }
 /** A band's named second (0.28.0), or null. */
 export function secondOf(scene, band) { const mark = band?.second; if (!mark) return null; const members = membersOf(scene, band.key);
@@ -79,7 +88,7 @@ export function planOf(scene, band, combat = null) { const retreat = briefOf(sce
     fallen(tok): "down" | "dead" | "fled" | null, as the fight sees that creature now. Out: { band, bandNow, held }. */
 export function bandPacket(scene, tok, combat, { labelOf = () => null, fallen = () => null, discipline = null } = {}) {
   const band = bandOf(scene, tok); if (!band) return { band: null, bandNow: null, held: [] };
-  const mine = discipline ?? disciplineOf(scene, tok, combat), lead = leaderOf(scene, band, combat), ref = builtRef(scene, tok), rows = briefOf(scene)?.creatures ?? [];
+  const mine = discipline ?? disciplineOf(scene, tok, combat), lead = leaderOf(scene, band, combat, { standing: t => !fallen(t) && !(t.hidden && !t.getFlag(ID, "escaped")) }), ref = builtRef(scene, tok), rows = briefOf(scene)?.creatures ?? [];
   const nature = natureOf(natureLayers(scene, band, combat)), members = membersOf(scene, band.key);
   const nameOf = j => j.row != null ? rows[j.row]?.name ?? "" : (() => { const t = members.find(m => !builtRef(scene, m) && kindFacts(m.actor)?.key === j.kind); return t ? kindFacts(t.actor).kindName : ""; })();
   /* a leader the GM has hidden isn't there for the thinker, fallen or not (0.26.0 review 9); one that got away is hidden too, and that is told */
