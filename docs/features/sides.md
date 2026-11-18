@@ -42,6 +42,7 @@ Settled by Angel, told to Rhea in the release note, hers to change:
 - (sc-8) {live} B-6 (0.31.0): a creature added to a fight already begun has `sides.<token>` at once, `from` its own side; its first change of side is logged as changing sides, and the change back as coming back.
 
 ## Traps
+- **To test a side change, set the actor's `system.details.alliance`** (or ownership), not the token's disposition: the look reads only those, so a disposition change writes nothing.
 - **A guessed leader leaves no mark when it goes:** `leaderOf` simply guesses the next member, so the books keep who led at the last look (`leads`) and compare.
 - **A marked leader that changed sides reads as "gone" on every later pass:** `settleBandsNow` skips a band whose `turned` entry has been acted on while the mark still points at the one that left, or the band would fall a second time.
 - **The look runs inside the notebooks' queue and settles the bands itself:** calling the queued `settleBands` from there would wait on its own job.
