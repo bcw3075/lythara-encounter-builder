@@ -4186,7 +4186,7 @@ const tokenIn = (combat, actor) => combat.combatants.find(c => c.token && (c.tok
 export const openReactions = combat => Object.entries(turns(combat).requests ?? {}).filter(([, r]) => r?.reaction && r.state !== "done").map(([id, r]) => ({ id, ...r }));
 /** A monster's melee Strikes for reactionStrike, and its longest melee reach. */
 function meleeOf(actor) {
-  const list = strikesWithIds(actor).map(({ id, strike: a }) => ({ id, name: a.label, ranged: !!a.item?.isRanged, reach: actor.getReach?.({ action: "attack", weapon: a.item }) ?? 5, mod: strikeMods((a.variants ?? []).map(v => v.label))[0] ?? 0 })).filter(s => !s.ranged);
+  const list = strikesWithIds(actor).filter(({ strike: a }) => !droppedWeapon(actor, a)).map(({ id, strike: a }) => ({ id, name: a.label, ranged: !!a.item?.isRanged, reach: actor.getReach?.({ action: "attack", weapon: a.item }) ?? 5, mod: strikeMods((a.variants ?? []).map(v => v.label))[0] ?? 0 })).filter(s => !s.ranged);
   return { list, reach: Math.max(0, ...list.map(s => s.reach)) };
 }
 /** The monsters that could react to this creature now: NPCs in the fight that are its enemies, able to act and attack, with Reactive Strike, perceiving
