@@ -28,7 +28,7 @@ Take Cover: rule B for when it is allowed, Visioner's per-creature cover, when i
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.
 **Take Cover** (any change to `runTakeCover`, `takeCover`, `settleCover`, `endTakeCover`, `nearCoverFor`, `coverSubjects`, or take-cover in `checkPlan`):
-- (tc-1) {live,shared:turn-loop} a map with thick (standard) and thin (lesser) trunk walls, e.g. a real encounter map with thick and thin trunks (the scene is named in `claude/encounter-builder-private-tests.md`).
+- (tc-1) {live,shared:turn-loop} a map with thick (standard) and thin (lesser) trunk walls, e.g. a real encounter map with thick and thin trunks (the scene is named in `angel-mod-private/docs/encounter-builder-private-tests.md`).
 - (tc-2) {live,shared:turn-loop} Through `checkPlan`: nothing to take cover with, a thin trunk only, cover from a creature it can't see, twice, after a Step (cover doesn't carry), refused; prone, by a thick trunk, cover from a seen creature, Take Cover-Strike-Take Cover, prone Take Cover-Stand-Take Cover, accepted.
 - (tc-3) {live,shared:turn-loop} Find a square where the PC is both observed by the monster and gives standard cover with `perceived` and `getAutoCoverState` (two limited trunks hide the PC).
 - (tc-4) {live,shared:turn-loop} By real clicks: a stop at hook stage `take-cover` and a reload, then Do it: one card, `getAutoCoverState(pc, monster)` greater, and a real Strike from the PC (capture `preCreateChatMessage`, return false) at AC+4; Next step Strike: Visioner's card accepted, `avs-override-from-*` flags gone.

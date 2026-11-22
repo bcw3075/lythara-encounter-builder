@@ -37,16 +37,16 @@
     }
   ],
   "finishList": [
-    "plan/encounter-builder-history.md in the private plan repo: the plan's \"is built\" paragraph that this release replaces moves there (the project doc claude/lythara-encounter-builder.md is the closed log up to 0.23.0: never written to)",
+    "plan/encounter-builder-history.md in the private plan repo: the plan's \"is built\" paragraph that this release replaces moves there (logs/lythara-encounter-builder.md in the private repo is the closed log up to 0.23.0: never written to)",
     "the lythara-encounter-builder skill card, only if the one-page skill text changed",
-    "claude/foundry-version-baseline.md if the installed version changed",
-    "claude/docs-index.md: Last checked for every doc touched, a row for any new doc",
-    "claude/encounter-builder-plan.md: Status and Next (the lock and questions are checked by guide)"
+    "docs/foundry-version-baseline.md in the private repo if the installed version changed",
+    "docs/docs-index.md in the private repo: Last checked for every doc touched, a row for any new doc",
+    "plan/encounter-builder-plan.md: Status and Next (the lock and questions are checked by guide)"
   ],
   "unverified": "docs/unverified.md",
   "unverifiedLimit": 8,
   "closeOutAtLeast": 3,
-  "planDoc": "claude/encounter-builder-plan.md",
+  "planDoc": "plan/encounter-builder-plan.md",
   "pageChecks": [
     {
       "id": "calendar-off",
@@ -63,8 +63,8 @@
       "live": "Load foundry-module-dev, foundry-vtt-operator, foundry-bridge, foundry-test-process and lythara-encounter-builder."
     },
     "where": [
-      "claude/docs-index.md (where each fact lives)",
-      "history: plan/encounter-builder-history.md in the private plan repo (from 0.24.0); claude/lythara-encounter-builder.md (closed log, up to 0.23.0)",
+      "docs/docs-index.md in the private repo (where each fact lives)",
+      "history: plan/encounter-builder-history.md in the private plan repo (from 0.24.0); logs/lythara-encounter-builder.md there (closed log, up to 0.23.0)",
       "docs/features/<name>.md (`guide` prints what a change needs)"
     ]
   },

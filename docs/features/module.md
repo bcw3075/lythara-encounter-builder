@@ -33,7 +33,7 @@ Three choices do most of the work:
 - **The mod's work runs on the Claude Bridge account's page ("the runner"), with the fight scene open there.** See "Who runs a turn" in step 2. Visioner's `getVisibility` looks tokens up on the viewed scene and answers "observed" when it can't find them [LIVE, CODE], so if the runner isn't on the fight scene it opens it, and if it can't, the card says so instead of giving silent wrong answers.
 - **Everything is kept in Foundry, not in the chat.** A summarized chat or a browser reload loses nothing.
 **Overlap with installed modules**
-Checked against `claude/foundry-section-8-modules.md` and a live settings scan (103 third-party settings matched the keywords, none an encounter builder or AI turn) [LIVE]. **Nothing installed builds encounters or runs monster turns.**
+Checked against `angel-mod-private/docs/foundry-section-8-modules.md` and a live settings scan (103 third-party settings matched the keywords, none an encounter builder or AI turn) [LIVE]. **Nothing installed builds encounters or runs monster turns.**
 | Job | Owner | What the mod does |
 |---|---|---|
 | XP and threat | PF2e `calculateXP` | Calls it |
@@ -67,7 +67,7 @@ Record every id below in the release's change record when this feature, or a fea
 - **Fix dice by stage, not by a queue:** on the runner, `CONFIG.Dice.randomUniform = () => window.__rigNow ?? original` and a `lythara-encounter-builder.step` hook that sets `__rigNow` from a map of stage to value (attack, damage, check, flat, save; 0.28 gives a d20 of 15, 0.5 of 10, 0.96 of 1, 0.01 of 20). The hook must return nothing except to stop. A reload drops it. Toolbelt's save rolls run on the runner's page when the module clicks them, so the `save` stage fixes them too.
 - **Test setup trap: a token's `x` already includes the scene's padding.** Squares are `(x - scene.dimensions.sceneX) / grid.size`; a list read as `x / size` and then placed with `sceneX` added again put the test Pyro 95 ft away.
 - **A pushed work branch is fine when a stop hook asks for a push mid-build:** push `spells`-style branches and move `main` only at release, because `main` is what the manifest installs from (2026-11-07). Set the branch's upstream with `git push -u` the first time, or the stop hook keeps reporting it as unpushed.
-- **The measured fight harness is `claude/encounter-builder-fight-harness.md`:** the fight chat (Sonnet 5.5 medium) with the prompt there, stand-ins in the AI and Test Player sessions, the usage note (private doc). The old Wolf id `Actor.PfLLF0V7UOMgTcEb` no longer resolves; Monster Core's Wolf is `Compendium.pf2e.pathfinder-monster-core.Actor.BN5Lb6IsQ9Wyu3rL`.
+- **The measured fight harness is `angel-mod-private/docs/encounter-builder-fight-harness.md`:** the fight chat (Sonnet 5.5 medium) with the prompt there, stand-ins in the AI and Test Player sessions, the usage note (private doc). The old Wolf id `Actor.PfLLF0V7UOMgTcEb` no longer resolves; Monster Core's Wolf is `Compendium.pf2e.pathfinder-monster-core.Actor.BN5Lb6IsQ9Wyu3rL`.
 - Before recommending a change to the design, read what the plan already says about it and give her the old reasons, including her standing rules (the stall whisper was recommended against "no whispered chat cards"). The Bridge choice reversed a line in the plan, and she heard that only after saying yes.
 - **Viewing a scene from the bridge can create or re-save a fog record,** so viewing an encounter scene is a change: fine in build testing, but not during a "change nothing" check.
 
