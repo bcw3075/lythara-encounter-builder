@@ -17,12 +17,14 @@ import { apiAlive, apiSpend, apiWanted, fightRoute, fixRoute, handOff, modelOf, 
 import { acceptEscapeLines, answerLook, dismissLook, escapeOffers, lookNow } from "./fight.mjs";
 import { barriersOf, clearBarriers, readiedNow, readyAct, removeBarrier, markUnseen, maskUnseen, chooseFor, onReactionCard, partyReactors, setReactionUsed, doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, onConditionGained, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCombatGone, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, onMemoryCard, onMemoryUpdate, onMemoryHp, notebookOf, previewRemember, rememberAdd, rememberCross, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
 
-const CONTROL = "encounters", apps = new Map(), mindsApps = new Map(); let turnsApp = null, historyApp = null, historyTimer = null;
+const CONTROL = "encounters", apps = new Map(), mindsApps = new Map(); let turnsApp = null, historyApp = null, historyTimer = null, turnsTimer = null;
 /* the history window fills in live; many flag writes come in a burst during a turn, so one redraw per quarter second */
 const redrawHistory = () => { if (!historyApp?.rendered || historyTimer) return; historyTimer = setTimeout(() => { historyTimer = null; if (historyApp?.rendered) historyApp.render(); }, 250); };
 const openHistory = () => { historyApp ??= new HistoryApp(); historyApp.render(true); };
 /* The Monster Turns window shows the fight on the scene this browser is looking at, so it redraws when that scene, its fight or a ticked box changes. */
-const redrawTurns = () => { if (turnsApp?.rendered) turnsApp.render(); redrawHistory(); redrawChip(); };
+/* one redraw per tenth of a second (0.39.10): a monster's step writes the fight's flag several times in a burst, and each write drew the whole card again */
+const renderTurns = () => { if (!turnsApp?.rendered || turnsTimer) return; turnsTimer = setTimeout(() => { turnsTimer = null; if (turnsApp?.rendered) turnsApp.render(); }, 100); };
+const redrawTurns = () => { renderTurns(); redrawHistory(); redrawChip(); };
 /* the player's reaction chip (0.27.0): drawn again whenever a fight, its creatures or its reaction boxes change; never on a GM's page */
 const redrawChip = () => { try { drawChip(); } catch (e) { console.warn(`${ID} | chip`, e); } };
 Hooks.once("init", () => {
@@ -109,7 +111,7 @@ Hooks.on("preUpdateCombatant", (combatant, change, options) => { keepTurn(combat
 Hooks.on("updateCombatant", (combatant, change, options, userId) => { saveTurn(combatant, options, userId); noteChange(combatant); });
 Hooks.on("renderChatMessageHTML", (message, html) => { onRenderMessage(message, html); try { maskUnseen(message, html); } catch (e) { console.warn(`${ID} | unseen`, e); } try { onRenderOrder(message, html); onRenderSay(message, html); } catch (e) { console.warn(`${ID} | order line`, e); } });
 Hooks.on("pauseGame", () => { redrawTurns(); });   /* the card says when Auto is waiting on the pause */
-Hooks.on("updateCombat", (combat, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}`) || "turn" in change || "round" in change) redrawHistory(); if (turnsApp?.rendered && (foundry.utils.hasProperty(change, `flags.${ID}`) || "turn" in change || "round" in change)) turnsApp.render(); onCombatUpdate(combat, change); });
+Hooks.on("updateCombat", (combat, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}`) || "turn" in change || "round" in change) redrawHistory(); if (turnsApp?.rendered && (foundry.utils.hasProperty(change, `flags.${ID}`) || "turn" in change || "round" in change)) renderTurns(); onCombatUpdate(combat, change); });
 /* a turn handed on with no `updateCombat` (the current combatant deleted, 0.24.0): `combatTurnChange` on the pages core tells, `deleteCombatant` on every page */
 Hooks.on("combatTurnChange", combat => { onTurnHandedOn(combat); });
 Hooks.on("deleteCombatant", combatant => { onTurnHandedOn(combatant.parent); });

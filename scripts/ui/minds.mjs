@@ -4,7 +4,7 @@
 import { esc } from "../journal.mjs";
 import { ID, findCreatures } from "../builder.mjs";
 import { CAPS, LAYER_WORDS, LIBRARY_LINES, LINES, LINE_LABEL, PICKS, SUGGEST, assemble, cleanLine, libraryChanges, lineWarnings, lineWords, peopleKey } from "../minds.mjs";
-import { BAND_CAPS, FALL_BACK, NATURE, NATURE_LABEL, NATURE_PICKS, NATURE_SUGGEST, NATURE_LAYER_WORDS, PLANNED, bandId, cleanPart, natureWords } from "../bands.mjs";
+import { BAND_CAPS, FALL_BACK, NATURE, NATURE_LABEL, NATURE_PICKS, NATURE_SUGGEST, NATURE_LAYER_WORDS, bandId, cleanPart, natureWords } from "../bands.mjs";
 import { bandViews, joinBand, removeBand, setBand } from "../bandlib.mjs";
 import { pronounOf, dropOwn, giveOwn, kindFacts, libraryEntries, libraryExport, libraryGet, libraryImport, libraryPut, libraryRemove, mindRows, partyPeople, rowActor, rowProfile, setLines } from "../library.mjs";
 import { formsOf, fromGender, pro } from "../pronoun.mjs";
@@ -53,7 +53,8 @@ export const redrawLibrary = () => { if (libraryApp?.rendered) libraryApp.render
 /* ---------- Monster Minds: one scene ---------- */
 export class MindsApp extends ApplicationV2 {
   static DEFAULT_OPTIONS = { id: "leb-minds", classes: ["leb-minds"], window: { title: "Monster Minds", resizable: true }, position: { width: 940, height: 680, top: 30 } };
-  constructor(scene) { super(); this.scene = scene; this.sel = null; this.draft = {}; this.bdraft = {}; this.message = ""; }
+  constructor(scene) { super({ id: `leb-minds-${scene.id}` }); this.scene = scene; this.sel = null;   /* one window per scene, each with its own id: a shared id let the second scene's window take the first's element, which then stayed "rendered" off screen (0.39.10) */
+    this.draft = {}; this.bdraft = {}; this.message = ""; }
   get title() { return `Monster Minds: ${this.scene.name}`; }
   get dirty() { return Object.keys(this.draft).length > 0 || Object.keys(this.bdraft).length > 0; }
   /* the layer this view edits: a monster's own, or this encounter's for the kind */

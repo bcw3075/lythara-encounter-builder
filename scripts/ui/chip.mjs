@@ -58,5 +58,6 @@ function wire(el) {
     const b = f.row; if (!b || b.dataset.off) return;
     const combat = game.combats.get(b.dataset.combat); if (combat) setReactionUsed(combat, b.dataset.token, b.dataset.used !== "1").catch(e => ui.notifications.error(e.message)); };
   el.addEventListener("pointerup", end); el.addEventListener("pointercancel", ev => { from = null; el.classList.remove("leb-drag"); el.releasePointerCapture?.(ev.pointerId); });
-  window.addEventListener("resize", () => { if (el.isConnected) place(el, { left: el.offsetLeft, top: el.offsetTop }); });
+  const onResize = () => { if (!el.isConnected) { window.removeEventListener("resize", onResize); return; } place(el, { left: el.offsetLeft, top: el.offsetTop }); };   /* a chip removed at a fight's end drops its listener at the next resize (0.39.10) */
+  window.addEventListener("resize", onResize);
 }

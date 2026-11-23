@@ -79,7 +79,7 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
     else if (a === "askAngel") { const s = await summary(this.scene); await this.scene.setFlag(ID, "design", { requested: Date.now(), summary: s }); this.message = `Asked. In your chat, say "build an encounter on ${this.scene.name}". The brief appears here when it's sent.`; this.render(); }
     else if (a === "preview") { /* out of the way while she looks at the map */
       await this.minimize();
-      const r = await previewLoop(this.scene, s => prepare(this.scene, this.brief, { seed: s }), place, "Build this?");
+      let r; try { r = await previewLoop(this.scene, s => prepare(this.scene, this.brief, { seed: s }), place, "Build this?"); } catch (e) { await this.maximize(); throw e; }   /* a brief prepare refuses must not leave the window minimized (0.39.10) */
       if (r) { this.close(); ui.notifications.info(`Placed ${r.tokens} creatures: ${r.threat.rating}, ${r.threat.xp} XP.`); for (const w of r.warnings) ui.notifications.warn(w); } else await this.maximize(); }
   }
 }

@@ -1,6 +1,6 @@
 /* A monster's turn as plain data: what a plan means, whether it's legal, and where a step stands. Pure: no Foundry globals.
    The glue gathers live values first. Strikes, Strides, Steps, Crawls, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek, fleeing, Interact and Delay; other speeds come as step 2 goes on. */
-import { BURROW_DEPTH, FT, burrowVertical, climbDistance, distanceBetween, headingOf, heightCost, swimDistance } from "./move.mjs";
+import {FT, burrowVertical, climbDistance, distanceBetween, headingOf, heightCost, swimDistance } from "./move.mjs";
 import { placeable } from "./area.mjs";
 import { cleanOrder, orderWords } from "./orders.mjs";
 import { cleanSay } from "./speech.mjs";
