@@ -70,6 +70,7 @@ Record every id below in the release's change record when this feature, or a fea
 - **The measured fight harness is `angel-mod-private/docs/encounter-builder-fight-harness.md`:** the fight chat (Sonnet 5.5 medium) with the prompt there, stand-ins in the AI and Test Player sessions, the usage note (private doc). The old Wolf id `Actor.PfLLF0V7UOMgTcEb` no longer resolves; Monster Core's Wolf is `Compendium.pf2e.pathfinder-monster-core.Actor.BN5Lb6IsQ9Wyu3rL`.
 - Before recommending a change to the design, read what the plan already says about it and give her the old reasons, including her standing rules (the stall whisper was recommended against "no whispered chat cards"). The Bridge choice reversed a line in the plan, and she heard that only after saying yes.
 - **Viewing a scene from the bridge can create or re-save a fog record,** so viewing an encounter scene is a change: fine in build testing, but not during a "change nothing" check.
+- **The Monster Turns window's redraws are throttled (0.39.10, code review):** `main.mjs` draws it at most once a tenth of a second (`renderTurns`), as the History window is at a quarter second: a monster's step writes the fight's flag several times in a burst, and each write drew the whole card again.
 
 ## Open items
 - The smoke test still needs its monster-turn line.
