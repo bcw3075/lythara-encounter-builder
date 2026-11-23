@@ -135,7 +135,7 @@ export function heightCost(squares = 0, dz = 0) {
     changed at the last square. Returns [{ square, elev }] for every square after the first, plus one more at the last square when height is left. */
 export function flyWaypoints(route = [], from = 0, to = 0) {
   const out = [], dir = Math.sign(to - from); let e = from;
-  for (const sq of route.slice(1)) { if (e !== to) e += dir * FT; out.push({ square: [...sq], elev: e }); }
+  for (const sq of route.slice(1)) { if (e !== to) e = dir > 0 ? Math.min(to, e + FT) : Math.max(to, e - FT); out.push({ square: [...sq], elev: e }); }   /* clamped: a start off the 5-ft steps (7 ft) never passes the target (0.39.10) */
   if (e !== to || !out.length) out.push({ square: [...(route.at(-1) ?? [0, 0])], elev: to });
   return out;
 }

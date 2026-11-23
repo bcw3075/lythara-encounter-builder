@@ -114,7 +114,7 @@ function checkPlanIt(plan, ctx) {
   let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, herePos = ctx.me?.pos ?? here, hereElev = Number(ctx.me?.elev) || 0, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, surfaced = false, fled = false, ordered = false, said = false, gaveUp = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {}, shots = {};
   const commanded = new Set(), pointed = new Set();   /* 0.30.0: one command an animal and one Point Out a creature in a plan */
   /* up a tree it climbed (it holds on there: no Stride, Step and the like until it climbs down), and what it holds in its hands */
-  let tree = hereElev > 0 && ctx.onTree ? ctx.onTree : null, below = !!ctx.below; if (below) hereElev = 0;   /* its token sits below 0; once up it stands at 0 */ const holding = new Map((ctx.holding ?? []).map(h => [h.id, h.name])), released = new Set(), drawn = new Set(), handsOf = new Map((ctx.holding ?? []).map(h => [h.id, Number(h.hands) || 1]));
+  let tree = hereElev > 0 && ctx.onTree ? ctx.onTree : null, below = !!ctx.below; if (below) hereElev = 0;   /* its token sits below 0; once up it stands at 0 */ const holding = new Map((ctx.holding ?? []).map(h => [h.id, h.name])), released = new Set(), drawn = new Set(), drawnItem = new Map(), handsOf = new Map((ctx.holding ?? []).map(h => [h.id, Number(h.hands) || 1]));
   let freeHands = Math.max(0, (ctx.hands ?? 2) - [...handsOf.values()].reduce((s, n) => s + n, 0));   /* draw (0.33.2): hands free now, by what it holds */
   const upTree = word => `{they} {is|are} ${Math.round(hereElev)} ft up the tree at [${tree.at[0]}, ${tree.at[1]}], so {they} can't ${word} there: a Climb (a "climb" step) with "height": 0 gets {them} down${ctx.flySpeed > 0 ? `, or {they} can Fly off` : ""}.`;
   /* distances from where each creature really stands (pos, fractional off the grid), as PF2e and the packet measure them; after a move, from the square it moved to */
@@ -297,7 +297,7 @@ function checkPlanIt(plan, ctx) {
       if (!s.sheathed || drawn.has(s.weaponItem)) return { ok: false, reason: `${at}: {their} ${s.name} is already in {their} hands: Strike with it, no draw needed.` };
       const need = Number(s.hands) || 1;
       if (freeHands < need) return { ok: false, reason: `${at}: drawing {their} ${s.name} needs ${need === 2 ? "both hands" : "a hand"} free, and {they} {holds|hold} ${listWords([...holding.values()])}. A "release" step (a free action) first drops one.` };
-      freeHands -= need; drawn.add(s.weaponItem); holding.set(s.id, s.name); handsOf.set(s.id, need);   /* now held: a later Release in the plan can drop it */
+      freeHands -= need; drawn.add(s.weaponItem); holding.set(s.id, s.name); handsOf.set(s.id, need); if (s.weaponItem) drawnItem.set(s.id, s.weaponItem);   /* now held: a later Release in the plan can drop it */
       steps.push({ do: "draw", item: s.id, itemName: s.name, weaponItem: s.weaponItem, hands: need, ...(ctx.grabbed ? { flat: GRABBED_FLAT } : {}) }); last = { do: "draw" }; continue;
     }
     if (step.do === "release") {
@@ -308,7 +308,7 @@ function checkPlanIt(plan, ctx) {
       const hit = [...holding].find(([id, name]) => id.toLowerCase() === want || String(name).toLowerCase() === want);
       if (!hit) return { ok: false, reason: `${at}: a release needs "item": the name of something {they} {holds|hold} (${holding.size ? `{they} {holds|hold} ${listWords([...holding.values()])}` : "{they} {holds|hold} nothing"}).` };
       holding.delete(hit[0]); released.add(hit[0]); freeHands += handsOf.get(hit[0]) ?? 0; handsOf.delete(hit[0]);
-      steps.push({ do: "release", item: hit[0], itemName: hit[1], ...(ctx.grabbed ? { flat: GRABBED_FLAT } : {}) }); last = { do: "release" }; continue;
+      steps.push({ do: "release", item: hit[0], itemName: hit[1], ...(drawnItem.has(hit[0]) ? { itemId: drawnItem.get(hit[0]) } : {}), ...(ctx.grabbed ? { flat: GRABBED_FLAT } : {}) });   /* a weapon drawn in this plan is held under its Strike's id, not its held id: the item's own id finds it (0.39.10) */ last = { do: "release" }; continue;
     }
     if (step.do === "climb") {
       /* Climb (Rhea, 2026-11-08: trees, height by size, hands by the rule; Player Core Climb, Actions ID 2374; climb Speed, Rules ID 2349): straight up

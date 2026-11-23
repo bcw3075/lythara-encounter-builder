@@ -850,6 +850,8 @@ function treeUp(tok, scene) {
 }
 /** What it holds in its hands (a Climb needs both free; Rhea, 2026-11-08: by the rule): physical items carried "held" in one or two hands, with an
     id a plan can name (the slug, -2 and so on when two share it). */
+/* what a Release drops: by its held id, or, for a weapon drawn earlier in the same plan (held under its Strike's id), by the item's own id (0.39.10) */
+const heldOf = (actor, step) => heldItems(actor).find(h => h.id === step.item) ?? (step.itemId ? heldItems(actor).find(h => h.itemId === step.itemId) : undefined);
 function heldItems(actor) {
   const seen = new Map();
   return actor.items.filter(i => i.isOfType?.("physical") && i.system.equipped?.carryType === "held" && (Number(i.system.equipped.handsHeld) || 0) > 0).map(i => {
@@ -1562,7 +1564,7 @@ async function runRelease(combat, id, i, step, tok) {
     const now = nextInteract(get(), { flat: step.flat ?? 0 });
     if (now === "gm") return "next";   /* dropped */
     if (now === "next") return "next";
-    if (now === "ask") { const item = heldItems(actor).find(h => h.id === step.item); if (!item) { await record({ dropped: true, posted: { message: null } }); return "next"; } await addNote(combat, id, `${tok.name}'s Release was under way when the page reloaded: check whether {they} still {holds|hold} {their} ${step.itemName}.`); return "ask"; }
+    if (now === "ask") { const item = heldOf(actor, step); if (!item) { await record({ dropped: true, posted: { message: null } }); return "next"; } await addNote(combat, id, `${tok.name}'s Release was under way when the page reloaded: check whether {they} still {holds|hold} {their} ${step.itemName}.`); return "ask"; }
     if (!stepGate(now === "flat" ? "flat" : "release", id)) return "stopped";
     if (now === "flat") {
       await record({ flatStarted: true });
@@ -1572,7 +1574,7 @@ async function runRelease(combat, id, i, step, tok) {
       continue;
     }
     await record({ started: true });
-    const h = heldItems(actor).find(x => x.id === step.item), item = h ? actor.items.get(h.itemId) : null;
+    const h = heldOf(actor, step), item = h ? actor.items.get(h.itemId) : null;
     if (!item) { await save(combat, id, { log: { [i]: { dropped: true, posted: { message: null } } }, note: joinNote(combat, id, `${tok.name} no longer holds {their} ${step.itemName}.`) }); return "next"; }
     await watched(() => actor.changeCarryType(item, { carryType: "dropped", handsHeld: 0 }));
     const message = await watched(() => ChatMessage.implementation.create({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), content: `<p><strong>Release</strong> <span class="action-glyph">F</span>: drops ${pro("{their}", P(tok, combat))} ${foundry.utils.escapeHTML(item.name)}.</p>` }));
