@@ -849,10 +849,10 @@ function treeUp(tok, scene) {
   const f = tok.getFlag(ID, "climbing"); if (!Array.isArray(f?.at) || !(heightUp(tok) > 0)) return null;
   return treesBeside(squareOf(tok, scene), sizeOf(tok), [{ at: f.at, top: f.top }]).length ? { at: [...f.at], top: Number(f.top) || 0 } : null;
 }
-/** What it holds in its hands (a Climb needs both free; Rhea, 2026-11-08: by the rule): physical items carried "held" in one or two hands, with an
-    id a plan can name (the slug, -2 and so on when two share it). */
 /* what a Release drops: by its held id, or, for a weapon drawn earlier in the same plan (held under its Strike's id), by the item's own id (0.39.10) */
 const heldOf = (actor, step) => heldItems(actor).find(h => h.id === step.item) ?? (step.itemId ? heldItems(actor).find(h => h.itemId === step.itemId) : undefined);
+/** What it holds in its hands (a Climb needs both free; Rhea, 2026-11-08: by the rule): physical items carried "held" in one or two hands, with an
+    id a plan can name (the slug, -2 and so on when two share it). */
 function heldItems(actor) {
   const seen = new Map();
   return actor.items.filter(i => i.isOfType?.("physical") && i.system.equipped?.carryType === "held" && (Number(i.system.equipped.handsHeld) || 0) > 0).map(i => {
@@ -956,7 +956,7 @@ export async function submitPlan(combat, requestId, plan, meta = {}) {
   if (JSON.stringify(plan ?? null).length > PLAN_BYTES) return { state: r.state, reason: "That plan is far too long to be a plan." };
   await save(combat, requestId, { plan: whole(plan), state: "submitted", verdict: null, changeVerdict: null, by: whole({ ...who, at: Date.now() }) });   /* `at` tells one plan's usage from another's (0.31.0) */   /* a new plan: an old change's refusal is about the old one */
   if (isRunner()) await judge(combat, requestId);
-  for (let i = 0; i < 40; i++) { await new Promise(res => setTimeout(res, 250)); const n = request(combat, requestId); if (!n) return { state: "gone", reason: "The turn is gone (the fight ended or the request was cleared)." }; if (n.state !== "submitted") return answer(n); }   /* 0.39.10: a fight deleted in the wait threw */
+  for (let i = 0; i < 40; i++) { await new Promise(res => setTimeout(res, 250)); const n = request(combat, requestId); if (!n || !game.combats.has(combat.id)) return { state: "gone", reason: "The turn is gone (the fight ended or the request was cleared)." }; if (n.state !== "submitted") return answer(n); }   /* 0.39.10: a fight deleted in the wait threw */
   return { state: "submitted", reason: runnerProblem() ?? `${runnerName()} hasn't answered.` };
 }
 /* accepted: ready, or already running or done when Auto picked it up at once */
@@ -1336,7 +1336,7 @@ async function runStrike(combat, id, i, step, tok, target) {
         await record({ applied: true, hp: [was, hpNow(target)], dealt });
         await afterHarm(combat, id, i, tok, target, { hit, was, dealt, block: !!get().shieldBlock });
         /* undo restores HP but not what Workbench and PF2e did at 0 HP (seen in test D1) */
-        if (target.actor?.isOfType?.("character") && target.actor.hitPoints?.value === 0) await save(combat, id, { note: `${target.name} is at 0 HP. If you undo this, PF2e restores the HP but you still need to remove Wounded and Prone and put their initiative back.` });
+        if (target.actor?.isOfType?.("character") && target.actor.hitPoints?.value === 0) await addNote(combat, id, `${target.name} is at 0 HP. If you undo this, PF2e restores the HP but you still need to remove Wounded and Prone and put their initiative back.`);
       }
     } finally { pending = null; }
   }
@@ -2571,7 +2571,7 @@ async function runTurn(combat, requestId) {
     if (work) {
       let result; try { result = await work(); } catch (e) { console.error(e); result = "ask"; await addNote(combat, requestId, e.message); }   /* joined: the gates' notes for this step stay (0.39.10) */
       if (!["wait", "held", "stopped", "gm"].includes(result)) await dropEarthCover(combat).catch(e => console.warn(`${ID} | cover`, e));
-      else if (result === "gm" && !request(combat, requestId).log?.[i]?.noRows) await dropEarthCover(combat, { recognizeOnly: true }).catch(e => console.warn(`${ID} | recognize`, e));   /* the save is rolled: Recognize Spell's +1 goes (seen live in test build 1: it stayed to the turn's end) */   /* Interposing Earth's cover lasts for the step it answered */
+      else if (result === "gm" && !request(combat, requestId).log?.[i]?.noRows) await dropEarthCover(combat, { recognizeOnly: true }).catch(e => console.warn(`${ID} | recognize`, e));   /* 0.39.10: not when the card had no rows, where the GM rolls the save herself and its bonuses must stay */   /* the save is rolled: Recognize Spell's +1 goes (seen live in test build 1: it stayed to the turn's end) */   /* Interposing Earth's cover lasts for the step it answered */
       if (result === "stopped") return save(combat, requestId, { state: "stopped" });
       if (result === "held") return save(combat, requestId, { state: "held", hold: false, note: "Held after the reactions, before the damage." });   /* a Hold during the reactions to a hit (0.20.0) */
       if (result === "gone") return save(combat, requestId, { state: "stopped", note: "The turn moved on while reactions were being asked." });
