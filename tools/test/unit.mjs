@@ -246,7 +246,7 @@ check("busy states", requestBusy({ state: "running" }) && requestBusy({ state: "
   check("prompt explains the mind (0.24.0)", /"mind" is how this monster thinks and fights/.test(h.prompt) && /Never plan above its Mind/.test(h.prompt) && /Trained tactician: drilled or brilliant/.test(h.prompt) && /Loose: it follows its band's plan while that suits it/.test(h.prompt) && !/worksWith/.test(h.prompt) && /It is a leaning, not a lock/.test(h.prompt) && /this order decides: the rules and its conditions first/.test(h.prompt) && !/tactics the GM wrote/.test(h.prompt) && /ask for the hello again/.test(h.prompt) && /packet \(schema 10\)/.test(h.prompt) && /"pronoun": how this monster is written about/.test(h.prompt));
   check("prompt explains the band (0.26.0)", /Its band \("band"/.test(h.prompt) && /"yourJob"/.test(h.prompt) && /"fallBack"/.test(h.prompt) && /Next in line takes over: the highest-ranking member left/.test(h.prompt) && /"bandNow"/.test(h.prompt) && /then its band's plan as far as its discipline holds it to it/.test(h.prompt) && /discipline is None gets neither "alliesDid" nor "side"/.test(h.prompt) && /in the fight only its leader's orders change it/.test(h.prompt) && /then the orders it has heard from its leader/.test(h.prompt));
   check("prompt explains the notebook (0.25.0)", /Its notebook \("notebook"/.test(h.prompt) && /"remembers"/.test(h.prompt) && /"alliesDid"/.test(h.prompt) && /\(unsure\)/.test(h.prompt) && /a Mindless creature has no notebook/.test(h.prompt));
-  check("prompt explains asking again", h.promptVersion === 35 && /A "choice" event/.test(h.prompt) && /Release doesn't count/.test(h.prompt) && /Players are asked for their reactions/.test(h.prompt) && !/doesn't ask players for reactions yet/.test(h.prompt) && /The GM asks for the rest of this turn/.test(h.prompt) && !/someone it doesn't perceive/.test(h.prompt) && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
+  check("prompt explains asking again", h.promptVersion === 36 && /A "choice" event/.test(h.prompt) && /Release doesn't count/.test(h.prompt) && /Players are asked for their reactions/.test(h.prompt) && !/doesn't ask players for reactions yet/.test(h.prompt) && /The GM asks for the rest of this turn/.test(h.prompt) && !/someone it doesn't perceive/.test(h.prompt) && /"replan"/.test(h.prompt) && /attacksMade/.test(h.prompt) && /"done"/.test(h.prompt));
 }
 
 /* ---- moving (0.4.6) ---- */
@@ -1966,7 +1966,7 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
       const hs = stepResult({ do: "say", intent: "yield", say: "Mercy!" }, { said: true, yielded: true, langName: "Goblin", message: "m1" }, {}, { nameOf: () => null });
       check("history: a say step's line", typeof hs === "object" ? /said in Goblin/.test(JSON.stringify(hs)) && /stands down/.test(JSON.stringify(hs)) : /said in Goblin/.test(String(hs)));
       const h9 = hello(1);
-      check("speech: the hello carries prompt version 34, packet schema 9 and the say step", h9.promptVersion === 35 && h9.packetSchema === 10 && h9.stepKinds.includes("say") && h9.canDo.includes("say") && h9.prompt.includes('"do": "say"') && h9.prompt.includes('"speech.canYield"') && h9.prompt.includes('"part": "yield"') && h9.prompt.includes('"yielded": true')); }
+      check("speech: the hello carries prompt version 34, packet schema 9 and the say step", h9.promptVersion === 36 && h9.packetSchema === 10 && h9.stepKinds.includes("say") && h9.canDo.includes("say") && h9.prompt.includes('"do": "say"') && h9.prompt.includes('"speech.canYield"') && h9.prompt.includes('"part": "yield"') && h9.prompt.includes('"yielded": true')); }
     /* bands: the named second */
     { const rows = [{ band: "p", count: 3 }, { band: "p", count: 2 }, { band: "q", count: 1 }];
       const b2 = Bd.cleanBand({ name: "P", leader: { row: 0, n: 0 }, second: { row: 1, n: 1 } }, { rows });
@@ -1974,7 +1974,7 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
       check("band: the second is set like the leader mark (Angel never over the GM's)", Bd.applyBand(b2, { second: { row: 0, n: 2 } }, { by: "angel", rows }).skipped.join() === "second" && Bd.applyBand(b2, { second: null }, { by: "gm", rows }).band.second === null && Bd.applyBand({ ...b2, second: { row: 1, n: 1, by: "angel" } }, { second: { row: 0, n: 2 } }, { by: "angel", rows }).band.second.n === 2);
       check("band: a row taken out moves or drops the second; a second on another band's row is dropped", Bd.rowRemoved([b2], 0)[0].second.row === 0 && Bd.rowRemoved([b2], 1)[0].second === null && Bd.briefBands([{ name: "p", second: { row: 2, n: 0 } }], [{ band: "p" }, { band: "p" }, { band: "q" }], [{ count: 1 }, { count: 1 }, { count: 1 }])[0].second === null); }
     /* the thinker's instructions, and the small wording fix */
-    { const h8 = hello(1); check("order: the hello carries prompt version 34, packet schema 9 and the order step", h8.promptVersion === 35 && h8.packetSchema === 10 && h8.stepKinds.includes("order") && h8.canDo.includes("order") && h8.prompt.includes('"do": "order"') && h8.prompt.includes('"toldOf"') && h8.prompt.includes('"orders.heard"') && !/nobody gives new orders yet/.test(h8.prompt)); }
+    { const h8 = hello(1); check("order: the hello carries prompt version 34, packet schema 9 and the order step", h8.promptVersion === 36 && h8.packetSchema === 10 && h8.stepKinds.includes("order") && h8.canDo.includes("order") && h8.prompt.includes('"do": "order"') && h8.prompt.includes('"toldOf"') && h8.prompt.includes('"orders.heard"') && !/nobody gives new orders yet/.test(h8.prompt)); }
     check("memory: a creature healing itself reads as such", Mem2.render({ "001": { k: "heal", a: "E5", t: "E5", r: 1, at: 1 } }, { rung: 3 }).remembers[0].text === "E5 healed themself." && Mem2.render({ "001": { k: "heal", a: "E5", t: "E2", r: 1, at: 1 } }, { rung: 3 }).remembers[0].text === "E5 healed E2.");
   }
 }
@@ -2074,7 +2074,7 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
   check("sides: a turncoat's own packet says where it came from, and nothing for one that didn't change", cp.since === 3 && /in a band/.test(cp.was) && cp.lastHeard.length === 1 && /no longer follows/.test(cp.note) && Sd.changedForPacket(first.entry) === null && !("lastHeard" in Sd.changedForPacket(turn.entry, {})));
   /* the prompt */
   const h30 = hello(1);
-  check("tier 3d: the hello carries prompt version 34, packet schema 9 and both steps", h30.promptVersion === 35 && h30.packetSchema === 10 && h30.canDo.includes("command-animal") && h30.canDo.includes("point-out") && h30.prompt.includes('"do": "command-animal"') && h30.prompt.includes('"do": "point-out"') && /"alliesLost": true/.test(h30.prompt) && /"pointed": true/.test(h30.prompt) && /"you.changedSides"/.test(h30.prompt) && /"went": "wrong"/.test(h30.prompt));
+  check("tier 3d: the hello carries prompt version 34, packet schema 9 and both steps", h30.promptVersion === 36 && h30.packetSchema === 10 && h30.canDo.includes("command-animal") && h30.canDo.includes("point-out") && h30.prompt.includes('"do": "command-animal"') && h30.prompt.includes('"do": "point-out"') && /"alliesLost": true/.test(h30.prompt) && /"pointed": true/.test(h30.prompt) && /"you.changedSides"/.test(h30.prompt) && /"went": "wrong"/.test(h30.prompt));
 }
 /* ---------- each creature's own pronoun (0.30.1, R-2) ---------- */
 {
@@ -2164,7 +2164,7 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
       && Hi3.apiUseWords({ apiUse: { a: { model: "claude-opus-5-5", cost: 0.04 }, b: { model: "claude-new-6" } } }) === "Angel through the API this fight: 2 answers, 4¢ for the ones with a price (Opus 1, New 1)."; })());
   check("rt-8 a handed-on choice keeps its own number to answer with", /"seq": 41 }/.test(Br3.choiceOut({ seq: 77, choiceSeq: 41, kind: "choice", combatId: "c", requestId: "r" }, { round: 1, choice: { kind: "glimpse", words: "w", seq: 41 } }).choice.answerWith)
     && /"seq": 41 }/.test(Br3.choiceOut({ seq: 41, choiceSeq: 41, kind: "choice" }, { round: 1, choice: { kind: "glimpse", words: "w", seq: 41 } }).choice.answerWith) && Br3.cleanMeta({ by: "api", model: "claude-opus-5-5", usage: { in: 10, out: 5, seconds: 2, cost: 0.01 } }).usage.cost === 0.01);
-  check("rt-9 the hello tells the API route to answer with the JSON alone", /On the API route you answer each event with the JSON alone/.test(Br3.hello(1).prompt) && /on the API route the picture comes with the event/.test(Br3.hello(1).prompt) && Br3.hello(1).promptVersion === 35);
+  check("rt-9 the hello tells the API route to answer with the JSON alone", /On the API route you answer each event with the JSON alone/.test(Br3.hello(1).prompt) && /on the API route the picture comes with the event/.test(Br3.hello(1).prompt) && Br3.hello(1).promptVersion === 36);
 }
 /* ---------- her Speak / Yield box (0.32.0; sb-1) ---------- */
 { const Sp = await import("../../scripts/speech.mjs"), Pn = await import("../../scripts/pronoun.mjs"), Or = await import("../../scripts/orders.mjs");
@@ -2224,7 +2224,7 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
   check("lk-7 who gets the look: the API when it listens on the API route, else a listening chat; the chat on the chat route; nobody when off; a handed-on look goes to the chat",
     Rt4.API_KINDS.includes("look") && Rt4.whoGets({ route: "api", kind: "look", api: true }) === "api" && Rt4.whoGets({ route: "api", kind: "look", api: false, chat: true }) === "chat" && Rt4.whoGets({ route: "chat", kind: "look", api: true }) === "chat"
     && Rt4.whoGets({ route: "off", kind: "look" }) === null && Rt4.whoGets({ route: "api", kind: "look", api: true, handedOff: true }) === "chat");
-  check("lk-7 the hello (prompt version 33) explains the look event and how to answer it", Br4.hello(1).promptVersion === 35 && /A "look" event comes once, when a fight starts/.test(Br4.hello(1).prompt) && /requestId "look"/.test(Br4.hello(1).prompt) && /for a "look" event the look/.test(Br4.hello(1).prompt));
+  check("lk-7 the hello (prompt version 33) explains the look event and how to answer it", Br4.hello(1).promptVersion === 36 && /A "look" event comes once, when a fight starts/.test(Br4.hello(1).prompt) && /requestId "look"/.test(Br4.hello(1).prompt) && /for a "look" event the look/.test(Br4.hello(1).prompt));
 }
 /* ---------- 0.33.1: the button-up review's fixes ---------- */
 {
@@ -2260,5 +2260,26 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
   check("0.33.1 a creature set to nobody's side isn't told its old enemies are its allies", /on nobody's side now/.test(Sd1.changedForPacket({ changed: 2, side: "none" }).was) && /are its allies/.test(Sd1.changedForPacket({ changed: 2, side: "party" }).was));
   check("0.33.1 Point Out: allies the GM has hidden aren't counted for the pointer", Po1.pointResult({ pointed: { list: [{ how: "understood", square: [1, 1] }, { how: "roll", hidden: true, square: [2, 2] }] } }) === "pointed out: 1 of the 1 who had lost it now has a square for it");
   check("0.33.1 a band told its leader fell, in words with no hard it", Bd.leaderFell({ discipline: "loose", state: "yielded", falls: "runs" }).leader === "The band's leader has given up.");
+}
+/* ---- 0.39.11: the 2026-11-23 live test's bugs ---- */
+{
+  const { idlePlan, plainSquares } = await import("../../scripts/turn.mjs");
+  check("0.39.11 idle plan: every step \"none\" is a do-nothing turn; a plan with any action, or none at all, isn't",
+    idlePlan([{ do: "none" }]) && idlePlan([{ do: "none" }, { do: "none" }]) && !idlePlan([{ do: "none" }, { do: "strike" }]) && !idlePlan([]) && !idlePlan(null));
+  check("0.39.11 plain squares: the card and History drop map squares and the word leading to them",
+    plainSquares("They close to 18,17 beside E3 and hit E6 twice.") === "They close beside E3 and hit E6 twice."
+    && plainSquares("Strides 5 ft south, to square 18, 17.") === "Strides 5 ft south."
+    && plainSquares("arrived at 18, 17 (5 ft charged)") === "arrived (5 ft charged)"
+    && plainSquares("Flees off the north edge of the map from where they stand (square 3, 0): you decide.") === "Flees off the north edge of the map from where they stand: you decide."
+    && plainSquares("Seeks in a 15-foot burst from the corner [4, 5] (a secret Perception check).") === "Seeks in a 15-foot burst (a secret Perception check)."
+    && plainSquares("17 vs AC 18: miss; damage 1d6+1 = 2 piercing, applied: Hero 20 → 18 HP") === "17 vs AC 18: miss; damage 1d6+1 = 2 piercing, applied: Hero 20 → 18 HP");
+  const sp2 = checkPlan({ steps: [st({ item: "jaws", target: "E1" }), st({ item: "jaws", target: "E1" })] }, tctx), sp3 = checkPlan({ steps: [st({ item: "jaws", target: "E1" }), st({ item: "jaws", target: "E1" }), st({ item: "jaws", target: "E1" })] }, tctx);
+  const spNone = checkPlan({ steps: [st({ item: "jaws", target: "E1" }), { do: "none" }] }, tctx), spDelay = checkPlan({ steps: [{ do: "delay", after: "E1" }] }, { ...tctx, fresh: true, order: { E1: "later" } });
+  check("0.39.11 unused actions: a plan using 2 of 3 has 1 spare; using all 3, or saying so with a \"none\" or a Delay, has none",
+    sp2.ok && sp2.spare === 1 && sp2.actions === 3 && sp3.ok && sp3.spare === 0 && spNone.ok && spNone.spare === 0 && spDelay.ok && spDelay.spare === 0);
+  const un = cleanPlan({ steps: [{ do: "none" }], unused: "keeps still to stay hidden" }), un0 = cleanPlan({ steps: [{ do: "none" }] });
+  check("0.39.11 a plan's \"unused\" is kept as short text, and left out when not given", un.ok && un.plan.unused === "keeps still to stay hidden" && un0.ok && !("unused" in un0.plan));
+  const hp = promptText({});
+  check("0.39.11 the prompt asks for every action or an \"unused\" reason, and for no squares in reason or why", /add "unused" to the plan/.test(hp) && /Never write squares or coordinates in "reason" or "why"/.test(hp) && /uses up no try/.test(hp));
 }
 console.log(`${good} passed, ${bad} failed`); process.exit(bad ? 1 : 0);

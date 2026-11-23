@@ -8,6 +8,7 @@ since: 0.10.0
 The Monster Turns history window: the fight by round and turn, each step in full detail, saving to a journal.
 
 ## Decisions
+- **No map squares in the History (0.39.11):** a plan's reason, its steps, their whys and their results go through the namer's `plain` (names for labels, then `plainSquares`), as on the card; refusals, notes and what changed keep `named`.
 - **The history window (Rhea, 2026-11-08):** its own window (History on Monster Turns), the whole encounter, grouped by round, turns foldable, live; Angel's whole plan and reason, then each action with its own `why` as it happens; full detail (totals vs AC/DC, degrees, damage, HP before and after, saves, refusals, re-plans, stalls, her presses) with links to the cards; monsters she plays get one line. **Saving is hers:** Save to journal, and Save / Discard at End Encounter; one closed folder "Monster Turns history", one entry per game night (date), one page per fight (saving again replaces it). GM only, never sent to the thinker (no `api.fight.history`).
 **Design-era decisions (from the 2026-11-05/06 plan; the lines above are the skill's summary of the same choices):**
 Its own feature, before fleeing monsters. Her choices, one question at a time:

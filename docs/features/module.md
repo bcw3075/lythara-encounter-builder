@@ -8,6 +8,7 @@ since: 0.10.0
 The module's glue: settings, the Encounters left-bar group, hooks and the `api` (`main.mjs`).
 
 ## Decisions
+- **The Build window's brief hooks (0.39.11, P-1):** an `updateScene` carrying `mindsWrite` (a Monster Minds write) goes to `takeMinds`, built or not; a brief change without it, before a build, reloads the window (`loadBrief`).
 (none recorded yet)
 
 ## How it works

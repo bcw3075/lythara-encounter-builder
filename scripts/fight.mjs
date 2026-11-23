@@ -2,7 +2,7 @@
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. It runs Strikes, Strides, Steps, Crawls, Fly, Swim, Climb, Release, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek, Interact, Delay and fleeing off the map; what is still to come is in the repo's docs/features and the project's plan doc. */
 import { handedOn, withoutAsks, couldSetOff, untouched, settleFrom, settleWait, CHANGEABLE, changeProblem, describeStep, nameWords, noteForThinker, planPrint } from "./turn.mjs";
-import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, OUTCOMES, SAVE_MULT, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, shouldSink, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, finishedOf, damageOptions, describeChanges, doneStep, nextCommand, nextPoint, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract, nextClimb, tookTurn } from "./turn.mjs";
+import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, idlePlan, OUTCOMES, SAVE_MULT, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, shouldSink, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, finishedOf, damageOptions, describeChanges, doneStep, nextCommand, nextPoint, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract, nextClimb, tookTurn } from "./turn.mjs";
 import { BURROW_DEPTH, FT, distanceBetween, burrowWorld, crossesWalls, cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, heightWhenCut, rockSquares, routeWordsIt, swimWorld, glideWorld, treeTop, treesBeside, wallSquares, waterKinds, waterUnder } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, visibleConditions } from "./perceive.mjs";
 import { giveOwn, kindFacts, mindLayers, mindOf, partyPeople, pronounOf, setLines } from "./library.mjs";
@@ -992,6 +992,10 @@ async function judgeNow(combat, requestId) {
   }
   const c = checkPlan(clean.plan, await gather(combat, r, undefined, { moves: hasMove(clean.plan.steps), spells: hasSpell(clean.plan.steps) }));
   if (!c.ok) return reject(combat, requestId, c.reason);
+  /* actions left unused with no word why (0.39.11, the live test): asked once to use them or say why; that ask uses up no try, so it never hands a turn
+     to the GM. A plan that still leaves them, or says why, goes ahead and the card says so. */
+  if (c.spare > 0 && !clean.plan.unused && !r.reaction && !request(combat, requestId).nudged) return nudge(combat, requestId, spareAsk(c.spare, c.actions));
+  if (c.spare > 0 && !r.reaction) await addNote(combat, requestId, spareNote(c.spare, clean.plan.unused));
   const tok = sceneOf(combat).tokens.get(r.tokenId);
   /* Play it myself pressed while the plan was being checked (0.33.1, review): her press stands; the plan is kept for the card */
   if (request(combat, requestId)?.state === "manual") { await save(combat, requestId, { plan: whole(clean.plan), steps: c.steps, verdict: null }); return { state: "manual", reason: "The GM took this turn over." }; }
@@ -1003,6 +1007,16 @@ async function judgeNow(combat, requestId) {
   if (tok && !tok.getFlag(ID, "run") && !r.reaction && untouched(request(combat, requestId))) { await playMyself(combat, requestId); return { state: "manual", reason: "The GM took this turn over (Angel was unticked)." }; }
   if (tok?.getFlag(ID, "auto") && !request(combat, requestId).gmWait) (async () => { if (!(await pausedAuto(combat, requestId, tok)) && request(combat, requestId)?.state === "ready" && !request(combat, requestId).hold && !request(combat, requestId).gmWait) await doIt(combat, requestId); })().catch(e => console.error(e));   /* Auto's own start waits out the game's pause; read again after it (0.17.0 review) */
   return { state: "ready", steps: c.steps };
+}
+/* unused actions (0.39.11): the ask to the thinker, and the line on the card when they stay unused */
+const spareAsk = (n, of) => `The plan uses ${(of ?? 3) - n} of ${of ?? 3} actions. Use the ${n === 1 ? "last one" : `last ${n}`} (a reload, a Step to a better square, Take Cover, a Seek, Raise a Shield, another Strike, anything that helps), or, if keeping ${n === 1 ? "it" : "them"} is really better, add "unused" to the plan: a few words saying why.`;
+const spareNote = (n, why) => `${n === 1 ? "1 action is" : `${n} actions are`} left unused: ${why || "Angel gave no reason"}.`;
+/** Asked once to use its spare actions (0.39.11): like a refusal, but no try is used up, so a plan is never handed to the GM for it. */
+async function nudge(combat, requestId, reason) {
+  if (request(combat, requestId)?.state === "manual") return { state: "manual", reason: "The GM took this turn over." };
+  const tries = request(combat, requestId).tries ?? 0, at = `requests.${requestId}`;
+  await saveTurns(combat, { [`${at}.state`]: "requested", [`${at}.since`]: clock(), [`${at}.nudged`]: true, [`${at}.steps`]: null, [`${at}.verdict`]: reason, [`${at}.refused.0`]: { reason, plan: cleanPlan(request(combat, requestId).plan).plan ?? null, at: Date.now(), by: request(combat, requestId).by ?? null }, ...eventChange("retry", requestId, tries) });
+  return { state: "requested", reason, triesLeft: Math.max(0, MAX_TRIES - tries) };
 }
 /* The reason goes back to the thinker once, as a retry event. A second refusal goes to the GM. */
 async function reject(combat, requestId, reason) {
@@ -2444,9 +2458,11 @@ const autoPause = () => Math.max(0, Number(game.settings.get(ID, "autoPause")) |
    when the turn finished by itself: a card for the GM to apply, a stop, Play it myself or a turn handed to the GM leave it to the GM. Nothing ends a
    turn that has moved on, or one with another request still going (a re-plan). */
 const END_MS = 2000, ending = new Set();
+/* a plan that does nothing at all (turn.mjs's idlePlan): Do it ends the turn too, Auto or not (Rhea, live test 2026-11-23) */
+const endsItself = (r, tok) => !!tok?.getFlag(ID, "auto") || idlePlan(r?.steps);
 function endAfter(combat, requestId) {
   const r = request(combat, requestId), tok = sceneOf(combat)?.tokens.get(r?.tokenId), key = `${combat.id}.${r?.round}.${r?.combatantId}`;
-  if (!r || !tok?.getFlag(ID, "auto") || ending.has(key)) return;
+  if (!r || !endsItself(r, tok) || ending.has(key)) return;
   ending.add(key);
   /* marked so the runner's 10 s check ends only a turn Auto was ending (0.33.1, review): never one finished by Next step and ticked Auto later,
      nor one handed to the GM after too many re-plans */
@@ -2456,7 +2472,7 @@ function endAfter(combat, requestId) {
       while (game.paused) await new Promise(r => setTimeout(r, 300));   /* paused: the turn ends once the GM unpauses, if it is still this monster's */
       for (let t = 0; t < 400 && (running.has(requestId) || condLater.has(requestId) || request(combat, requestId)?.react); t++) await new Promise(r => setTimeout(r, 300));   /* a Comforting Presence question on the finished turn (0.39.2, review 1): the turn waits for it, at most 2 minutes */
       const n = request(combat, requestId);
-      if (n?.state !== "done" || !combat.started || combat.round !== r.round || combat.combatant?.id !== r.combatantId || currentRequest(combat) || !tok.getFlag(ID, "auto")) return;   /* Auto read again: unticked in the 2 s, the GM ends it */
+      if (n?.state !== "done" || !combat.started || combat.round !== r.round || combat.combatant?.id !== r.combatantId || currentRequest(combat) || !endsItself(n, tok)) return;   /* Auto read again: unticked in the 2 s, the GM ends it */
       await combat.nextTurn();
     } catch (e) { console.error(`${ID} | ending the turn`, e); } finally { ending.delete(key); }
   }, END_MS);

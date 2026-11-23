@@ -8,6 +8,7 @@ since: 0.24.0
 Monster minds: a behaviour profile for every monster (six lines and notes) read from layers, the Minds Library that keeps them for reuse, and the two windows to read and edit them. Release 1 of 4.
 
 ## Decisions
+- **P-1 (0.39.11, the overnight review of 2026-11-23, Rhea "Yes, fix all bugs"):** every Monster Minds write of the brief (`writeBrief`: minds lines, one monster's own lines, bands) also stamps `flags.<module>.mindsWrite` with the time, and an open Build window takes in only those (`takeMinds`: minds, own lines, bands) whether or not the map is built yet. Before, on a map with a brief but no build, it reloaded the whole brief and lost the window's unsaved rows. A brief sent from a chat (`submitBrief`) has no stamp and still loads whole.
 Rhea, 2026-11-10, question by question (the design and its independent review are in the project's design doc; this is what release 1 builds):
 1. **Profile shape: "A short form plus notes."** Six lines and a free notes box: Mind; Goes for; Fights by; Gives up; Works with others; Knows about its enemies.
 2. **The picks are examples, not fixed lists** ("I hope those were just examples in each category"): every line takes her own words, with suggestions. Only **Mind** and **Works with others** keep a fixed pick underneath, because the module acts on them (how clever a plan may be; who will share a group plan).

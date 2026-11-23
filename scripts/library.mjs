@@ -160,7 +160,9 @@ export function mindOf(scene, tok, combat = null, labelOf = () => null) {
 }
 
 /* ---------- writing this encounter's lines ---------- */
-export const writeBrief = (scene, brief) => scene.update({ [`flags.${ID}.==brief`]: cleanBrief(brief) });
+/* a write from Monster Minds (minds lines, bands) is stamped `mindsWrite`, so an open Build window takes in only those and keeps its unsaved rows
+   (0.39.11, the overnight review's P-1); a brief sent from a chat carries no stamp and is loaded whole. A time, so two writes in a row both show. */
+export const writeBrief = (scene, brief) => scene.update({ [`flags.${ID}.==brief`]: cleanBrief(brief), [`flags.${ID}.mindsWrite`]: Date.now() });
 /** Change lines of a profile on a scene. ref says whose: { row } a build row's kind for this encounter; { row, n } one built monster's own;
     { kind } a kind the build didn't place, for this scene; { token } one such monster's own. lines: key → words, { pick, text }, or null to take the
     line away. Angel never replaces the GM's words unless `force`. Out: { lines, skipped }. */

@@ -83,8 +83,10 @@ Hooks.on("updateCombat", () => { redrawChip(); });
 /* a brief sent from a chat shows up in an open window */
 Hooks.on("updateScene", (scene, change) => { if (!foundry.utils.hasProperty(change, `flags.${ID}`)) return; redrawMinds(scene);
   /* an open Build window holds its own copy of the brief: minds saved meanwhile go into it, or its next Build would write the old ones back (0.24.0 review 4) */
-  const app = apps.get(scene.id); if (app?.rendered && scene.getFlag(ID, "build")) { app.takeMinds(scene.getFlag(ID, "brief")); app.render(); } });
-Hooks.on("updateScene", (scene, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}.brief`) && !scene.getFlag(ID, "build")) { const app = apps.get(scene.id); if (app?.rendered) { app.loadBrief(); app.render(); } } });
+  /* P-1 (0.39.11): a Monster Minds write before any build is taken in the same way, never loaded whole: loading wiped the window's unsaved rows */
+  const app = apps.get(scene.id), fromMinds = foundry.utils.hasProperty(change, `flags.${ID}.mindsWrite`);
+  if (app?.rendered && (scene.getFlag(ID, "build") || fromMinds)) { app.takeMinds(scene.getFlag(ID, "brief")); app.render(); } });
+Hooks.on("updateScene", (scene, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}.brief`) && !foundry.utils.hasProperty(change, `flags.${ID}.mindsWrite`) && !scene.getFlag(ID, "build")) { const app = apps.get(scene.id); if (app?.rendered) { app.loadBrief(); app.render(); } } });
 /* the party landing beside a hidden monster is worth a word; nothing moves on its own */
 Hooks.on("createToken", (tok, opts, userId) => { if (game.users.activeGM?.id !== game.user.id || !tok.parent?.getFlag(ID, "build") || !tok.isOwner) return; if (!game.actors.party?.members.some(m => m.id === tok.actorId)) return; setTimeout(() => { for (const w of nextToParty(tok.parent)) ui.notifications.warn(w); }, 200); });
 /* a clue's page is OBSERVER but its journal has no ownership, so the journal stays out of the player's sidebar. A build's clue opens on

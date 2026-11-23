@@ -65,7 +65,9 @@ export function cleanPlan(raw) {
   let ground = null; if (p.ground != null) { const g = cleanGround(p.ground); if (!g.ok) return g; ground = g.ground; }
   /* which of the map's walls are stone, for a monster that glides through rock (0.17.0) */
   let walls = null; if (p.walls != null) { const g = cleanWalls(p.walls); if (!g.ok) return g; walls = g.walls; }
-  return { ok: true, plan: { schema: PLAN_SCHEMA, reason: text(p.reason, 300), steps, ifBlocked: text(p.ifBlocked, 100) || null, suggestOpus: p.suggestOpus === true, ...(ground ? { ground } : {}), ...(walls ? { walls } : {}) } };
+  /* why the plan leaves actions unused, when it does (0.39.11): shown on the GM's card */
+  const unused = text(p.unused, 160) || null;
+  return { ok: true, plan: { schema: PLAN_SCHEMA, reason: text(p.reason, 300), steps, ifBlocked: text(p.ifBlocked, 100) || null, suggestOpus: p.suggestOpus === true, ...(unused ? { unused } : {}), ...(ground ? { ground } : {}), ...(walls ? { walls } : {}) } };
 }
 export const MAX_SOIL_AREAS = 24;
 /** The ground judgment a plan may carry (0.16.0; Rhea, 2026-11-08: on a map the module can't read, Angel judges the soil in play): { soil: "all" } (the

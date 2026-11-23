@@ -42,7 +42,10 @@ export async function readMap(scene, { except = new Set() } = {}) {
   gmOnly(); if (!isSquare(scene)) throw new Error("The builder needs a square grid.");
   const { read, why } = await surveyRead(scene), d = scene.dimensions, px = scene.grid.size, ox = d.sceneX, oy = d.sceneY, cols = Math.round(d.sceneWidth / px), rows = Math.round(d.sceneHeight / px);
   const WS = CONST.EDGE_SENSE_TYPES, open = CONST.WALL_DOOR_STATES.OPEN;
-  const walls = scene.walls.filter(w => !(w.door && w.ds === open)).map(w => ({ ax: (w.c[0] - ox) / px, ay: (w.c[1] - oy) / px, bx: (w.c[2] - ox) / px, by: (w.c[3] - oy) / px, move: w.move !== CONST.WALL_MOVEMENT_TYPES.NONE, sight: w.sight === WS.NONE ? 0 : w.sight === WS.LIMITED ? 1 : 2, dir: w.dir ?? 0 }));
+  /* a door: open, it is no wall at all; closed (not locked), the party walks through it, so it stops no approach, but it still hides what is behind
+     it (0.39.11: closed doors read as solid walls left every room behind one unreachable, so ambush and lair layouts fell back to the party's own
+     room and patrol and standoff had almost nowhere to vary); locked, it is a wall */
+  const walls = scene.walls.filter(w => !(w.door && w.ds === open)).map(w => ({ ax: (w.c[0] - ox) / px, ay: (w.c[1] - oy) / px, bx: (w.c[2] - ox) / px, by: (w.c[3] - oy) / px, move: w.move !== CONST.WALL_MOVEMENT_TYPES.NONE && !(w.door && w.ds === CONST.WALL_DOOR_STATES.CLOSED), sight: w.sight === WS.NONE ? 0 : w.sight === WS.LIMITED ? 1 : 2, dir: w.dir ?? 0 }));
   const costs = new Array(cols * rows).fill(0);
   for (const r of scene.regions) for (const b of r.behaviors) { if (b.type !== "modifyMovementCost" || b.disabled) continue; const walk = Number(b.system?.difficulties?.walk) || 1, c = Math.max(0, Math.min(2, walk - 1)); if (!c) continue;
     for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) if (costs[j * cols + i] < c && r.testPoint({ x: ox + (i + .5) * px, y: oy + (j + .5) * px, elevation: 0 })) costs[j * cols + i] = c; }

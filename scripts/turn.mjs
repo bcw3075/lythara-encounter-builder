@@ -104,6 +104,22 @@ export const listWords = (xs = []) => xs.length < 2 ? xs.join("") : `${xs.slice(
     yield, speech.mjs `speechFor`) and yielded (it has yielded and stands down: every plan is refused).
     Earth Glide (0.17.0): glides (it burrows through rock and earth: soilAt then means "it can dig there", rock included) and surfaceAt(square) (its
     footprint there is open floor it can come up onto, not inside rock, a wall, a trunk or deep water). */
+const PREP = "(?:to|at|toward|towards|into|onto|on|from|near|by|in|over|under)";
+const COORD = "\\[?\\s*\\d{1,3}\\s*,\\s*\\d{1,3}\\s*\\]?";
+/** Text for the GM without map squares (0.39.11, the live test: the card read "They close to 18,17" and "to square 18, 17", which she had to squint
+    at). Drops a square with the word that leads to it ("to square 18, 17", "at [4, 5]", "(square 3, 0)", "18,17"); the rest reads on. For the card and
+    the History, never for the thinker, the editor's fields or a refusal. */
+export function plainSquares(text) {
+  let s = String(text ?? "");
+  s = s.replace(new RegExp(`\\s*\\((?:the\\s+)?(?:square|corner)?\\s*${COORD}\\)`, "gi"), " ");
+  s = s.replace(new RegExp(`,?\\s+${PREP}(?:\\s+the\\s+corner)?(?:\\s+square)?\\s+${COORD}`, "gi"), " ");
+  s = s.replace(new RegExp(`,?\\s+(?:the\\s+corner\\s+|square\\s+)${COORD}`, "gi"), " ");
+  s = s.replace(/\s*\[\s*\d{1,3}\s*,\s*\d{1,3}\s*\]/g, " ").replace(/\s+\d{1,3},\d{1,3}\b/g, " ");
+  return s.replace(/\s+([.,;:!?)])/g, "$1").replace(/,([.,;:])/g, "$1").replace(/\(\s*\)/g, "").replace(/\s{2,}/g, " ").trim();
+}
+/** A plan that does nothing at all: every step "none" (0.39.11). Do it ends such a turn, Auto or not (Rhea, live test 2026-11-23: "technically it
+    should have ended the turn for me"), and the card says so: there is nothing for her to see or apply. */
+export const idlePlan = steps => Array.isArray(steps) && steps.length > 0 && steps.every(s => s?.do === "none");
 export function checkPlan(plan, ctx) {
   /* every reason is written about the monster with markers (pronoun.mjs) and comes out in its own pronoun: ctx.pro, "it" when none is given */
   const r = checkPlanIt(plan, ctx); return typeof r?.reason === "string" ? { ...r, reason: pro(r.reason, ctx?.pro ?? IT) } : r;
@@ -462,7 +478,10 @@ function checkPlanIt(plan, ctx) {
     steps.push({ do: "strike", item: s.id, itemName: s.name, target: step.target, targetName: t.name ?? step.target, variant: Math.min(attacks, 2), flat: t.flat ?? 0 });
     attacks++; took = tookProne = false; last = { do: "strike", item: s.id, target: step.target, effects: t.slab ? [] : s.effects ?? [], reach: s.reach, ranged: !!s.ranged, hit: null };   /* a blow at an earth barrier grabs or trips nothing (0.35.0) */
   }
-  return { ok: true, steps };
+  /* actions the plan leaves unused (0.39.11, the live test: a kobold drew its sling and stopped, its third action unspent and unexplained). Not counted
+     when the plan says so itself (a "none" or a Delay) or when it is asked again after its last step (a Seek, coming up, fleeing, a yield). */
+  const spare = Number.isFinite(left) && left > 0 && !sought && !surfaced && !fled && !gaveUp && !steps.some(x => x.do === "none" || x.do === "delay") ? left : 0;
+  return { ok: true, steps, spare, actions: ctx.actions };
 }
 /** One spell step, checked. Rhea, 2026-11-07: a spell attack at one creature and a save spell at one creature run for real (the module casts, rolls the
     attack or waits for the save, and applies the damage); anything else (an area, a spell with no attack or save, more than damage) is "card": the

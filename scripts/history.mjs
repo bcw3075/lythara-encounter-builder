@@ -3,7 +3,7 @@
    Combat flag every time, so nothing extra is kept while the fight runs; numbers on chat cards are read through `look`, and the record keeps what a
    card can't say (HP before and after). GM only: never sent to the thinker. Pure: no Foundry globals. */
 import { IT, pro } from "./pronoun.mjs";
-import { CHECK_OUTCOMES, OUTCOMES, climbResult, describeChanges, describeStep, isMove } from "./turn.mjs";
+import { CHECK_OUTCOMES, OUTCOMES, climbResult, describeChanges, describeStep, isMove, plainSquares } from "./turn.mjs";
 import { apiTotal, apiTotalWords, byWords } from "./route.mjs";
 
 const DEGREES = { strike: OUTCOMES, check: CHECK_OUTCOMES };
@@ -14,7 +14,9 @@ const sq = s => s ? `${s[0]}, ${s[1]}` : "?";
 export function namer(labels = {}, names = {}, forms = {}) {   /* forms: { tokenId: that creature's own pronoun } (pronoun.mjs), "it" for any not given */
   const byLabel = Object.fromEntries(Object.entries(labels).map(([t, l]) => [l, t]));
   const nameOf = l => names[byLabel[l]] ?? null;
-  return { nameOf, named: s => String(s ?? "").replace(/\b[EM]\d{1,3}\b/g, l => nameOf(l) ?? l), tokenOf: l => byLabel[l] ?? null, formsOf: id => forms?.[id] ?? IT };
+  const named = s => String(s ?? "").replace(/\b[EM]\d{1,3}\b/g, l => nameOf(l) ?? l);
+  /* plain: named, without map squares (0.39.11): for a plan's reason, its steps and their results; a refusal keeps its squares */
+  return { nameOf, named, plain: s => plainSquares(named(s)), tokenOf: l => byLabel[l] ?? null, formsOf: id => forms?.[id] ?? IT };
 }
 
 /** HP before and after, with "Down" at 0. */
@@ -94,7 +96,8 @@ function partOf(id, r, look, n) {
     for (const p of presses.filter(p => (p.pos ?? 0) === i)) lines.push(pressLine(p));
     const rec = r.log?.[i]; if (i >= pos && !(rec && Object.keys(rec).length)) return;
     const res = stepResult(s, rec ?? {}, look, n, i < pos, f);
-    lines.push({ kind: "step", n: i + 1, text: n.named(describeStep(s, f)), why: plan?.steps?.[i]?.why ? n.named(plan.steps[i].why) : null, result: n.named(res.text), cards: res.cards });
+    const pl = n.plain ?? n.named;   /* no map squares in what the GM reads (0.39.11) */
+    lines.push({ kind: "step", n: i + 1, text: pl(describeStep(s, f)), why: plan?.steps?.[i]?.why ? pl(plan.steps[i].why) : null, result: pl(res.text), cards: res.cards });
   });
   for (const p of presses.filter(p => (p.pos ?? 0) >= steps.length)) lines.push(pressLine(p));
   if (r.stall) lines.push({ kind: "stall", text: `Stalled ${Math.round((r.stall.waited ?? 0) / 1000)} s (${r.stall.state}).` });
@@ -106,8 +109,8 @@ function partOf(id, r, look, n) {
   if (r.why && !r.parent && !r.replanned) lines.push({ kind: "end", text: `The turn ended: ${n.named(describeChanges(r.why, n.nameOf, undefined, f))}` });
   const end = r.state === "manual" ? "You played the rest yourself." : r.gaveUp ? `Angel gave up: ${n.named(r.verdict ?? "")}` : r.replanned ? "Asked again (below)." : /^Couldn't do/.test(r.verdict ?? "") ? `${n.named(r.verdict)} You played the turn.` : null;
   if (end) lines.push({ kind: "end", text: end });
-  return { id, at: r.at ?? 0, by: byWords(r.by),   /* the route, the model's short name, and on the API its seconds and cost (0.31.0) */ reason: plan?.reason ? n.named(plan.reason) : null,
-    asked: r.why && r.parent ? n.named(describeChanges(r.why, n.nameOf, undefined, f)) : null, plan: steps.map((s, i) => ({ text: n.named(describeStep(s, f)), why: plan?.steps?.[i]?.why ? n.named(plan.steps[i].why) : null })),
+  return { id, at: r.at ?? 0, by: byWords(r.by),   /* the route, the model's short name, and on the API its seconds and cost (0.31.0) */ reason: plan?.reason ? (n.plain ?? n.named)(plan.reason) : null,
+    asked: r.why && r.parent ? n.named(describeChanges(r.why, n.nameOf, undefined, f)) : null, plan: steps.map((s, i) => ({ text: (n.plain ?? n.named)(describeStep(s, f)), why: plan?.steps?.[i]?.why ? (n.plain ?? n.named)(plan.steps[i].why) : null })),
     lines, state: r.state, waiting: asking && !r.gaveUp, their: pro("{Their}", f),
     /* what it remembered when this plan was asked for (0.25.0): the notebook as it was sent, read from the request's own packet */
     remembered: r.packet?.notebook ? [...(r.packet.notebook.remembers ?? []), ...(r.packet.notebook.alliesDid ?? []).map(x => `Ally: ${x}`), ...(r.packet.notebook.side ? [r.packet.notebook.side] : [])].map(x => n.named(x)) : [] };
