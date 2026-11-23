@@ -144,6 +144,7 @@ Record every id below in the release's change record when this feature, or a fea
 - KCTG Trade Goods' "treasure" includes livestock and rubble, and consumables "other" include blank runestones. Filter by category.
 - The first Preview after a reload takes about 3 s while indexes load.
 - A map in plain view gives "every free square is in the party's first view". That's true, not a bug: an open field has nowhere to hide.
+- **Preview minimizes the Build window first (0.39.10, code review):** a brief that `prepare` refuses (no creatures, an unknown name) threw with the window still minimized; it is maximized again before the error shows.
 
 ## Open items
 - A real encounter from Notion.

@@ -25,6 +25,7 @@ Record every id below in the release's change record when this feature, or a fea
 - **PF2e's own simple actions are usable as they are:** `game.pf2e.actions.get("stand")` and `get("drop-prone")`, `.use({ actors: [actor] })`, post the card (speaker the token of an unlinked actor) and await changing Prone, no dialog. PF2e's Crawl is only a card, so the module moves the token itself. Prone brings Off-Guard as its own condition. `system.movement.speeds.land.value` already includes Speed penalties (PF2e 8.7.0).
 - **Foundry's crawl action books double** (core's `costMultiplier: 2`): a one-square Crawl's charged cost reads 10 ft. Check a Crawl at the rules distance (terrain cost alone, 5 ft a square), not by Foundry's charge. A prone token can't Walk in Foundry (`walk.canSelect` false), so a Crawl must be sent with the crawl action, and a Stride or Step never with it (`moveAction`).
 - **`absorbOwn` always takes the limit** (Prone and Off-Guard): with no limit it would also take in a condition a reaction added during the action.
+- **Notes (0.39.10, code review):** "still prone" and "started to ... before the page reloaded" join the request's note instead of replacing it.
 
 ## Open items
 - Reactive Strike during a Crawl and at the end of a Stand or Drop Prone (not built with the rest of reactions).

@@ -44,6 +44,7 @@ Record every id below in the release's change record when this feature, or a fea
 - **Visioner's "Take Cover Should End" card is posted by every GM page,** so with AI and the Bridge both online one move gave two pending cards. Accept every pending card for the token, or a later click on a stale one ends a newer Take Cover.
 - **PF2e's Effect: Cover opens a level prompt** that nobody can click on the runner: set the ChoiceSet rule's own `selection` (find the rule by `key`); `flags.system.rulesSelections` doesn't skip it. Flag the module's own effect with its level rather than reading PF2e's stored selection.
 - **A Take Cover begun before a reload always goes to the GM:** cover is set creature by creature, so "Taking Cover now" doesn't prove it reached them all. Steps already settled for ending it are marked (`coverSettled`, saved with `pos`), or a Take Cover the GM gives between steps would be ended for an earlier Strike.
+- **Visioner's expiry cards (0.39.10, code review):** the loop that accepts the pending Take Cover expiry cards stops after five, so a card Visioner says it took but leaves pending can't hold the turn forever. Take Cover's own notes join the request's note.
 
 ## Open items
 - Once a turn means once a turn (0.39.9 review 2): a Take Cover the GM gives between steps that Visioner then fails to end gets no second warning that turn, and a note in the same turn that names this creature's Take Cover counts as the warning. Rhea may want a second warning for a fresh Take Cover.

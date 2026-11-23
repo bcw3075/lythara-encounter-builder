@@ -84,7 +84,7 @@ So the rule the code follows: **a card is the event; an HP drop with no card for
 ## Traps
 - **The HP update arrives before the damage-taken card,** and a card can come with no HP update at all (damage resisted to nothing, a shield taking all of it). Read the card; use the HP update only as the fallback after a wait.
 - **`damageTaken` in an HP update's options is there for a hand edit too:** it doesn't tell a card's damage from a typed number.
-- **A hand edit of an unlinked token's HP carries no `damageTaken` at all** (seen in 0.25.0's first test build: nothing was written): the runner keeps the HP it last saw for each creature (`hpSeen`, filled at every turn change and when its page loads) and uses the difference.
+- **A hand edit of an unlinked token's HP carries no `damageTaken` at all** (seen in 0.25.0's first test build: nothing was written): the runner keeps the HP it last saw for each creature (`hpSeen`, filled at every turn change and when its page loads, and dropped for a fight's creatures when the fight is deleted, 0.39.10: before, an unlinked token's HP from the last fight was the next fight's baseline) and uses the difference.
 - **The card's `appliedDamage.updates` holds what was taken off, not the HP before** (the first draft read it as the old HP; the review caught it against the probe's own numbers).
 - **A weakness or resistance applied is only in the card's HTML** (`data-applications` on the `.iwr` span), not in its flags.
 - **A pre-update hook fires only on the page that made the change:** a watcher on another page needs `updateActor`.
