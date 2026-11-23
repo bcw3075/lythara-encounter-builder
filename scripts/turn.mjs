@@ -104,7 +104,7 @@ export const listWords = (xs = []) => xs.length < 2 ? xs.join("") : `${xs.slice(
     yield, speech.mjs `speechFor`) and yielded (it has yielded and stands down: every plan is refused).
     Earth Glide (0.17.0): glides (it burrows through rock and earth: soilAt then means "it can dig there", rock included) and surfaceAt(square) (its
     footprint there is open floor it can come up onto, not inside rock, a wall, a trunk or deep water). */
-const PREP = "(?:to|at|toward|towards|into|onto|on|from|near|by|in|over|under)";
+const PREP = "(?:to|at|toward|towards|into|onto|from|near)";   /* words of place only: "by 4, 12 damage" or "in 1, 2" keep their numbers (0.39.11 review 4) */
 const COORD = "\\[?\\s*\\d{1,3}\\s*,\\s*\\d{1,3}\\s*\\]?";
 /** Text for the GM without map squares (0.39.11, the live test: the card read "They close to 18,17" and "to square 18, 17", which she had to squint
     at). Drops a square with the word that leads to it ("to square 18, 17", "at [4, 5]", "(square 3, 0)", "18,17"); the rest reads on. For the card and
@@ -114,7 +114,7 @@ export function plainSquares(text) {
   s = s.replace(new RegExp(`\\s*\\((?:the\\s+)?(?:square|corner)?\\s*${COORD}\\)`, "gi"), " ");
   s = s.replace(new RegExp(`,?\\s+${PREP}(?:\\s+the\\s+corner)?(?:\\s+square)?\\s+${COORD}`, "gi"), " ");
   s = s.replace(new RegExp(`,?\\s+(?:the\\s+corner\\s+|square\\s+)${COORD}`, "gi"), " ");
-  s = s.replace(/\s*\[\s*\d{1,3}\s*,\s*\d{1,3}\s*\]/g, " ").replace(/\s+\d{1,3},\d{1,3}\b/g, " ");
+  s = s.replace(/\s*\[\s*\d{1,3}\s*,\s*\d{1,3}\s*\]/g, " ").replace(/\s+\d{1,3},\d{1,2}\b(?![\d,])/g, " ");
   return s.replace(/\s+([.,;:!?)])/g, "$1").replace(/,([.,;:])/g, "$1").replace(/\(\s*\)/g, "").replace(/\s{2,}/g, " ").trim();
 }
 /** A plan that does nothing at all: every step "none" (0.39.11). Do it ends such a turn, Auto or not (Rhea, live test 2026-11-23: "technically it

@@ -8,7 +8,7 @@ since: 0.10.0
 Building an encounter from a brief: read the map, place monsters, treasure and journal notes, the Build Encounter window.
 
 ## Decisions
-- **Closed doors don't stop the approach (0.39.11, the coordinator's build-time findings in the 2026-11-23 live test):** `readMap` read a closed door as a solid wall, so every room behind one had no approach at all: ambush and lair layouts put the monsters in the party's own room, and patrol and standoff layouts had almost nowhere to vary with a new seed. A closed (not locked) door now stops no walking but still blocks sight, so a monster behind it is out of the party's first view; an open door is no wall, a locked one is a wall.
+- **Closed doors don't stop the approach (0.39.11, the coordinator's build-time findings in the 2026-11-23 live test):** `readMap` read a closed door as a solid wall, so every room behind one had no approach at all: ambush and lair layouts put the monsters in the party's own room, and patrol and standoff layouts had almost nowhere to vary with a new seed. A closed (not locked) ordinary door now stops no walking but still blocks sight (a secret door stays a wall: the party doesn't know of it; 0.39.11 review 5), so a monster behind it is out of the party's first view; an open door is no wall, a locked one is a wall.
 - Treasure when Notion lists none: the published Treasure by Encounter table with a running total.
 **Design-era decisions (from the 2026-11-05/06 plan; the lines above are the skill's summary of the same choices):**
   - **Treasure when Notion lists none:** the published Treasure by Encounter table, with a running total.

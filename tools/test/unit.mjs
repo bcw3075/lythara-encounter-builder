@@ -2273,6 +2273,8 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
     && plainSquares("Flees off the north edge of the map from where they stand (square 3, 0): you decide.") === "Flees off the north edge of the map from where they stand: you decide."
     && plainSquares("Seeks in a 15-foot burst from the corner [4, 5] (a secret Perception check).") === "Seeks in a 15-foot burst (a secret Perception check)."
     && plainSquares("17 vs AC 18: miss; damage 1d6+1 = 2 piercing, applied: Hero 20 → 18 HP") === "17 vs AC 18: miss; damage 1d6+1 = 2 piercing, applied: Hero 20 → 18 HP");
+  check("0.39.11 review 4: numbers that aren't squares stay (\"by 4, 12\", \"1,200\")",
+    plainSquares("beats AC 18 by 4, 12 damage") === "beats AC 18 by 4, 12 damage" && plainSquares("a cache of 1,200 sp") === "a cache of 1,200 sp" && plainSquares("in 1, 2 rounds") === "in 1, 2 rounds");
   const sp2 = checkPlan({ steps: [st({ item: "jaws", target: "E1" }), st({ item: "jaws", target: "E1" })] }, tctx), sp3 = checkPlan({ steps: [st({ item: "jaws", target: "E1" }), st({ item: "jaws", target: "E1" }), st({ item: "jaws", target: "E1" })] }, tctx);
   const spNone = checkPlan({ steps: [st({ item: "jaws", target: "E1" }), { do: "none" }] }, tctx), spDelay = checkPlan({ steps: [{ do: "delay", after: "E1" }] }, { ...tctx, fresh: true, order: { E1: "later" } });
   check("0.39.11 unused actions: a plan using 2 of 3 has 1 spare; using all 3, or saying so with a \"none\" or a Delay, has none",

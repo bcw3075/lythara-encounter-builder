@@ -994,7 +994,7 @@ async function judgeNow(combat, requestId) {
   if (!c.ok) return reject(combat, requestId, c.reason);
   /* actions left unused with no word why (0.39.11, the live test): asked once to use them or say why; that ask uses up no try, so it never hands a turn
      to the GM. A plan that still leaves them, or says why, goes ahead and the card says so. */
-  if (c.spare > 0 && !clean.plan.unused && !r.reaction && !request(combat, requestId).nudged) return nudge(combat, requestId, spareAsk(c.spare, c.actions));
+  if (c.spare > 0 && !clean.plan.unused && !r.reaction && !(r.why ?? []).some(w => w?.who === "gm") && !request(combat, requestId).nudged) return nudge(combat, requestId, spareAsk(c.spare, c.actions));
   if (c.spare > 0 && !r.reaction) await addNote(combat, requestId, spareNote(c.spare, clean.plan.unused));
   const tok = sceneOf(combat).tokens.get(r.tokenId);
   /* Play it myself pressed while the plan was being checked (0.33.1, review): her press stands; the plan is kept for the card */
@@ -2459,7 +2459,7 @@ const autoPause = () => Math.max(0, Number(game.settings.get(ID, "autoPause")) |
    turn that has moved on, or one with another request still going (a re-plan). */
 const END_MS = 2000, ending = new Set();
 /* a plan that does nothing at all (turn.mjs's idlePlan): Do it ends the turn too, Auto or not (Rhea, live test 2026-11-23) */
-const endsItself = (r, tok) => !!tok?.getFlag(ID, "auto") || idlePlan(r?.steps);
+const endsItself = (r, tok) => !!tok?.getFlag(ID, "auto") || (!r?.reaction && idlePlan(r?.steps));   /* a reaction never ends the turn (0.39.11 review) */
 function endAfter(combat, requestId) {
   const r = request(combat, requestId), tok = sceneOf(combat)?.tokens.get(r?.tokenId), key = `${combat.id}.${r?.round}.${r?.combatantId}`;
   if (!r || !endsItself(r, tok) || ending.has(key)) return;
@@ -4882,7 +4882,10 @@ async function settleBandsNow(combat) {
       members: members.map(t => ({ id: t.id, level: t.actor?.level ?? 0, speaks: langsOf(t.actor).length > 0, discipline: disciplineOf(scene, t, combat), standing: !fellWord(t) && !(t.hidden && !t.getFlag(ID, "escaped") && !isBelow(t)) })) });
     const at = `flags.${ID}.bands.${band.key}`;
     const own0 = combat.getFlag(ID, "minds")?.own ?? {};   /* what each member the fall makes Loose had in this fight's layer, for a band that re-forms (0.39.9) */
-    change[`${at}.fell`] = whole({ was, state, round: combat.round, pick, ...(out.reforms ? { reforms: true } : {}), ...(out.loosen.length ? { loosened: Object.fromEntries(out.loosen.map(id => [id, own0[id]?.discipline ?? null])) } : {}) });
+    /* the same leader acted on again (down, then it changed sides while down): the first fall's re-form record stands, since the members it made
+       Loose now read Loose and would decide nothing (0.39.11, the close-out test) */
+    const keep = now?.fell?.was === was ? now.fell : null, loosened = { ...Object.fromEntries(out.loosen.map(id => [id, own0[id]?.discipline ?? null])), ...(keep?.loosened ?? {}) };
+    change[`${at}.fell`] = whole({ was, state, round: combat.round, pick, ...(out.reforms || keep?.reforms ? { reforms: true } : {}), ...(Object.keys(loosened).length ? { loosened } : {}) });
     if (!lead0.took && was !== "gone") change[`${at}.orig`] = was;   /* the leader this fall is of, kept for B-11: the heir hands the band back to it (a later fall of the heir leaves it) */
     if (useTurned) change[`flags.${ID}.turns.turned.${band.key}.done`] = true;
     if (out.leader) { change[`${at}.leader`] = whole({ token: out.leader }); change[`flags.${ID}.turns.orders.last.${band.key}`] = gone(); }   /* the new leader may give its own order on its turn, this round too (R3-2) */
