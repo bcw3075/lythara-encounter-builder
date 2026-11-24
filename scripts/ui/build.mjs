@@ -23,11 +23,14 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
     const a = this.scene.getFlag(ID, "askAngel"), b = a?.answer?.brief;
     if (!b || a.answer.applied || a.user !== game.user.id || this.previewing) return false;   /* not under a running Preview: taken when it ends (review 6) */
     const level = this.brief.partyLevel, next = cleanBrief(mergeBrief(this.brief, b, { by: "angel" }).brief); next.partyLevel ??= level;
-    this.brief = next; this.openNotes?.clear(); this.message = "Angel filled this in: check it, then Preview."; markApplied(this.scene, next).catch(e => console.warn(`${ID} | ask`, e)); return true;
+    this.brief = next; this.formStale = true; this.openNotes?.clear(); this.message = "Angel filled this in: check it, then Preview."; markApplied(this.scene, next).catch(e => console.warn(`${ID} | ask`, e)); return true;
   }
   _onFirstRender(context, options) { super._onFirstRender?.(context, options);
     this.askHook = (scene, change) => { if (scene.id !== this.scene.id || !foundry.utils.hasProperty(change, `flags.${ID}`)) return; const f = change.flags[ID]; if (!Object.keys(f).some(k => k.endsWith("askAngel"))) return;
-      this.element?.querySelectorAll("input:not([name=search]):not([name=askText]),select,textarea:not([name=askText])").forEach(el => this.readForm(el));   /* typed but not yet left (review 4) */
+      /* typed but not yet left (review 4). Not while the window still shows what it held before an answer was taken (0.44.0, seen with the first real
+         answer: taking it writes the scene, that write fires this hook again before the window has redrawn, and the old empty Name, Mood, Why,
+         Want, Doing and Retreat were read back over Angel's) */
+      if (!this.formStale) this.element?.querySelectorAll("input:not([name=search]):not([name=askText]),select,textarea:not([name=askText])").forEach(el => this.readForm(el));
       this.takeAnswer(); this.render(); };
     Hooks.on("updateScene", this.askHook);
     this.askTimer = setInterval(() => { const el = this.element?.querySelector(".leb-ask-status"); if (!el) return; const was = this.askOpen(); el.innerHTML = this.askStatus(); if (was && !this.askOpen()) this.render(); }, 5000); }
@@ -107,7 +110,7 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
     if (n === "partyLevel") this.brief.partyLevel = Math.round(+el.value || 0); else if (n === "claimedXP") this.brief.claimedXP = el.value === "" ? null : +el.value; else if (["name", "mood", "why", "want", "doing", "retreat", "treasureMode"].includes(n)) this.brief[n] = el.value;
   }
   _onRender() {
-    const root = this.element;
+    const root = this.element; this.formStale = false;   /* the window shows its brief again */
     root.querySelectorAll("input,select,textarea").forEach(el => el.addEventListener("change", async ev => {
       if (el.name === "search" || el.name === "askText") return;
       if (el.name === "manual") { await setManualTreasure(this.brief.partyLevel, el.value); return this.render(); }

@@ -67,7 +67,9 @@ export function cleanPlan(raw) {
   let walls = null; if (p.walls != null) { const g = cleanWalls(p.walls); if (!g.ok) return g; walls = g.walls; }
   /* why the plan leaves actions unused, when it does (0.39.11): shown on the GM's card */
   const unused = text(p.unused, 160) || null;
-  return { ok: true, plan: { schema: PLAN_SCHEMA, reason: text(p.reason, 300), steps, ifBlocked: text(p.ifBlocked, 100) || null, suggestOpus: p.suggestOpus === true, ...(unused ? { unused } : {}), ...(ground ? { ground } : {}), ...(walls ? { walls } : {}) } };
+  /* why the plan takes none of the flank squares its packet listed (0.44.0, F-10): shown on the GM's card */
+  const noFlank = text(p.noFlank, 160) || null;
+  return { ok: true, plan: { schema: PLAN_SCHEMA, reason: text(p.reason, 300), steps, ifBlocked: text(p.ifBlocked, 100) || null, suggestOpus: p.suggestOpus === true, ...(unused ? { unused } : {}), ...(noFlank ? { noFlank } : {}), ...(ground ? { ground } : {}), ...(walls ? { walls } : {}) } };
 }
 export const MAX_SOIL_AREAS = 24;
 /** The ground judgment a plan may carry (0.16.0; Rhea, 2026-11-08: on a map the module can't read, Angel judges the soil in play): { soil: "all" } (the

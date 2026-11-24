@@ -171,3 +171,5 @@ worker.mjs
 apiModels
 apiPollS
 preCreateItem
+TokenPF2e#isFlanking
+TokenPF2e#onOppositeSides

@@ -1,7 +1,7 @@
 /* What a monster can perceive, and the packet a thinker gets for its turn. Pure: no Foundry globals. The glue in fight.mjs gathers live values on the
    runner, with the fight scene open. Rules: Perception and Detection https://2e.aonprd.com/Rules.aspx?ID=2400, Light https://2e.aonprd.com/Rules.aspx?ID=2401.
    Monsters act only on this, so nothing here may carry a player's numbers: see packetOf. */
-export const PACKET_SCHEMA = 11;   /* 11 since 0.41.0: mind.started (how the fight found it, F-3); 10 since 0.35.0: barriers (earth slabs on the map);  9 since 0.33.2: a Strike with a worn or stowed weapon is "sheathed"; 8 since 0.30.1: mind.pronoun */
+export const PACKET_SCHEMA = 12;   /* 12 since 0.44.0: flank (flanking squares, their danger, its own back: F-10); 11 since 0.41.0: mind.started (how the fight found it, F-3); 10 since 0.35.0: barriers (earth slabs on the map);  9 since 0.33.2: a Strike with a worn or stowed weapon is "sheathed"; 8 since 0.30.1: mind.pronoun */
 const ORDER = ["observed", "concealed", "hidden", "undetected", "unnoticed"];
 /** The less perceptible of two states. */
 export const worse = (a, b) => ORDER[Math.max(ORDER.indexOf(a), ORDER.indexOf(b))];
@@ -110,7 +110,7 @@ export function groundAround(model, [i, j], radius = 10, coverAt = .3, takeCover
 }
 /** What a monster gets told. Everything about others goes through here, and only these fields: never a player's HP, AC, saves, level, slots or anything else off
     a sheet, GM secrets, hidden loot or chat. Text in it is data, never instruction. */
-export function packetOf({ you, mind = null, band = null, bandNow = null, orders = null, speech = null, command = null, notebook = null, allies = [], others = [], memory = {}, ground = null, round = 0, note = null, done = [], barriers = [] }) {
+export function packetOf({ you, mind = null, band = null, bandNow = null, orders = null, speech = null, command = null, notebook = null, allies = [], others = [], memory = {}, ground = null, round = 0, note = null, done = [], barriers = [], flank = null }) {
   const perceived = [], remembered = [];
   for (const o of others) {
     if (o.state === "observed" || o.state === "concealed") perceived.push({ label: o.label, state: o.state, square: o.square, ...(o.height > 0 ? { height: o.height } : {}), ...(o.offGrid ? { offGrid: true } : {}), size: o.size, gear: o.gear ?? [], conditions: o.conditions ?? [], healthWord: o.healthWord ?? null, distance: o.distance, cover: o.cover ?? "none", ...(o.yielded ? { yielded: true } : {}), ...(o.alliesLost ? { alliesLost: true } : {}) });   /* yielded (0.29.0): it has given itself up and stands down, or is a prisoner; alliesLost (0.30.0): at least one of its allies has lost this creature, so it could Point it Out */
@@ -127,7 +127,8 @@ export function packetOf({ you, mind = null, band = null, bandNow = null, orders
   /* speech: whether it may say its one sentence to the party this round and whether it may yield (speech.mjs `speechForPacket`), after `orders`
      (0.29.0, schema 6) */
   /* command: a handler's Command an Animal in force for this turn (command.mjs `commandForPacket`), after `speech` (0.30.0, schema 7) */
-  return { schema: PACKET_SCHEMA, ...(mind ? { mind } : {}), ...(band ? { band } : {}), ...(notebook ? { notebook } : {}), ...(bandNow ? { bandNow } : {}), ...(orders ? { orders } : {}), ...(speech ? { speech } : {}), ...(command ? { command } : {}), you, allies, perceived, memory: remembered, ground, round, note, done, ...(barriers?.length ? { barriers } : {}) };
+  /* flank: flanking as this monster can work it out (flank.mjs `flankView`), after what it perceives: it is built from that (0.44.0, schema 12) */
+  return { schema: PACKET_SCHEMA, ...(mind ? { mind } : {}), ...(band ? { band } : {}), ...(notebook ? { notebook } : {}), ...(bandNow ? { bandNow } : {}), ...(orders ? { orders } : {}), ...(speech ? { speech } : {}), ...(command ? { command } : {}), you, allies, perceived, memory: remembered, ...(flank ? { flank } : {}), ground, round, note, done, ...(barriers?.length ? { barriers } : {}) };
 }
 /** Who it can name in a plan: label to token id. */
 export const labelsOf = others => Object.fromEntries(others.filter(o => canTarget(o.state)).map(o => [o.label, o.id]));

@@ -8,6 +8,7 @@ import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntrie
 import { giveOwn, kindFacts, mindLayers, mindOf, partyPeople, pronounOf, setLines } from "./library.mjs";
 import { LOOK_ID, LOOK_TRIES, cleanLook, escapeLines, knowsAfter, lookOut, lookPacket, lookWaiting, openItems } from "./look.mjs";
 import { lineWords } from "./minds.mjs";
+import { flankNote, flankUse, flankView } from "./flank.mjs";
 import { IT, pro } from "./pronoun.mjs";
 import { PLANNED, bandKeyOf, bandOf, bandPacket, bandsOf, disciplineOf, fightBand, jobGroups, langsOf, leaderOf, membersOf, natureLayers, planOf, secondOf, shiftBandSpots } from "./bandlib.mjs";
 import { natureOf } from "./bands.mjs";
@@ -351,11 +352,38 @@ async function buildPacket(combat, tok, turn = {}) {
   const barriers = a.hasCondition?.("blinded") ? [] : barriersOf(combat, scene.id).map(b => ({ label: b.label, squares: b.squares, by: nameable.has(b.caster) ? labels[b.caster] ?? null : null, ac: b.ac, hardness: b.hardness, hp: `${Math.max(0, b.hp)}/${b.max}` }));
   /* how the fight found it (0.41.0, F-3: "fully integrated with the monster minds"): one line of its mind, the same bytes all fight until it wakes */
   if (!onParty(a)) { const st = startOf(combat, tok), w = startWords(st, P(tok, combat), { woke: turns(combat).woke?.[tok.id] ?? null, asleepNow: st === "asleep" && asleepNow(a) }); if (w) minded.mind = { ...(minded.mind ?? {}), started: w }; }
-  const packet = packetOf({ you, mind: minded.mind, band: banded.band, bandNow: banded.bandNow, orders, speech, command, notebook, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], barriers, ground: groundAround(model, square, GROUND_RADIUS, undefined, takeCoverSquares(scene), water, soil && !glides ? (x, y) => !soil(x, y) && !model.blocked[model.idx(x, y)] && !water(x, y) : null),
+  /* flanking (0.44.0, F-10): the squares that flank a foe with an ally, how dangerous each is, and its own back; by its mind */
+  const flank = await flankFor(combat, tok, { you, others, allies, labels, minded, discipline }).catch(e => { console.warn(`${ID} | flank`, e); return null; });
+  const packet = packetOf({ you, flank: flank?.block ?? null, mind: minded.mind, band: banded.band, bandNow: banded.bandNow, orders, speech, command, notebook, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], barriers, ground: groundAround(model, square, GROUND_RADIUS, undefined, takeCoverSquares(scene), water, soil && !glides ? (x, y) => !soil(x, y) && !model.blocked[model.idx(x, y)] && !water(x, y) : null),
     allies: allies.map(x => ({ label: labels[x.id], name: nameFor(x), square: squareOf(x, scene), ...(heightUp(x) ? { height: heightUp(x) } : {}), ...(isBelow(x) ? { below: true } : {}), healthWord: wordsFor(x.actor), conditions: visibleConditions(conditionsOn(x.actor)), ...(stoodDown(x) ? { yielded: true } : {}) })),
     others: others.map(o => ({ id: o.id, state: o.state, label: labels[o.id], square: o.square, ...(o.pointed ? { pointed: true } : {}), ...(lost.has(o.id) ? { alliesLost: true } : {}), height: o.pointed ? o.height ?? 0 : heightUp(o.token), offGrid: offGrid(o.token, scene), size: o.token.actor.size, distance: o.distance, gear: gearOf(o.token.actor), conditions: visibleConditions(conditionsOn(o.token.actor)), healthWord: wordsFor(o.token.actor), cover: cover?.getAutoCoverState?.(tok.object, o.token.object) ?? "none", ...(stoodDown(o.token) ? { yielded: true } : {}) })) });
-  return { packet, labels: labelsOf(others.map(o => ({ id: o.id, state: o.state, label: labels[o.id] }))), fresh, others, mindHeld: [...minded.held.map(h => h.key), ...banded.held.map(k => `band.${k}`)] };
+  return { packet, labels: labelsOf(others.map(o => ({ id: o.id, state: o.state, label: labels[o.id] }))), fresh, others, mindHeld: [...minded.held.map(h => h.key), ...banded.held.map(k => `band.${k}`)], flank: flank?.open ? { open: flank.open, use: flank.use, mind: flank.mind, discipline: flank.discipline } : null };
 }
+/** The flanking part of a packet (0.44.0, F-10; flank.mjs does the working out): only creatures this monster knows of, each with what shows of it
+    (its size, how far its weapon reaches, whether it is up and able to fight), a foe's reaction only once this monster has seen it used (a
+    "reactive" line in its notebook, whatever its Mind makes of the rest of that notebook), and routes through the world as it knows it. Nothing
+    when PF2e's flanking automation is off, or when it is in the air or under the ground (heights aren't worked out). Returns { block, open, use,
+    mind, discipline } or null. */
+async function flankFor(combat, tok, { you, others, allies, labels, minded, discipline }) {
+  if (game.pf2e?.settings?.automation?.flanking === false) return null;
+  const scene = sceneOf(combat), a = tok.actor; if (heightUp(tok) > 0 || isBelow(tok)) return null;
+  const mindPick = minded.mind?.pick?.mind ?? minded.assembled?.lines?.mind?.pick ?? null, use = flankUse(mindPick, onParty(a) && !minded.assembled?.lines?.discipline ? null : discipline);
+  const flat = t => heightUp(t) === 0 && !isBelow(t), fl = x => x?.attributes?.flanking ?? {}, reachOf = x => { const r = Number(x.getReach?.({ action: "attack" })); return Number.isFinite(r) ? r : 5; }, held = x => ["paralyzed", "petrified", "restrained"].some(c => x.hasCondition?.(c));
+  const foes = others.filter(o => canTarget(o.state) && labels[o.id] && flat(o.token) && !stoodDown(o.token)).map(o => { const x = o.token.actor, seen = SEES.includes(o.state) && !o.pointed;
+    /* a foe it only hears (hidden, or pointed out) shows nothing: an ordinary reach, able, and no guess from a weapon it can't see (review 4) */
+    return { label: labels[o.id], square: o.square, size: sizeOf(o.token), reach: seen ? reachOf(x) : 5, able: !seen || (!isDown(x) && !held(x)), seen, flankable: true,
+      seenReact: Object.values(books(combat)[tok.id] ?? {}).some(l => l && !l.x && l.k === "reactive" && l.a === labels[o.id]),
+      looksMartial: !seen ? false : x.isOfType?.("character") ? x.itemTypes.weapon.some(w => w.isEquipped && (w.handsHeld ?? 0) > 0 && !w.isRanged) : (x.itemTypes?.melee ?? []).some(m => !m.isRanged) }; });
+  const friends = allies.filter(t => labels[t.id] && flat(t) && !t.hidden && !stoodDown(t)).map(t => ({ label: labels[t.id], square: squareOf(t, scene), size: sizeOf(t), reach: reachOf(t.actor), able: !isDown(t.actor) && !held(t.actor) && !!t.actor.canAttack && fl(t.actor).canFlank !== false }));
+  if (!foes.length) return null;
+  const melee = (you.strikes ?? []).filter(s => !("range" in s)), speed = landSpeed(a), prone = !!a.hasCondition?.("prone");
+  const me = { label: you.label, square: you.square, size: sizeOf(tok), reach: Math.max(0, ...melee.map(s => Number.isFinite(Number(s.reach)) ? Number(s.reach) : 5)), able: !!a.canAttack && !cantAttack(a) && fl(a).canFlank !== false, flankable: fl(a).flankable !== false, speed, actions: you.actionsLeft, canMove: !cantMove(a) && speed > 0 && !prone, canStep: speed >= 10 };   /* prone: it must Stand before any Stride or Step, so no square is promised (review 1) */
+  const route = await mover(combat, tok, speed * 2, knownTo(combat, tok, others));
+  const world = { route: (from, to) => route(from, to), step: (from, to) => route(from, to, [], { step: true }), free: route.freeAt };
+  const v = flankView({ me, allies: friends, foes, use, world });
+  return { ...v, use, mind: lineWords("mind", { pick: mindPick }) , discipline: lineWords("discipline", { pick: discipline }) };
+}
+
 /** Has this creature fallen, as its band counts it (R3-2: down, dead or fled)? */
 function fallenWord(tok) { const a = tok?.actor; if (!a) return "gone";
   /* asleep is not fallen: the builder puts Unconscious on a monster built asleep, and its band must not run while the boss sleeps (0.26.0 review 1) */
@@ -443,7 +471,7 @@ async function onTurnChange(combat) {
     /* with the fight-start look's packets, one at a time (0.33.0): two packets built at once could give one label to two creatures */
     const failed = await withPackets(async () => {
       let built; try { built = await buildPacket(combat, tok); } catch (e) { console.error(`${ID} | packet`, e); await save(combat, id, { ...base, labels: {}, note: `I couldn't work out what ${tok.name} perceives (${e.message}). Play this turn yourself.` }); return true; }
-      await saveTurns(combat, { [`requests.${id}`]: { ...base, labels: built.labels, packet: built.packet, ...(built.mindHeld.length ? { mindHeld: built.mindHeld } : {}), seen: situationNow(combat, tok, built.labels, built.others), nbAt: Date.now(), note: null, tries: 0, pos: 0 }, ...eventChange("turn", id, 0), ...packetExtras(combat, tok, built) });
+      await saveTurns(combat, { [`requests.${id}`]: { ...base, labels: built.labels, packet: built.packet, ...(built.mindHeld.length ? { mindHeld: built.mindHeld } : {}), ...(built.flank ? { flank: built.flank } : {}), seen: situationNow(combat, tok, built.labels, built.others), nbAt: Date.now(), note: null, tries: 0, pos: 0 }, ...eventChange("turn", id, 0), ...packetExtras(combat, tok, built) });
       return false; });
     if (failed) return;
     if (!tok.getFlag(ID, "run")) await playMyself(combat, id);   /* unticked while it was being asked for (0.29.1 review 1): hers, as an untick on the turn is */
@@ -937,6 +965,7 @@ async function mover(combat, tok, speed, known = null, flySpeed = 0, swimSpeed =
   /* the deep water under its footprint at a square, for checkPlan: "calm", "flowing" or null */
   route.waterAt = sq => waterUnder(sq, size, kind); route.waterIn = sq => waterUnder(sq, size, kind, true);
   route.trees = treesOf(read);   /* for a Climb: the trees beside a square */
+  route.freeAt = (i, j) => model.inMap(i, j) && !model.blocked[model.idx(i, j)] && terrain(i, j) != null && !who.get(`${i},${j}`);   /* a square a Medium creature could stand in, as far as this monster knows (flanking, 0.44.0) */
   route.soilAt = sq => footprintAt(sq, size).every(([i, j]) => soil(i, j)); route.occupiedAt = occupied;   /* for a Burrow (0.16.0) */
   /* where a Burrow may come up: open floor, nothing solid and no deep water under its footprint (a glider may be below rock, but can't come up in it) */
   const floor = glide ? openFloor(scene, model, isDeep) : null;   /* a glider can be anywhere below, so where it comes up is checked against the open floor */
@@ -1013,6 +1042,8 @@ async function judgeNow(combat, requestId) {
      to the GM. A plan that still leaves them, or says why, goes ahead and the card says so. */
   if (c.spare > 0 && !clean.plan.unused && !r.reaction && !(r.why ?? []).some(w => w?.who === "gm") && !request(combat, requestId).nudged) return nudge(combat, requestId, spareAsk(c.spare, c.actions));
   if (c.spare > 0 && !r.reaction) await addNote(combat, requestId, spareNote(c.spare, clean.plan.unused));
+  /* a flank was open and the plan doesn't take it (0.44.0, F-10): the card says why, in the thinker's words or by its mind */
+  { const fn = r.flank && !r.reaction ? flankNote({ ...r.flank, block: r.packet?.flank ?? null, steps: clean.plan.steps, noFlank: clean.plan.noFlank ?? null }) : null; if (fn) await addNote(combat, requestId, fn); }
   const tok = sceneOf(combat).tokens.get(r.tokenId);
   /* Play it myself pressed while the plan was being checked (0.33.1, review): her press stands; the plan is kept for the card */
   if (request(combat, requestId)?.state === "manual") { await save(combat, requestId, { plan: whole(clean.plan), steps: c.steps, verdict: null }); return { state: "manual", reason: "The GM took this turn over." }; }
@@ -2775,7 +2806,7 @@ async function replan(combat, r, i, changes, tok, { counted = true } = {}) {
   if (request(combat, r.id)?.state === "manual") return;   /* Play it myself pressed while the packet was built (0.33.1, review): no new ask */
   const id = foundry.utils.randomID(8);
   await saveTurns(combat, { [`${at}.state`]: "done", [`${at}.pos`]: i, [`${at}.replanned`]: id,
-    [`requests.${id}`]: { state: "requested", combatantId: r.combatantId, tokenId: r.tokenId, round: r.round, turn: r.turn, at: Date.now(), since: clock(), log: {}, labels: built.labels, packet: built.packet, ...(built.mindHeld.length ? { mindHeld: built.mindHeld } : {}), seen: situationNow(combat, tok, built.labels, built.others), nbAt: Date.now(), note: null, tries: 0, pos: 0, spent, attacks, done, replans, why: changes, parent: r.id },
+    [`requests.${id}`]: { state: "requested", combatantId: r.combatantId, tokenId: r.tokenId, round: r.round, turn: r.turn, at: Date.now(), since: clock(), log: {}, labels: built.labels, packet: built.packet, ...(built.mindHeld.length ? { mindHeld: built.mindHeld } : {}), ...(built.flank ? { flank: built.flank } : {}), seen: situationNow(combat, tok, built.labels, built.others), nbAt: Date.now(), note: null, tries: 0, pos: 0, spent, attacks, done, replans, why: changes, parent: r.id },
     ...eventChange("replan", id, 0), ...packetExtras(combat, tok, built) });
   });
 }

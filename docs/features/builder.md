@@ -156,6 +156,7 @@ Record every id below in the release's change record when this feature, or a fea
 - The first Preview after a reload takes about 3 s while indexes load.
 - A map in plain view gives "every free square is in the party's first view". That's true, not a bug: an open field has nowhere to hide.
 - **Preview minimizes the Build window first (0.39.10, code review):** a brief that `prepare` refuses (no creatures, an unknown name) threw with the window still minimized; it is maximized again before the error shows.
+- **The window's form is not read between taking Ask Angel's answer and the next draw** (0.44.0, `formStale` in `ui/build.mjs`): the answer's own scene write fires the window's update hook while the old screen is still up, and reading that screen put its empty fields over the answer. The whole story is in `docs/features/ask-angel.md` Traps.
 
 ## Open items
 - A real encounter from Notion.
