@@ -130,9 +130,10 @@ function roomWords(prep, ask, angel) {
   if (!offersRooms(prep.rooms ?? [])) return "";
   const r = prep.room, head = r ? `<p><b>Room ${r.n}</b> of ${prep.rooms.length}, ${esc(ROOM_BY[r.by] ?? "picked")}: ${esc(r.why)}</p>` : `<p><b>The whole map</b>: no room picked, so they stand anywhere on it.</p>`;
   let look = "";
-  if (ask && !angel) look = `<p><i class="fa-solid fa-spinner fa-spin"></i> Angel is looking at the map for a room. Meanwhile this is the builder's pick.</p>`;
-  else if (angel?.timeout) look = `<p>Angel didn't answer within ${ROOM_WAIT_S} seconds (it needs the bridge's API worker, version 0.4.3 or later, with its API key, running and not stopped), so this stays the builder's pick.</p>`;
-  else if (angel?.error) look = `<p>Angel's pick couldn't be used (${esc(angel.error)}), so this stays the builder's pick.</p>`;
+  if (ask && !angel) look = `<p><i class="fa-solid fa-spinner fa-spin"></i> Angel is looking at the map for a room.${r?.by === "builder" ? " Meanwhile this is the builder's pick." : ""}</p>`;
+  const stays = r?.by === "builder" ? "this stays the builder's pick" : "your choice stays";
+  if (angel?.timeout) look = `<p>Angel didn't answer within ${ROOM_WAIT_S} seconds (it needs the bridge's API worker, version 0.4.3 or later, with its API key, running and not stopped), so ${stays}.</p>`;
+  else if (angel?.error) look = `<p>Angel's pick couldn't be used (${esc(angel.error)}), so ${stays}.</p>`;
   else if (angel && r?.by !== "angel") look = `<p>Angel suggested room ${angel.n}: ${esc(angel.why)}</p>`;
   return head + look;
 }
@@ -157,8 +158,10 @@ const PREVIEW_DIALOG = `${ID}-preview`;
 async function previewLoop(scene, makePrep, apply, title, moving = false) {
   if (canvas.scene?.id !== scene.id) await scene.view();
   let seed = null, room, ask = null, angel = null, interrupted = false, timer = null, gmChose = false;
-  const dialogId = `${PREVIEW_DIALOG}-${scene.id}`;   /* one per scene, so Angel's answer closes only this Preview's dialog (review 7) */
-  const wake = () => { interrupted = true; foundry.applications.instances.get(dialogId)?.close(); };
+  /* a fresh id for each dialog (live test build 2: a dialog opened again at once under the id of the one just closing never showed, and the
+     Preview hung), and this Preview's own, so Angel's answer closes only its dialog (review 7) */
+  let dialogId = null, shown = 0;
+  const wake = () => { interrupted = true; if (dialogId) foundry.applications.instances.get(dialogId)?.close(); };
   const hook = Hooks.on("updateScene", s => {
     if (s.id !== scene.id || ask == null || angel) return; const a = s.getFlag(ID, "roomAsk"); if (a?.seq !== ask || !a.answer) return;
     angel = a.answer; clearTimeout(timer);
@@ -183,6 +186,7 @@ async function previewLoop(scene, makePrep, apply, title, moving = false) {
         ...(rooms && room ? [{ action: "whole", label: "Use the whole map", icon: "fa-solid fa-expand" }] : []),
         { action: "cancel", label: "Cancel", icon: "fa-solid fa-xmark" }];
       if (interrupted || room !== made) continue;   /* Angel's answer came while this layout was drawn (review 3) */
+      dialogId = `${PREVIEW_DIALOG}-${scene.id}-${++shown}`;
       const choice = await foundry.applications.api.DialogV2.wait({ id: dialogId, window: { title }, position: { width: 440, left: 110, top: 60 }, modal: false, rejectClose: false, content: describe(prep, moving, roomWords(prep, ask, angel)), buttons });
       if (interrupted && choice == null) continue;   /* Angel's pick came, or the wait ran out: the same layout's seed, drawn again */
       if (choice === "again") { seed += 1; continue; }
