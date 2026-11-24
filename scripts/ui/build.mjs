@@ -40,7 +40,7 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
     if (a.answer?.error) return `<span class="leb-warn">Angel couldn't answer: ${esc(a.answer.error)}. Send again to retry.</span>`;
     if (a.answer) return "";
     const s = Math.max(0, (game.time.serverTime - a.at) / 1000), late = waitWords(s);
-    if (!this.askOpen()) return `<span class="leb-warn">Angel didn't answer that in ${Math.round(ASK_TTL_S / 60)} minutes, so it has lapsed. Answers need the bridge's API worker (version 0.4.4 or later) with its API key, running and not stopped. Send again to retry.</span>`;
+    if (!this.askOpen()) return `<span class="leb-warn">Angel didn't answer that, so it has lapsed (an ask waits ${Math.round(ASK_TTL_S / 60)} minutes, and ends when the world is launched again). Answers need the bridge's API worker (version 0.4.4 or later) with its API key, running and not stopped. Send again to retry.</span>`;
     return late ? `<span class="leb-warn">${esc(late)}</span>` : `<i class="fa-solid fa-spinner fa-spin"></i> Angel is reading the map's notes and filling this in (${Math.round(s)} s).`;
   }
   loadBrief() {
