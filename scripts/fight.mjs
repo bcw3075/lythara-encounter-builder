@@ -3037,7 +3037,10 @@ function reactorsFor(combat, tok, gate, o = {}) {
       targetLiving: o.target?.actor ? (o.target.actor.modeOfBeing ?? "living") === "living" : null, wounded: (Number(a.getCondition?.("wounded")?.value ?? a.attributes?.wounded?.value) || 0) > 0, alsoSaves: (o.savers ?? []).includes(t.id),
       /* Moments G to I (0.39.0): your champion's aura (Everdistant Defense) */
       auraFt: auraFeet(t, "champions-aura"), targetInMyAura: !!o.target && (o.target.id === t.id || inAura(t, "champions-aura", [o.target])) };
-    for (const x of reactionsFor(a)) { if (!x.known || !(sees || !(NEED_SIGHT.includes(x.slug) || KNOWN[x.slug]?.sees))) continue;
+    for (const x of reactionsFor(a)) { if (!x.known) continue;
+      /* 0.39.13 (Rhea, 2026-11-23): a blinded reactor can still Counterspell a spell with a spoken part (the concentrate trait) it can hear (not deafened), and is not offered it for a silent one */
+      const canSense = KNOWN[x.slug]?.counter === "same" && a.hasCondition?.("blinded") ? !!o.cast?.spoken && !a.hasCondition?.("deafened") : sees;
+      if (!(canSense || !(NEED_SIGHT.includes(x.slug) || KNOWN[x.slug]?.sees))) continue;
       const row = KNOWN[x.slug], cf = gate === "cast" && o.cast ? castFacts(a, x, o.cast, dist) : null, f4 = RX4.has(x.slug) ? rx4Facts(a, x, tok, o, t, gate) : null, w = { ...who, ...(cf?.who ?? {}), ...(f4?.who ?? {}), canCast: !x.spell || x.spell.rank != null, inAura: !!row.aura && (row.own ? !!o.target && o.target.id === t.id && inAura(t, row.aura, [tok]) : ally && inAura(t, row.aura, [tok, o.target])), freqOk: freqOk(a, tok, x.slug) };
       if (row.armor && !(a.wornArmor && !a.wornArmor.isBroken)) continue;
       if (x.slug === "shield-of-reckoning" && !a.items.some(it => it.slug === "glimpse-of-redemption")) continue;   /* its champion's reaction must be one the module runs (review, 0.37.0) */   /* Sacrifice Armor needs armor that isn't broken */
@@ -3646,7 +3649,7 @@ function beforeKinds(actor, step, target) {
   if (step.do === "spell") { const sp = spellFor(actor, step)?.spell, tr = [...(sp?.system?.traits?.value ?? [])];
     const found = spellFor(actor, step), tok = actor?.getActiveTokens?.(false, true)?.[0] ?? null;
     const cast = sp ? { slug: sp.slug ?? "", name: sp.name, rank: Number(step.rank ?? sp.rank) || 1, tradition: found?.entry?.tradition ?? null, rarity: sp.system?.traits?.rarity ?? "common", dc: found?.entry?.statistic?.dc?.value ?? null,
-      damaging: !!step.damaging, teleport: tr.includes("teleportation"), monster: tok ? moverName(tok) : "A creature", gmMonster: tok?.name ?? actor?.name ?? "The monster" } : null;   /* Moment E (0.36.0) */
+      damaging: !!step.damaging, teleport: tr.includes("teleportation"), spoken: tr.includes("concentrate"), monster: tok ? moverName(tok) : "A creature", gmMonster: tok?.name ?? actor?.name ?? "The monster" } : null;   /* Moment E (0.36.0) */
     const stat = sp?.system?.defense?.save?.statistic ?? null;   /* Moment F (0.38.0): a save the spell will call for */
     return { manipulate: tr.includes("manipulate"), ranged: tr.includes("attack") && !/touch/i.test(String(sp?.system?.range?.value ?? "")), area: !!step.area?.aim && !!step.damaging && sp?.system?.defense?.save?.statistic === "reflex", cast, kind: sp?.name ? "casting a spell" : "", gmKind: sp?.name ? `casting ${sp.name}` : "",
       ...(stat && cast ? { save: { stat, traits: tr, rank: cast.rank, dc: cast.dc, name: sp.name } } : {}) }; }
