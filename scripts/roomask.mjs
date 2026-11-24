@@ -28,7 +28,7 @@ export async function dropRoomAsk(scene, seq) {
 export function roomPending(skip = []) {
   if (!game.user.isGM || !game.settings.get(ID, "roomByAngel")) return null;
   const seen = new Set(Array.isArray(skip) ? skip : []), now = game.time.serverTime;
-  const asks = game.scenes.map(s => [s, s.getFlag(ID, "roomAsk")]).filter(([s, a]) => a?.seq && !a.answer && now - a.at < ROOM_ASK_TTL_S * 1000 && !seen.has(`${s.id}|${a.seq}`)).sort((a, b) => a[1].at - b[1].at);
+  const asks = game.scenes.map(s => [s, s.getFlag(ID, "roomAsk")]).filter(([s, a]) => a?.seq && !a.answer && now - a.at >= 0 && now - a.at < ROOM_ASK_TTL_S * 1000 && !seen.has(`${s.id}|${a.seq}`)).sort((a, b) => a[1].at - b[1].at);
   if (!asks.length) return null;
   const [s, a] = asks[0];
   return { kind: "room", sceneId: s.id, scene: s.name, seq: a.seq, model: a.model ?? "sonnet", system: ROOM_PROMPT, ask: a.ask, picture: `#${PICTURE}` };

@@ -18,7 +18,8 @@ export async function askBuild(scene, text, brief) {
   gmOnly(); const words = String(text ?? "").trim().slice(0, ASK_MAX_TEXT); if (!words) throw new Error("Type what you'd like Angel to build first.");
   const old = scene.getFlag(ID, "askAngel"), seq = Date.now(), at = game.time.serverTime;   /* the server's clock: the runner may be another machine */
   /* a retry after a failed answer: the unanswered message is replaced, not repeated (review 13) */
-  const before = old?.answer?.error && old.messages?.at(-1)?.who === "gm" ? old.messages.slice(0, -1) : old?.messages ?? [];
+  const age = old ? game.time.serverTime - old.at : 0, lapsed = old && !old.answer && !(age >= 0 && age < ASK_TTL_S * 1000);
+  const before = (old?.answer?.error || lapsed) && old.messages?.at(-1)?.who === "gm" ? old.messages.slice(0, -1) : old?.messages ?? [];   /* a lapsed ask's message too (test build 1) */
   const messages = cleanMessages([...before, { who: "gm", text: words }]);
   await scene.update({ [`flags.${ID}.==askAngel`]: { seq, at, user: game.user.id, model: model(), messages, brief: cleanBrief(brief ?? {}), answer: null } });
   return seq;
@@ -41,7 +42,7 @@ export function mapNotes(scene) {
 export async function askPending(skip = []) {
   if (!game.user.isGM) return null;
   const seen = new Set(Array.isArray(skip) ? skip : []), now = game.time.serverTime;
-  const asks = game.scenes.map(s => [s, s.getFlag(ID, "askAngel")]).filter(([s, a]) => a?.seq && !a.answer && now - a.at < ASK_TTL_S * 1000 && !seen.has(`${s.id}|${a.seq}`)).sort((a, b) => a[1].at - b[1].at);
+  const asks = game.scenes.map(s => [s, s.getFlag(ID, "askAngel")]).filter(([s, a]) => a?.seq && !a.answer && now - a.at >= 0 && now - a.at < ASK_TTL_S * 1000 && !seen.has(`${s.id}|${a.seq}`)).sort((a, b) => a[1].at - b[1].at);
   if (!asks.length) return null;
   const [s, a] = asks[0], brief = cleanBrief(a.brief ?? {});
   let map;

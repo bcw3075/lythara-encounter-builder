@@ -32,7 +32,7 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
     Hooks.on("updateScene", this.askHook);
     this.askTimer = setInterval(() => { const el = this.element?.querySelector(".leb-ask-status"); if (!el) return; const was = this.askOpen(); el.innerHTML = this.askStatus(); if (was && !this.askOpen()) this.render(); }, 5000); }
   /** Is an ask waiting for its answer (unanswered and not yet lapsed)? */
-  askOpen() { const a = this.scene.getFlag(ID, "askAngel"); return !!a && !a.answer && game.time.serverTime - a.at < ASK_TTL_S * 1000; }
+  askOpen() { const a = this.scene.getFlag(ID, "askAngel"), age = a ? game.time.serverTime - a.at : -1; return !!a && !a.answer && age >= 0 && age < ASK_TTL_S * 1000; }   /* the server's clock starts again at a restart: an older ask then reads as in the future, and lapses */
   _onClose(options) { super._onClose?.(options); if (this.askHook) Hooks.off("updateScene", this.askHook); clearInterval(this.askTimer); }
   /** The chat box's status line: thinking (with how long), the wait words, or why the last ask failed. */
   askStatus() {
@@ -40,7 +40,7 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
     if (a.answer?.error) return `<span class="leb-warn">Angel couldn't answer: ${esc(a.answer.error)}. Send again to retry.</span>`;
     if (a.answer) return "";
     const s = Math.max(0, (game.time.serverTime - a.at) / 1000), late = waitWords(s);
-    if (s >= ASK_TTL_S) return `<span class="leb-warn">Angel didn't answer that in ${Math.round(ASK_TTL_S / 60)} minutes, so it has lapsed. Answers need the bridge's API worker (version 0.4.4 or later) with its API key, running and not stopped. Send again to retry.</span>`;
+    if (!this.askOpen()) return `<span class="leb-warn">Angel didn't answer that in ${Math.round(ASK_TTL_S / 60)} minutes, so it has lapsed. Answers need the bridge's API worker (version 0.4.4 or later) with its API key, running and not stopped. Send again to retry.</span>`;
     return late ? `<span class="leb-warn">${esc(late)}</span>` : `<i class="fa-solid fa-spinner fa-spin"></i> Angel is reading the map's notes and filling this in (${Math.round(s)} s).`;
   }
   loadBrief() {
@@ -68,7 +68,7 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
       <div class="leb-purpose"><b>Builds a fight on this map.</b> 1. Add the creatures (search, or drag them in from the Actors or a compendium). 2. Set how each starts. 3. Say what they're doing here. 4. <b>Preview</b> shows where they'd stand; <b>Place it</b> puts them on the map with their notes and treasure. Or tell <b>Angel</b> below what you want, and she fills it in for you.</div>
       ${this.askBox()}
       ${built ? `<p class="leb-warn">This map already has a build. Placing replaces what that build made. Anything placed by hand stays.</p>` : ""}
-      ${this.fromChat ? `<p>Brief filled in from what's stored on this map. You can still change it.</p>` : ""}
+      ${this.fromChat && !this.message ? `<p>Brief filled in from what's stored on this map. You can still change it.</p>` : ""}
       ${this.message ? `<p class="leb-num">${esc(this.message)}</p>` : ""}
       <fieldset><legend>The party</legend>
         <p>Sheets: ${partyLevels().map(p => `${esc(p.name)} ${p.level}`).join(", ") || "no party found"}. ${partySize()} PCs for balance.</p>

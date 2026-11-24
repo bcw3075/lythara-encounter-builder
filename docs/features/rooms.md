@@ -33,6 +33,7 @@ Record every id below in the release's change record when this feature, or a fea
 - (ro-8) {live} An outdoor map: Preview as before, no room line and no ask.
 
 ## Traps
+- `game.time.serverTime` is the server's own clock, which starts again when the server does: an ask from before a restart reads as from the future and is not answered (0.43.0).
 - A room's ids come from the walls alone, so the GM's page and the runner's number the rooms the same way; tokens never change them.
 
 ## Open items
