@@ -23,7 +23,8 @@ export function lookPacket(p) {
   const who = x => ({ label: x.label, ...(x.name ? { name: x.name } : {}), ...(x.state ? { state: x.state } : {}), ...(x.square ? { square: x.square } : {}), ...(x.distance != null ? { distance: x.distance } : {}),
     ...(x.size ? { size: x.size } : {}), ...(x.gear ? { gear: x.gear } : {}), ...(x.healthWord ? { healthWord: x.healthWord } : {}), ...(x.conditions?.length ? { conditions: x.conditions } : {}), ...(x.cover && x.cover !== "none" ? { cover: x.cover } : {}) });
   return { ...(p.mind ? { mind: p.mind } : {}), ...(p.band ? { band: p.band } : {}),
-    you: { label: p.you?.label ?? null, name: p.you?.name ?? null, square: p.you?.square ?? null, hp: p.you?.hp ?? null, conditions: p.you?.conditions ?? [] },
+    you: { label: p.you?.label ?? null, name: p.you?.name ?? null, square: p.you?.square ?? null, hp: p.you?.hp ?? null, conditions: p.you?.conditions ?? [],
+      holding: (p.you?.holding ?? []).map(h => h?.name).filter(Boolean) },   /* what it has in hand now, [] for nothing: so a line can be weighed against how it started (0.45.2, u-170) */
     allies: (p.allies ?? []).map(who), perceived: (p.perceived ?? []).filter(x => x?.label).map(who) };
 }
 
