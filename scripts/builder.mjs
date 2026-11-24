@@ -7,6 +7,7 @@ import { adjustedLevel, chooseTreasure, claimDiffers, ledgerLine, levelTotal, to
 import { esc, journalPages } from "./journal.mjs";
 import { SIZE_SQUARES, buildModel, summarise } from "./mapread.mjs";
 import { hiddenNextTo, layout, nearestFree } from "./place.mjs";
+import { roomList, roomRects, suggestRoom } from "./room.mjs";
 
 export const ID = "lythara-encounter-builder";
 const SURVEY = "lythara-survey-sheet", READ_SCHEMA = 1, FOLDER = "Encounter Builder";
@@ -46,7 +47,8 @@ export async function readMap(scene, { except = new Set() } = {}) {
   /* a door: open, it is no wall at all; closed (not locked), the party walks through it, so it stops no approach, but it still hides what is behind
      it (0.39.11: closed doors read as solid walls left every room behind one unreachable, so ambush and lair layouts fell back to the party's own
      room and patrol and standoff had almost nowhere to vary); locked, it is a wall */
-  const walls = scene.walls.filter(w => !(w.door && w.ds === open)).map(w => ({ ax: (w.c[0] - ox) / px, ay: (w.c[1] - oy) / px, bx: (w.c[2] - ox) / px, by: (w.c[3] - oy) / px, move: w.move !== CONST.WALL_MOVEMENT_TYPES.NONE && !(w.door === CONST.WALL_DOOR_TYPES.DOOR && w.ds === CONST.WALL_DOOR_STATES.CLOSED), sight: w.sight === WS.NONE ? 0 : w.sight === WS.LIMITED ? 1 : 2, dir: w.dir ?? 0 }));
+  /* an open door stays in the list as no wall at all (it stops nothing and hides nothing) only so that it still bounds a room (0.42.0, F-6) */
+  const walls = scene.walls.map(w => { const opened = !!w.door && w.ds === open; return { ax: (w.c[0] - ox) / px, ay: (w.c[1] - oy) / px, bx: (w.c[2] - ox) / px, by: (w.c[3] - oy) / px, move: !opened && w.move !== CONST.WALL_MOVEMENT_TYPES.NONE && !(w.door === CONST.WALL_DOOR_TYPES.DOOR && w.ds === CONST.WALL_DOOR_STATES.CLOSED), sight: opened || w.sight === WS.NONE ? 0 : w.sight === WS.LIMITED ? 1 : 2, dir: w.dir ?? 0, door: !!w.door }; });
   const costs = new Array(cols * rows).fill(0);
   for (const r of scene.regions) for (const b of r.behaviors) { if (b.type !== "modifyMovementCost" || b.disabled) continue; const walk = Number(b.system?.difficulties?.walk) || 1, c = Math.max(0, Math.min(2, walk - 1)); if (!c) continue;
     for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) if (costs[j * cols + i] < c && r.testPoint({ x: ox + (i + .5) * px, y: oy + (j + .5) * px, elevation: 0 })) costs[j * cols + i] = c; }
@@ -124,8 +126,9 @@ async function listedTreasure(brief, carriers) {
 }
 
 /* ---------- planning a build (nothing is created) ---------- */
-/** Everything a build will do. Nothing is written until place(). */
-export async function prepare(scene, rawBrief, { seed = null, except = null } = {}) {
+/** Everything a build will do. Nothing is written until place(). room (0.42.0, F-6): left out, the builder's own pick by the numbers; null, the
+    whole map; { n, by, why }, that room (by "angel" or "gm"). */
+export async function prepare(scene, rawBrief, { seed = null, except = null, room } = {}) {
   gmOnly();
   /* placing replaces this map's build, so what it placed isn't in the way and its treasure doesn't count against the new one */
   const old = scene.getFlag(ID, "build"); except ??= new Set(old ? scene.tokens.filter(t => t.getFlag(ID, "built") === old.id).map(t => t.id) : []);
@@ -134,7 +137,10 @@ export async function prepare(scene, rawBrief, { seed = null, except = null } = 
   const level = brief.partyLevel ?? suggestedLevel(); brief.partyLevel = level;
   const threat = threatOf(levelsOf(brief, info), level, brief.claimedXP);
   const s = seed ?? (Math.floor(Math.random() * 1e6) + 1), list = expandCreatures(brief, c => info.get(c.uuid));
-  const plan = layout(model, list, { seed: s, mood: brief.mood }), warnings = [...plan.warnings];
+  const rooms = roomList(model), roomAuto = suggestRoom(rooms, list, brief.mood), early = [];
+  let chosen = room === undefined ? (roomAuto ? { ...roomAuto, by: "builder" } : null) : room;
+  const inRoom = chosen ? rooms.find(r => r.n === chosen.n) : null; if (chosen && !inRoom) { early.push(`This map has no room ${chosen.n} now, so they stand anywhere on it.`); chosen = null; }
+  const plan = layout(model, list, { seed: s, mood: brief.mood, room: inRoom?.id ?? null }), warnings = [...early, ...plan.warnings];
   if (why) warnings.unshift(why);
   if (model.entry.source !== "tokens") warnings.push(model.entry.source === "read" ? `The party isn't on this map yet, so I took the ${model.entry.edge} edge as where they come in (their last heading).` : "The party isn't on this map, and the read has no heading, so I took the south edge as where they come in.");
   if (threat.claimNote) warnings.push(threat.claimNote);
@@ -142,10 +148,11 @@ export async function prepare(scene, rawBrief, { seed = null, except = null } = 
   const treasure = brief.treasureMode === "none" ? { lines: [], value: 0, note: "No treasure asked for." } : brief.treasureMode === "list" ? await listedTreasure(brief, carriers)
     : chooseTreasure({ gp: treasureFor(level, threat.rating), level, carriers, lair: brief.mood === "lair", candidates: await treasureCandidates(), seed: s });
   const line = ledgerFor(level), refund = old && ledger().builds?.[old.id]?.level === level ? ledger().builds[old.id].gp : 0, left = line.left + refund; if (treasure.value > left) warnings.push(`This treasure (${treasure.value} gp) goes over what's left for level ${level}: ${Math.max(0, left)} of ${levelTotal(level)} gp.`);
-  return { scene, brief, info, read, model, px, ox, oy, level, threat, plan, treasure, warnings, seed: s };
+  return { scene, brief, info, read, model, px, ox, oy, level, threat, plan, treasure, warnings, seed: s, rooms, room: chosen, roomAuto, list };
 }
 /* where a cache goes: its anchor if the brief or the map has one */
-function cacheSquare(prep, taken) { const a = prep.model.anchors.find(x => ["cave", "camp", "ruins", "fallen", "stones"].includes(x.kind)); const at = a?.at ?? [Math.floor(prep.model.cols / 2), Math.floor(prep.model.rows / 2)]; return nearestFree(prep.model, at, 1, taken); }
+function cacheSquare(prep, taken) { const pick = prep.room ? prep.rooms?.find(r => r.n === prep.room.n) : null, m = prep.model, inside = x => !pick || (m.inMap(x.at[0], x.at[1]) && m.roomOf[m.idx(x.at[0], x.at[1])] === pick.id);   /* in the chosen room (0.42.0) */
+  const a = m.anchors.find(x => ["cave", "camp", "ruins", "fallen", "stones"].includes(x.kind) && inside(x)); const at = a?.at ?? pick?.centre ?? [Math.floor(m.cols / 2), Math.floor(m.rows / 2)]; return nearestFree(m, at, 1, taken); }
 const planTaken = prep => { const t = new Set(); for (const p of prep.plan.placed) for (let a = 0; a < p.n; a++) for (let b = 0; b < p.n; b++) t.add(prep.model.idx(p.i + a, p.j + b)); return t; };
 
 /* ---------- the preview: GM-only drawings, gone on confirm or cancel ---------- */
@@ -155,10 +162,17 @@ export async function showPreview(prep) {
   const data = plan.placed.map(p => rect(p.i, p.j, p.n, ROLE_COLOR[p.role] ?? "#606060", `${p.label}\n${p.role}`));
   if (prep.treasure.lines.some(l => l.to === "cache")) { const at = cacheSquare(prep, planTaken(prep)); if (at) data.push(rect(at[0], at[1], 1, "#c0a000", "Cache")); }
   if (model.entry.source !== "tokens") for (const [i, j] of model.entry.squares) data.push(rect(i, j, 1, "#2080c0", "Party comes in here", .3));
+  /* the chosen room (0.42.0, F-6): a GM-only region over its squares, and its number and who picked it at its middle */
+  const pick = prep.room ? prep.rooms?.find(r => r.n === prep.room.n) : null;
+  if (pick) { const sq = model.rooms[pick.id].squares;
+    await scene.createEmbeddedDocuments("Region", [{ name: `Room ${pick.n} (preview)`, color: "#e0b020", visibility: CONST.REGION_VISIBILITY.GAMEMASTER, levels: [], flags: { [ID]: { preview: true } },
+      shapes: roomRects(sq, model.cols).map(([i, j, w, h]) => ({ type: "rectangle", x: ox + i * px, y: oy + j * px, width: w * px, height: h * px, rotation: 0 })) }]);
+    data.push({ author: game.user.id, x: ox + (pick.centre[0] - 2) * px, y: oy + pick.centre[1] * px, hidden: true, shape: { type: "r", width: 5 * px, height: px }, fillType: CONST.DRAWING_FILL_TYPES.NONE, strokeAlpha: 0, text: `Room ${pick.n}: ${ROOM_BY[prep.room.by] ?? "picked"}`, fontSize: 30, textColor: "#ffe080", flags: { [ID]: { preview: true } } }); }
   const docs = await scene.createEmbeddedDocuments("Drawing", data);
   return docs.map(d => d.id);
 }
-export async function clearPreview(scene) { const ids = scene.drawings.filter(d => d.getFlag(ID, "preview")).map(d => d.id); if (ids.length) await scene.deleteEmbeddedDocuments("Drawing", ids); }
+export const ROOM_BY = { builder: "the builder's pick", angel: "Angel's pick", gm: "your pick" };
+export async function clearPreview(scene) { for (const type of ["Drawing", "Region"]) { const ids = scene.getEmbeddedCollection(type).filter(d => d.getFlag(ID, "preview")).map(d => d.id); if (ids.length) await scene.deleteEmbeddedDocuments(type, ids); } }
 
 /* ---------- placing ---------- */
 async function folderFor(type) { return game.folders.find(f => f.type === type && f.name === FOLDER && f.getFlag(ID, "own")) ?? Folder.create({ name: FOLDER, type, flags: { [ID]: { own: true } } }); }
@@ -214,7 +228,8 @@ export async function place(prep) {
   /* the threat again, from the real tokens */
   const threat = threatOf(made.map(t => t.actor.level), level, brief.claimedXP);
   /* the journal */
-  const setup = plan.placed.map(p => `${byKey.get(p.key)?.name}: ${p.role}, ${p.state}, ${p.approach} ft of walking from the party's way in`);
+  const setup = plan.placed.map(p => `${byKey.get(p.key)?.name}: ${p.role}, ${p.state}, ${Number.isFinite(p.approach) ? `${p.approach} ft of walking from the party's way in` : "no walking way in from the party"}`);
+  if (prep.room) setup.unshift(`They start in room ${prep.room.n} of the map's ${prep.rooms.length} (${ROOM_BY[prep.room.by] ?? "picked"}): ${prep.room.why}`);
   if (cache) setup.push("A hidden cache. Reveal the token when they find it.");
   const folder = await folderFor("JournalEntry"), entry = await JournalEntry.create({ name: brief.name || `Encounter: ${scene.name}`, folder: folder.id, ownership: { default: CONST.DOCUMENT_OWNERSHIP_LEVELS.NONE }, flags: flag,
     pages: journalPages(brief, { threat, setup, treasure: lootText, treasureNote: treasure.note }).map((p, i) => ({ name: p.name, type: "text", sort: (i + 1) * 100000, text: { content: p.content, format: CONST.JOURNAL_ENTRY_PAGE_FORMATS.HTML } })) });
@@ -226,7 +241,7 @@ export async function place(prep) {
   if (noteData.length) await scene.createEmbeddedDocuments("Note", noteData);
   /* records */
   const l = foundry.utils.deepClone(ledger()); l.builds[buildId] = { level, gp: treasure.value }; await game.settings.set(ID, "treasure", l);
-  const update = { [`flags.${ID}.==build`]: { id: buildId, seed, threat, rev: prep.read?.rev ?? null, at: Date.now(), entry: entry.id }, [`flags.${ID}.brief`]: brief };
+  const update = { [`flags.${ID}.==build`]: { id: buildId, seed, threat, rev: prep.read?.rev ?? null, at: Date.now(), entry: entry.id, room: prep.room ? { n: prep.room.n, by: prep.room.by, why: prep.room.why } : null }, [`flags.${ID}.brief`]: brief };
   if (!scene.journal) { update.journal = entry.id; update.journalEntryPage = entry.pages.contents.find(p => p.name === "Overview")?.id ?? null; }
   await scene.update(update);
   if (threat.rating !== prep.threat.rating) warnings.push(`Threat changed once the real tokens were counted: ${prep.threat.rating} became ${threat.rating}.`);
@@ -263,7 +278,7 @@ export async function clear(scene, { quiet = false } = {}) {
 export async function prepareReplace(scene, seed = null) {
   const b = scene.getFlag(ID, "build"), brief = scene.getFlag(ID, "brief"); if (!b || !brief) throw new Error("This map has no build to move.");
   const mine = new Set(scene.tokens.filter(t => t.getFlag(ID, "built") === b.id).map(t => t.id));
-  return prepare(scene, { ...brief, treasureMode: "none" }, { seed, except: mine });
+  return prepare(scene, { ...brief, treasureMode: "none" }, { seed, except: mine, room: b.room ?? null });   /* the room it was built in (0.42.0); none before */
 }
 export async function applyReplace(prep) {
   const { scene, plan, px, ox, oy } = prep; await clearPreview(scene); await canvasSettled(scene);

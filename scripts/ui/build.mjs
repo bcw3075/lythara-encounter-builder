@@ -4,7 +4,9 @@ import { START_HINT, START_LABEL } from "../start.mjs";
 import { rowRemoved } from "../bands.mjs";
 import { adjustedLevel, partySizeNote, treasureFor } from "../budget.mjs";
 import { esc } from "../journal.mjs";
-import { ID, applyReplace, clear, clearPreview, findCreatures, ledgerFor, partyLevels, partySize, place, prepare, prepareReplace, setManualTreasure, showPreview, suggestedLevel, summary, threatOf } from "../builder.mjs";
+import { askRoom, dropRoomAsk } from "../roomask.mjs";
+import { ROOM_WAIT_S, offersRooms } from "../room.mjs";
+import { ID, ROOM_BY, applyReplace, clear, clearPreview, findCreatures, ledgerFor, partyLevels, partySize, place, prepare, prepareReplace, setManualTreasure, showPreview, suggestedLevel, summary, threatOf } from "../builder.mjs";
 
 const STYLE = `.leb-build .window-content{overflow:hidden!important;padding:0;display:block}.leb-build form.leb-form{display:flex;flex-direction:column;height:100%}.leb-build .leb-scroll{flex:1;overflow-y:auto;padding:8px 12px}.leb-build fieldset{margin:0 0 8px;padding:6px 8px}.leb-build .leb-row,.leb-build .leb-head{display:grid;grid-template-columns:minmax(120px,1fr) 52px 92px 100px 96px 44px 22px 22px;gap:5px;align-items:center;margin-bottom:2px}.leb-build .leb-head{font-size:.85em;opacity:.8;text-align:center;border-bottom:1px solid #0004;padding-bottom:3px;margin-bottom:5px;line-height:1.15}.leb-build .leb-head span:first-child{text-align:left}.leb-build .leb-row select{width:100%}.leb-build .leb-row input[type=checkbox]{justify-self:center}.leb-build .leb-row a{text-align:center}.leb-build .leb-row a.leb-x{color:#d05050}.leb-build details.leb-notes{margin:0 0 6px 14px;font-size:.9em}.leb-build details.leb-notes summary{cursor:pointer;opacity:.8}.leb-build details.leb-notes summary i{opacity:.75}.leb-build .leb-purpose{background:#1e2a3a;border:1px solid #4a6a90;border-radius:5px;padding:8px 10px;margin:0 0 8px;color:#e8eef6;line-height:1.4}.leb-build .leb-add{display:flex;gap:6px;align-items:center}.leb-build .leb-add input{flex:1}.leb-build .leb-add span{opacity:.75;white-space:nowrap;font-size:.9em}.leb-build .leb-drop{outline:2px dashed #6a9ad0;outline-offset:2px}.leb-build .leb-threat{color:#7cc47c;font-weight:600}.leb-build .leb-row b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.leb-build .leb-row input[type=number]{width:100%}.leb-build .leb-results{max-height:150px;overflow-y:auto;margin-top:4px}.leb-build .leb-results button{display:block;width:100%;text-align:left;line-height:1.5;height:auto;margin-bottom:1px}.leb-build .leb-warn{color:#e07050}.leb-build .leb-num{font-weight:600}.leb-build textarea{width:100%;min-height:42px}.leb-build .leb-two{display:grid;grid-template-columns:1fr 1fr;gap:6px}.leb-build .leb-actions{display:flex;gap:6px;padding:8px 12px;border-top:1px solid #0006}.leb-build .leb-actions button{flex:1}.leb-build label{font-size:.9em}`;
 const ensureStyle = () => { if (!document.getElementById("leb-style")) { const s = document.createElement("style"); s.id = "leb-style"; s.textContent = STYLE; document.head.append(s); } };
@@ -115,27 +117,82 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
     else if (a === "askAngel") { const s = await summary(this.scene); await this.scene.setFlag(ID, "design", { requested: Date.now(), summary: s }); this.message = `Asked. In your chat, say "build an encounter on ${this.scene.name}". The brief appears here when it's sent.`; this.render(); }
     else if (a === "preview") { /* out of the way while she looks at the map */
       await this.minimize();
-      let r; try { r = await previewLoop(this.scene, s => prepare(this.scene, this.brief, { seed: s }), place, "Build this?"); } catch (e) { await this.maximize(); throw e; }   /* a brief prepare refuses must not leave the window minimized (0.39.10) */
+      let r; try { r = await previewLoop(this.scene, (s, room) => prepare(this.scene, this.brief, { seed: s, room }), place, "Build this?"); } catch (e) { await this.maximize(); throw e; }   /* a brief prepare refuses must not leave the window minimized (0.39.10) */
       if (r) { this.close(); ui.notifications.info(`Placed ${r.tokens} creatures: ${r.threat.rating}, ${r.threat.xp} XP.`); for (const w of r.warnings) ui.notifications.warn(w); } else await this.maximize(); }
   }
 }
-function describe(prep, moving) {
+function describe(prep, moving, roomLine = "") {
   const w = prep.warnings.length ? `<ul>${prep.warnings.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "", p = prep.plan.placed;
-  return `<p><b>${esc(prep.threat.rating)}</b>, ${prep.threat.xp} XP for ${prep.threat.size} PCs of level ${prep.threat.level}. ${p.length} creatures.${moving ? "" : ` Treasure: ${prep.treasure.value} gp.`} Layout ${prep.seed}.</p>${prep.treasure.note && !moving ? `<p>${esc(prep.treasure.note)}</p>` : ""}${w}<p>The coloured squares are visible to GMs only.</p>`;
+  return `<p><b>${esc(prep.threat.rating)}</b>, ${prep.threat.xp} XP for ${prep.threat.size} PCs of level ${prep.threat.level}. ${p.length} creatures.${moving ? "" : ` Treasure: ${prep.treasure.value} gp.`} Layout ${prep.seed}.</p>${roomLine}${prep.treasure.note && !moving ? `<p>${esc(prep.treasure.note)}</p>` : ""}${w}<p>The coloured squares are visible to GMs only.</p>`;
 }
-/** Show a layout as GM-only drawings until the GM places it or cancels. "Try another layout" changes only the seed. */
+/* the room lines of the Preview (0.42.0, F-6): which room and why, and where Angel's look stands */
+function roomWords(prep, ask, angel) {
+  if (!offersRooms(prep.rooms ?? [])) return "";
+  const r = prep.room, head = r ? `<p><b>Room ${r.n}</b> of ${prep.rooms.length}, ${esc(ROOM_BY[r.by] ?? "picked")}: ${esc(r.why)}</p>` : `<p><b>The whole map</b>: no room picked, so they stand anywhere on it.</p>`;
+  let look = "";
+  if (ask && !angel) look = `<p><i class="fa-solid fa-spinner fa-spin"></i> Angel is looking at the map for a room. Meanwhile this is the builder's pick.</p>`;
+  else if (angel?.timeout) look = `<p>Angel didn't answer within ${ROOM_WAIT_S} seconds (it needs the bridge's API worker, version 0.4.3 or later, with its API key, running and not stopped), so this stays the builder's pick.</p>`;
+  else if (angel?.error) look = `<p>Angel's pick couldn't be used (${esc(angel.error)}), so this stays the builder's pick.</p>`;
+  else if (angel && r?.by !== "angel") look = `<p>Angel suggested room ${angel.n}: ${esc(angel.why)}</p>`;
+  return head + look;
+}
+/** Click a square inside a room on the map: its number, or null (right-click, Escape or two minutes keep the room there was). */
+function pickRoom(prep) {
+  return new Promise(res => {
+    ui.notifications.info("Click inside the room they should start in. Right-click or Escape keeps the room you had.");
+    const done = v => { canvas.stage.off("pointerdown", on); document.removeEventListener("keydown", key, true); clearTimeout(t); res(v); };
+    const on = ev => { if (ev.button === 2) return done(null); const p = ev.getLocalPosition(canvas.stage), m = prep.model, i = Math.floor((p.x - prep.ox) / prep.px), j = Math.floor((p.y - prep.oy) / prep.px);
+      if (!m.inMap(i, j)) return ui.notifications.warn("That is off the map: click inside a room.");
+      const r = prep.rooms.find(x => x.id === m.roomOf[m.idx(i, j)]);
+      if (!r) return ui.notifications.warn("That square is in no room (a wall, or a pocket too small to stand in): click inside a room.");
+      done(r.n); };
+    const key = ev => { if (ev.key === "Escape") { ev.stopPropagation(); done(null); } };
+    const t = setTimeout(() => done(null), 120000);
+    canvas.stage.on("pointerdown", on); document.addEventListener("keydown", key, true);
+  });
+}
+const PREVIEW_DIALOG = `${ID}-preview`;
+/** Show a layout as GM-only drawings until the GM places it or cancels. "Try another layout" changes only the seed. On a map with rooms (0.42.0):
+    the builder's pick first, Angel's when it comes (unless the GM clicked a room), "Pick another room" and "Use the whole map". */
 async function previewLoop(scene, makePrep, apply, title, moving = false) {
   if (canvas.scene?.id !== scene.id) await scene.view();
-  let seed = null;
+  let seed = null, room, ask = null, angel = null, interrupted = false, timer = null, gmChose = false;
+  const dialogId = `${PREVIEW_DIALOG}-${scene.id}`;   /* one per scene, so Angel's answer closes only this Preview's dialog (review 7) */
+  const wake = () => { interrupted = true; foundry.applications.instances.get(dialogId)?.close(); };
+  const hook = Hooks.on("updateScene", s => {
+    if (s.id !== scene.id || ask == null || angel) return; const a = s.getFlag(ID, "roomAsk"); if (a?.seq !== ask || !a.answer) return;
+    angel = a.answer; clearTimeout(timer);
+    if (!angel.error && !gmChose) room = { n: angel.n, by: "angel", why: angel.why };   /* a room or the whole map the GM chose stays (review 2) */
+    wake();
+  });
   try {
     for (;;) {
-      const prep = await makePrep(seed); seed = prep.seed; await clearPreview(scene); await showPreview(prep);
-      const choice = await foundry.applications.api.DialogV2.wait({ window: { title }, position: { width: 420, left: 110, top: 60 }, modal: false, rejectClose: false, content: describe(prep, moving), buttons: [{ action: "place", label: "Place it", icon: "fa-solid fa-check", default: true }, { action: "again", label: "Try another layout", icon: "fa-solid fa-shuffle" }, { action: "cancel", label: "Cancel", icon: "fa-solid fa-xmark" }] });
+      interrupted = false;
+      let made = room; const prep = await makePrep(seed, room); seed = prep.seed;
+      if (room !== made) continue;   /* Angel's pick came while this layout was being made */
+      if (room === undefined) made = room = prep.room;
+      await clearPreview(scene); await showPreview(prep);
+      if (!moving && ask == null && offersRooms(prep.rooms ?? []) && game.settings.get(ID, "roomByAngel")) {
+        ask = await askRoom(scene, prep);
+        timer = setTimeout(() => { if (!angel) { angel = { timeout: true }; wake(); } }, ROOM_WAIT_S * 1000);
+      }
+      const rooms = !moving && offersRooms(prep.rooms ?? []);
+      const buttons = [{ action: "place", label: "Place it", icon: "fa-solid fa-check", default: true }, { action: "again", label: "Try another layout", icon: "fa-solid fa-shuffle" },
+        ...(rooms ? [{ action: "pick", label: "Pick another room", icon: "fa-solid fa-hand-pointer" }] : []),
+        ...(rooms && angel?.n && room?.by !== "angel" ? [{ action: "angelRoom", label: `Use Angel's room ${angel.n}`, icon: "fa-solid fa-wand-magic-sparkles" }] : []),
+        ...(rooms && room ? [{ action: "whole", label: "Use the whole map", icon: "fa-solid fa-expand" }] : []),
+        { action: "cancel", label: "Cancel", icon: "fa-solid fa-xmark" }];
+      if (interrupted || room !== made) continue;   /* Angel's answer came while this layout was drawn (review 3) */
+      const choice = await foundry.applications.api.DialogV2.wait({ id: dialogId, window: { title }, position: { width: 440, left: 110, top: 60 }, modal: false, rejectClose: false, content: describe(prep, moving, roomWords(prep, ask, angel)), buttons });
+      if (interrupted && choice == null) continue;   /* Angel's pick came, or the wait ran out: the same layout's seed, drawn again */
       if (choice === "again") { seed += 1; continue; }
+      if (choice === "pick") { const n = await pickRoom(prep); if (n != null) { room = { n, by: "gm", why: "You clicked it on the map." }; gmChose = true; } continue; }
+      if (choice === "angelRoom") { room = { n: angel.n, by: "angel", why: angel.why }; gmChose = true; continue; }
+      if (choice === "whole") { room = null; gmChose = true; continue; }
       if (choice !== "place") return null;
       return await apply(prep);
     }
-  } finally { await clearPreview(scene); }
+  } finally { Hooks.off("updateScene", hook); clearTimeout(timer); try { await clearPreview(scene); } finally { if (ask != null) await dropRoomAsk(scene, ask).catch(() => {}); } }
 }
 export async function askReplace(scene) {
   const r = await previewLoop(scene, s => prepareReplace(scene, s), applyReplace, "Move them here?", true);

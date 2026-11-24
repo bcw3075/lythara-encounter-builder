@@ -8,7 +8,9 @@ const LOOKOUT_REACH = 10;
 const ORDER = { guard: 0, brute: 1, ambusher: 2, beast: 3, ranged: 4, caster: 5 };
 const windowScore = (d, [lo, hi]) => d < lo ? Math.max(-1, 1 - (lo - d) / Math.max(10, lo) * 2) : d > hi ? Math.max(-1, 1 - (d - hi) / 40) : 1;
 
-export function layout(model, creatures, { seed = 1, mood = "ambush", extraAnchors = [] } = {}) {
+/** room: a room's id in `model.roomOf` (0.42.0, F-6), or null for the whole map: every creature goes inside it while it has a free footprint, and
+    only then outside it, with a warning. */
+export function layout(model, creatures, { seed = 1, mood = "ambush", extraAnchors = [], room = null } = {}) {
   const { cols, rows, idx, centre, approach, exposure, cover, costs, fits, sees } = model;
   const win = MOOD_WINDOW[mood] ?? MOOD_WINDOW.default, warnings = [], placed = [], taken = new Set();
   const anchors = [...model.anchors, ...extraAnchors], entry = model.entry.squares;
@@ -28,12 +30,16 @@ export function layout(model, creatures, { seed = 1, mood = "ambush", extraAncho
     const inView = c.state === "alert";
     let best = null;
     /* a guard stays by what it guards even if that's in view: out of view comes second. Last resort: anywhere. */
-    const keepNear = anchor && c.role === "guard";
-    for (const [strict, near] of keepNear ? [[true, true], [false, true], [false, false]] : [[true, false], [false, false]]) {
+    const keepNear = anchor && c.role === "guard", inRoom = (i, j) => { for (let b = 0; b < n; b++) for (let a = 0; a < n; a++) if (model.roomOf[idx(i + a, j + b)] !== room) return false; return true; };
+    const passes = keepNear ? [[true, true], [false, true], [false, false]] : [[true, false], [false, false]];
+    let outside = false;
+    for (const [strict, near, roomOnly] of room == null ? passes.map(p => [...p, false]) : [...passes.map(p => [...p, true]), ...passes.map(p => [...p, false])]) {
       for (let j = 0; j <= rows - n; j++) for (let i = 0; i <= cols - n; i++) {
         if (!fits(i, j, n, { swim: c.swim, taken })) continue;
+        if (roomOnly && !inRoom(i, j)) continue;
         if (near && Math.hypot(i + n / 2 - anchor.at[0] - .5, j + n / 2 - anchor.at[1] - .5) > GUARD_REACH) continue;
-        const k = idx(i, j), d = approach[k]; if (!Number.isFinite(d) || d < 15) continue;
+        /* inside a chosen room nobody walks into (past a locked door, review 1) a square with no way in is allowed */
+        const k = idx(i, j), d = approach[k]; if (Number.isFinite(d) ? d < 15 : !roomOnly) continue;
         const seen = exposure[k]; if (strict && !inView && seen > 0) continue;
         /* a lookout out of sight but far from what it watches is no lookout (0.33.2, test build 3: the party on the map left only far squares unseen):
            its out-of-view pass looks within twice its reach only, and the next pass weighs being seen against the distance */
@@ -64,9 +70,10 @@ export function layout(model, creatures, { seed = 1, mood = "ambush", extraAncho
         s += hashf(seed, k, cIndex) * .25;
         if (!best || s > best.s) best = { s, i, j, seen };
       }
-      if (best) { if (best.seen > 0 && c.state !== "alert") warnings.push(keepNear ? `${c.label}: what it guards is in the party's first view, so it is too.` : `${c.label}: every free square is in the party's first view.`); break; }
+      if (best) { if (room != null && !roomOnly) outside = true; if (best.seen > 0 && c.state !== "alert") warnings.push(keepNear ? `${c.label}: the thing guarded is in the party's first view, so this guard is too.` : `${c.label}: every free square is in the party's first view.`); break; }
     }
-    if (!best) { warnings.push(`${c.label}: no room for it on this map.`); continue; }
+    if (!best) { warnings.push(`${c.label}: no space left on this map.`); continue; }
+    if (outside) warnings.push(`${c.label}: placed outside the chosen room, which had no free space left.`);
     for (let a = 0; a < n; a++) for (let b = 0; b < n; b++) taken.add(idx(best.i + a, best.j + b));
     if (!groupFirst.has(c.group)) groupFirst.set(c.group, [best.i + n / 2, best.j + n / 2]);
     placed.push({ key: c.key, group: c.group, role: c.role, label: c.label, n, i: best.i, j: best.j, state: c.state, approach: approach[idx(best.i, best.j)], exposure: best.seen });

@@ -30,6 +30,7 @@ import { verticalGap } from "../../scripts/area.mjs";
 import { BURROW_DEPTH, burrowVertical, burrowWorld, crossesWalls, glideWorld, rockSquares, wallSquares } from "../../scripts/move.mjs";
 import { cleanGround, cleanWalls } from "../../scripts/brain.mjs";
 import { STARTS, armedAt, deriveStart, mainWeapon, noiseDC, startWords } from "../../scripts/start.mjs";
+import { MIN_ROOM, ROOM_PROMPT, cleanRoomAnswer, offersRooms, roomAsk, roomList, roomRects, suggestRoom } from "../../scripts/room.mjs";
 import { STATES, mergeRows, splitRow } from "../../scripts/brief.mjs";
 import { MONSTER_REACTIONS, readCard, cardTrigger, equipTrigger, moveTrigger, offerWords, proneOffTrigger, stepsQuestion, stepsAnswerWords, reactionStrike, squaresAlong, KNOWN, countingDown, untilFor, answerWords, degreeAgainst, finished, fits, gateWords, reactionsOf, routeGates, triggerOf } from "../../scripts/react.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url)), DATA = path.join(HERE, "data"), OUT = path.join(HERE, "out"), REPO = process.env.SURVEY_REPO ?? path.resolve(HERE, "../../../lythara-survey-sheet");
@@ -121,6 +122,7 @@ for (const [name, [file, cx, cy]] of Object.entries(spots)) {
   for (const t of plan.feats.trees) { if (t.trunk < .75 || t.u < 0 || t.v < 0 || t.u > plan.Wft || t.v > plan.Hft) continue; walls.push(...ring(t.u / 5, t.v / 5, t.trunk / 5, t.trunk >= 1.6 && !t.dead ? 2 : 1)); }
   const model = buildModel({ cols: 40, rows: 40, walls, costs: rd.grids.cost, occupied: new Array(1600).fill(false), entrySquares: [[20, 37]], entrySource: "read", read: rd });
   check(`${name}: summary`, summarise(model, rd).cols === 40);
+  { const rl = roomList(model); check(`${name}: an outdoor map is one open space, no rooms to pick (ro-4)`, !offersRooms(rl), `${rl.length} rooms: ${rl.map(r => r.size).join(",")}`); }
   { const rock = rockSquares(rd, 40, 40), n = rock.reduce((x, v) => x + v, 0), crag = rd.grids.terrain.filter(t => t === 8).length;   /* Burrow (0.16.0): rock on real maps */
     rocksSeen[name] = n; check(`${name}: rock covers the crag at least`, n >= crag && n <= 1600, `${n} rock, ${crag} crag`); }
   /* a lookout (0.33.2, the live test: a hidden archer set 34 squares from the camp it watched): near the camp and out toward the way in */
@@ -146,9 +148,9 @@ console.log(`real maps: ${Date.now() - T0} ms`);
 check("burrow: crag maps are mostly rock, woods and fields mostly soil", rocksSeen.crag > 800 && rocksSeen.fields < 200 && rocksSeen.woods < 200, JSON.stringify(rocksSeen));
 /* a brute with nothing nearby still placed, a map too tight says so */
 const tight = buildModel({ cols: 10, rows: 10, walls: [], costs: new Array(100).fill(0), occupied: new Array(100).fill(true), entrySquares: [[5, 5]] });
-const none = layout(tight, [{ key: "a-0", group: 0, n: 1, role: "brute", state: "hidden", label: "X" }]); check("no room says so", none.placed.length === 0 && none.warnings[0].includes("no room"));
+const none = layout(tight, [{ key: "a-0", group: 0, n: 1, role: "brute", state: "hidden", label: "X" }]); check("no room says so", none.placed.length === 0 && none.warnings[0].includes("no space left on this map"));
 const ga = layout(blank(), [{ key: "a-0", group: 0, n: 1, role: "guard", state: "hidden", label: "G" }]); check("guard without anchor warns", ga.placed.length === 1 && ga.warnings[0].includes("nothing on this map to guard"));
-const anch = { ...blank(), anchors: [{ kind: "camp", at: [10, 10] }] }, gd = layout(anch, [{ key: "a-0", group: 0, n: 1, role: "guard", state: "asleep", anchor: "camp", label: "G" }]); check("guard stays by what it guards, in view or not", Math.hypot(gd.placed[0].i - 10, gd.placed[0].j - 10) <= 5 && gd.warnings.some(w => w.includes("guards")), JSON.stringify(gd));
+const anch = { ...blank(), anchors: [{ kind: "camp", at: [10, 10] }] }, gd = layout(anch, [{ key: "a-0", group: 0, n: 1, role: "guard", state: "asleep", anchor: "camp", label: "G" }]); check("guard stays by what it guards, in view or not", Math.hypot(gd.placed[0].i - 10, gd.placed[0].j - 10) <= 5 && gd.warnings.some(w => w.includes("thing guarded")), JSON.stringify(gd));
 const miss = layout(blank(), [{ key: "a-0", group: 0, n: 1, role: "brute", state: "alert", anchor: "cave", label: "G" }]); check("missing anchor warns", miss.warnings.some(w => w.includes("no cave")));
 const rq = { a: { state: "done", round: 1, combatantId: "w" }, b: { state: "ready", round: 2, combatantId: "w", turn: 0 }, c: { state: "stopped", round: 2, combatantId: "x" } };
 check("current by round and combatant", currentOf(rq, 2, "w")?.id === "b"); check("a moved turn number keeps the request", currentOf({ b: { ...rq.b, turn: 0 } }, 2, "w")?.turn === 0); check("old round not current", currentOf(rq, 3, "w") === null); check("finished not current", currentOf(rq, 1, "w") === null);
@@ -2311,5 +2313,34 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
   check("bu-12 splitting one off: a new row of one just below with the same notes, the band marks behind it moved down, a row of one doesn't split", sp.creatures.length === 3 && sp.creatures[0].count === 2 && sp.creatures[1].count === 1 && sp.creatures[1].mind.notes.text === "x" && sp.creatures[1].mind !== sp.creatures[0].mind && sp.bands[0].leader.row === 2 && splitRow([row()], [], 0).creatures.length === 1);
   const sp2 = splitRow([row({ count: 2 })], [{ key: "b", leader: { row: 0, n: 1 }, second: { row: 0, n: 0 }, plan: { jobs: [] } }], 0), back = mergeRows([...sp2.creatures, row({ uuid: "Compendium.x.Actor.kob" })], [], 2);
   check("bu-14 a split row stays apart when another row changes, merges back only when it is the row changed; a mark on the last monster moves with the split", sp2.bands[0].leader.row === 1 && sp2.bands[0].leader.n === 0 && sp2.bands[0].second.row === 0 && back.creatures.length === 3 && mergeRows(sp2.creatures, [], 1).creatures.length === 1 && mergeRows([row(), row({ uuid: "Compendium.x.Actor.kob" }), row()], [], 1).creatures.length === 3 && mergeRows([row(), row({ uuid: "Compendium.x.Actor.kob" }), row()], [], 2).creatures.length === 2);
+}
+{ /* 0.42.0, F-6: picking a room */
+  /* two rooms: a wall down x = 10 with a closed door at y 9 to 10; a third, small room (2 x 2) cut off in the top right corner by walls with no door */
+  const W = [{ ax: 10, ay: 0, bx: 10, by: 9, move: true, sight: 2, dir: 0 }, { ax: 10, ay: 9, bx: 10, by: 10, move: false, sight: 2, dir: 0, door: true }, { ax: 10, ay: 10, bx: 10, by: 20, move: true, sight: 2, dir: 0 },
+    { ax: 18, ay: 0, bx: 18, by: 2, move: true, sight: 2, dir: 0 }, { ax: 18, ay: 2, bx: 20, by: 2, move: true, sight: 2, dir: 0 }];
+  const m = buildModel({ cols: 20, rows: 20, walls: W, costs: new Array(400).fill(0), occupied: new Array(400).fill(false), entrySquares: [[2, 18]] });
+  const rl = roomList(m), left = rl.find(r => r.party), right = rl.find(r => !r.party && r.size > MIN_ROOM);
+  check("ro-1 rooms are bounded by walls and doors: the party's room, the room past the door, a 2 x 2 closet nobody walks into", rl.length === 3 && rl[2].size === 4 && rl[2].near === null && rl[2].doors === 0 && left && right && left.size === 200 && right.size === 196 && left.doors === 1 && right.doors === 1 && right.near > 0 && right.seen === 0 && rl[0].n === 1 && rl[1].n === 2 && rl[2].n === 3 && offersRooms(rl), JSON.stringify(rl.map(r => [r.n, r.size, r.doors, r.party, r.near, r.seen])));
+  const openDoor = buildModel({ cols: 20, rows: 20, walls: W.map(w => w.door ? { ...w, sight: 0 } : w), costs: new Array(400).fill(0), occupied: new Array(400).fill(false), entrySquares: [[2, 18]] });
+  check("ro-1 an open door still bounds a room", roomList(openDoor).length === 3 && roomList(openDoor).find(r => !r.party).seen > 0);
+  const gob = k => ({ key: `c0-${k}`, group: 0, n: 1, role: "brute", state: "unaware", label: `G${k}` }), six = [0, 1, 2, 3, 4, 5].map(gob);
+  const pick = suggestRoom(rl, six, "lair");
+  check("ro-2 the builder's own pick: not the party's room, with its reason in a line", pick && pick.n === right.n && /^About \d+ ft of walking from where the party comes in, out of the party's first view, room for all 6\.$/.test(pick.why), pick && pick.why);
+  check("ro-2 no pick on a map with one room", suggestRoom(roomList(blank()), six) === null && !offersRooms(roomList(blank())));
+  const lay = layout(m, six, { seed: 4, mood: "lair", room: right.id });
+  check("ro-3 every creature inside the chosen room", lay.placed.length === 6 && lay.placed.every(p => m.roomOf[m.idx(p.i, p.j)] === right.id) && !lay.warnings.some(w => /outside the chosen room/.test(w)), JSON.stringify(lay.placed.map(p => [p.i, p.j])));
+  const small = buildModel({ cols: 20, rows: 20, walls: W, costs: new Array(400).fill(0), occupied: m.roomOf.map(r => r === right.id), entrySquares: [[2, 18]] });
+  for (const k of m.rooms[right.id].squares.filter(k => Number.isFinite(m.approach[k]) && m.approach[k] >= 15).slice(0, 3)) small.occupied[k] = false;
+  const lay2 = layout(small, six, { seed: 4, mood: "lair", room: right.id }), inside = lay2.placed.filter(p => small.roomOf[small.idx(p.i, p.j)] === right.id).length;
+  check("ro-3 a room too full: as many inside as fit, the rest outside it with a warning", lay2.placed.length === 6 && inside === 3 && lay2.warnings.filter(w => /placed outside the chosen room, which had no free space left/.test(w)).length === 3, `${inside} inside; ${lay2.warnings.join(" | ")}`);
+  const locked = buildModel({ cols: 20, rows: 20, walls: W.map(w => w.door ? { ...w, move: true } : w), costs: new Array(400).fill(0), occupied: new Array(400).fill(false), entrySquares: [[2, 18]] }), lr = roomList(locked).find(r => r.size === 196);
+  const lay3 = layout(locked, six, { seed: 2, mood: "lair", room: lr.id });
+  check("ro-3 a room behind a locked door, which nobody walks into: they still start in it (review 1)", lr.near === null && lay3.placed.length === 6 && lay3.placed.every(p => locked.roomOf[locked.idx(p.i, p.j)] === lr.id) && !lay3.warnings.length, lay3.warnings.join(" | "));
+  const rr = roomRects(m.rooms[right.id].squares, 20), area = rr.reduce((a, [, , w, h]) => a + w * h, 0), cells = new Set(); for (const [i, j, w, h] of rr) for (let a = 0; a < w; a++) for (let b = 0; b < h; b++) cells.add((j + b) * 20 + i + a);
+  check("ro-3 the room's outline as few rectangles that cover it exactly", area === right.size && cells.size === right.size && [...cells].every(k => m.roomOf[k] === right.id) && rr.length <= 3, `${rr.length} rectangles`);
+  check("ro-5 Angel's answer: a room of the ask with its reason; a code fence read; an unknown room refused", cleanRoomAnswer('{"room": 2, "why": "The goblins sleep in the back room."}', rl).n === 2 && cleanRoomAnswer('```json\n{"room": 1, "why": "x"}\n```', rl).n === 1 && /There is no room 7: the rooms are 1, 2, 3/.test(cleanRoomAnswer({ room: 7, why: "x" }, rl).error ?? "") && /An answer is/.test(cleanRoomAnswer("no json", rl).error ?? "") && cleanRoomAnswer({ room: 2 }, rl).why === "Angel gave no reason.");
+  const ask = roomAsk(cleanBrief({ name: "Den", beat: "a goblin den", doing: "sleeping off a raid", mood: "lair", creatures: [{ uuid: "Compendium.x.Actor.gob", name: "Goblin", count: 6, state: "asleep" }] }), rl, pick, six);
+  check("ro-5 the ask: the brief in short, each room's numbers and the builder's pick; no compendium id", ask.brief.creatures[0].starts === "asleep" && ask.brief.doing === "sleeping off a raid" && ask.rooms.length === 3 && ask.rooms[1].partyStartsHere === false && ask.builderPick.n === pick.n && !JSON.stringify(ask).includes("Compendium"));
+  check("ro-5 the room prompt: the picture, the rules of a pick and the answer's JSON", /numbered in a circle|each room's number in a circle/.test(ROOM_PROMPT) && /Never the party's own room unless nothing else fits/.test(ROOM_PROMPT) && /\{"room": <its number>, "why":/.test(ROOM_PROMPT));
 }
 console.log(`${good} passed, ${bad} failed`); process.exit(bad ? 1 : 0);

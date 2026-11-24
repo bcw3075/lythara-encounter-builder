@@ -13,6 +13,7 @@ The module's glue: settings, the Encounters left-bar group, hooks and the `api` 
 
 ## How it works
 - **Settings and hooks (0.41.0):** the world setting `wakeNoiseDC` (a sleeping monster's noise DC, default 10); `updateActor` also calls `wakeOnHarm`; `startOf` on `api.fight` (combat, token) (`docs/features/starts.md`).
+- **Settings and the room door (0.42.0):** the world setting `roomByAngel` (Angel picks the room at Preview, default on); `api.room` with `pending`, `show` and `answer` for the bridge's API worker (`docs/features/rooms.md`).
 - **The API route (0.31.0, `docs/features/api-route.md`):** settings `defaultRoute` (in Configure Settings: "Angel thinks by (new fights)", API, a chat, or off; default API), and, hidden, `apiBrain`, `apiBrainAt`, `apiBrainLaunch`, `apiNote` and `apiWake`, each redrawing Monster Turns when it changes. `route` on `api.fight` (`of`, `set`, `model`, `pick`, `wanted`, `note`, `wake`) and `handOff` are the route's door; `waitForEvent` takes `{ route: "api" }`.
 - **Bands (0.26.0):** `api.minds.bands` (`list`, `of`, `set`, `join`, `remove`; a write with no `by` is Angel's, as for `api.minds.set`); the bands themselves are `docs/features/bands.md`.
 - **Fight memory's hooks (0.25.0):** `createChatMessage` also goes to `onMemoryCard`, `updateChatMessage` to `onMemoryUpdate` and `updateActor` (now with its change and options) to `onMemoryHp`, each inside a try so a notebook fault can't stop the turn's own handlers; the fight API has `memory` (`of`, `preview`, `add`, `cross`).

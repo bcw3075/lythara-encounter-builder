@@ -9,7 +9,7 @@ const facing = (w, px, py) => w.dir === 0 || (w.dir === 1 ? orient(w.ax, w.ay, w
 const segBox = (w, x0, y0, x1, y1) => { const inside = (x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1; if (inside(w.ax, w.ay) || inside(w.bx, w.by)) return true;
   return [[x0, y0, x1, y0], [x1, y0, x1, y1], [x1, y1, x0, y1], [x0, y1, x0, y0]].some(([a, b, c, d]) => crosses(a, b, c, d, w)); };
 
-/** walls: [{ ax, ay, bx, by, move: bool, sight: 0 none | 1 limited | 2 blocks, dir: 0 | 1 | 2 }]; costs: per square 0/1/2; occupied: per
+/** walls: [{ ax, ay, bx, by, move: bool, sight: 0 none | 1 limited | 2 blocks, dir: 0 | 1 | 2, door: bool (a door of any state bounds a room) }]; costs: per square 0/1/2; occupied: per
     square bool; entrySquares: [[i, j]] where the party is or comes in; read: the Survey Sheet read, or null for a partial model. */
 export function buildModel({ cols, rows, walls = [], costs, occupied, entrySquares, entrySource = "default", entryEdge = "south", read = null }) {
   const n = cols * rows, idx = (i, j) => j * cols + i, inMap = (i, j) => i >= 0 && j >= 0 && i < cols && j < rows;
@@ -47,8 +47,20 @@ export function buildModel({ cols, rows, walls = [], costs, occupied, entrySquar
     for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) { if (!a && !b) continue; const x = i + a, y = j + b; if (!inMap(x, y)) continue; const m = idx(x, y); if (blocked[m]) continue;
       const step = 5 * (1 + (costs[m] ?? 0)) * (a && b ? 1.5 : 1), nd = d + step; if (nd < approach[m] && !walkBlocked(centre(i, j), centre(x, y))) { approach[m] = nd; push(nd, m); } } }
 
+  /* rooms (0.42.0, F-6): the squares reached from each other by orthogonal steps that cross no wall that stops movement and no door of any kind
+     (open, closed or locked: Rhea's "the space bounded by walls and doors"); blocked squares belong to none */
+  const roomOf = new Array(n).fill(-1), rooms = [], bound = w => w.move || w.door;
+  const cut = (i, j, x, y) => { const p = [i + .5, j + .5], q = [x + .5, y + .5]; for (const id of along(p[0], p[1], q[0], q[1])) { const w = walls[id]; if (bound(w) && crosses(p[0], p[1], q[0], q[1], w)) return true; } return false; };
+  for (let k0 = 0; k0 < n; k0++) { if (blocked[k0] || roomOf[k0] >= 0) continue;
+    const id = rooms.length, stack = [k0], sq = []; roomOf[k0] = id;
+    while (stack.length) { const k = stack.pop(), i = k % cols, j = Math.floor(k / cols); sq.push(k);
+      for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const x = i + a, y = j + b; if (!inMap(x, y)) continue; const m = idx(x, y); if (blocked[m] || roomOf[m] >= 0 || cut(i, j, x, y)) continue; roomOf[m] = id; stack.push(m); } }
+    rooms.push({ id, squares: sq, doors: 0 }); }
+  /* each door counts for the rooms on its two sides */
+  for (const w of walls) { if (!w.door) continue; const mx = (w.ax + w.bx) / 2, my = (w.ay + w.by) / 2, len = Math.hypot(w.bx - w.ax, w.by - w.ay) || 1, nx = -(w.by - w.ay) / len * .5, ny = (w.bx - w.ax) / len * .5, seen = new Set();
+    for (const [x, y] of [[mx + nx, my + ny], [mx - nx, my - ny]]) { const i = Math.floor(x), j = Math.floor(y); if (!inMap(i, j)) continue; const r = roomOf[idx(i, j)]; if (r >= 0 && !seen.has(r)) { seen.add(r); rooms[r].doors++; } } }
   const fits = (i, j, size = 1, { swim = false, taken = null } = {}) => { for (let b = 0; b < size; b++) for (let a = 0; a < size; a++) { const x = i + a, y = j + b; if (!inMap(x, y)) return false; const k = idx(x, y); if (blocked[k] || occupied[k] || taken?.has(k) || (costs[k] === 2 && !swim)) return false; } return true; };
-  return { cols, rows, idx, inMap, centre, sees, walkBlocked, costs, occupied, blocked, cover, exposure, approach, fits, anchors: anchorsOf(read), partial: !read, entry: { squares: entrySquares, source: entrySource, edge: entryEdge }, wallCount: walls.length };
+  return { cols, rows, idx, inMap, centre, sees, walkBlocked, costs, occupied, blocked, cover, exposure, approach, fits, roomOf, rooms, anchors: anchorsOf(read), partial: !read, entry: { squares: entrySquares, source: entrySource, edge: entryEdge }, wallCount: walls.length };
 }
 /* a few squares around where the party starts, so "in view" isn't judged from one point */
 export function entrySamples(squares, cols, rows) {

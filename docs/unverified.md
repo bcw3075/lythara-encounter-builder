@@ -176,3 +176,4 @@ The gate counts the open ones; above 8 open at a release's start, that release m
 - (u-168) [0.40.0] verified 2026-11-24 in 0.40.0: seen live (cu-7): Test Player's logout cleared `back` at once and the row read "player away", so `user.active` is already false when `userConnected` fires.
 - (u-169) [0.41.0] open: 0.41.0 starts: the mind's started words for Alert, Hidden and Unaware, and a sleeper woken by hand (an ally's Interact applied by the GM: 'has since woken'), read from a live packet; only the woken-at-turn line was seen live
 - (u-170) [0.41.0] open: 0.41.0 starts: the fight-start look weighing the started line (the route was Off in the live test, so no look ran)
+- (u-171) [0.42.0] open: Angel's room pick through the real Claude API (bridge 0.4.3 with its key): the picture it is sent, its pick and cost, on a real map with rooms
