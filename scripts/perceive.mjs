@@ -1,7 +1,7 @@
 /* What a monster can perceive, and the packet a thinker gets for its turn. Pure: no Foundry globals. The glue in fight.mjs gathers live values on the
    runner, with the fight scene open. Rules: Perception and Detection https://2e.aonprd.com/Rules.aspx?ID=2400, Light https://2e.aonprd.com/Rules.aspx?ID=2401.
    Monsters act only on this, so nothing here may carry a player's numbers: see packetOf. */
-export const PACKET_SCHEMA = 10;   /* 10 since 0.35.0: barriers (earth slabs on the map);  9 since 0.33.2: a Strike with a worn or stowed weapon is "sheathed"; 8 since 0.30.1: mind.pronoun */
+export const PACKET_SCHEMA = 11;   /* 11 since 0.41.0: mind.started (how the fight found it, F-3); 10 since 0.35.0: barriers (earth slabs on the map);  9 since 0.33.2: a Strike with a worn or stowed weapon is "sheathed"; 8 since 0.30.1: mind.pronoun */
 const ORDER = ["observed", "concealed", "hidden", "undetected", "unnoticed"];
 /** The less perceptible of two states. */
 export const worse = (a, b) => ORDER[Math.max(ORDER.indexOf(a), ORDER.indexOf(b))];

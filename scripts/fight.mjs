@@ -23,6 +23,7 @@ import { breaksYield, cleanGmSay, gestureWords, orderHtml, sayHtml, speechFor, s
 import { canCommand, commandForPacket, commandInForce, commandSpent, commandTag, commandWords, degreeOf, outcomeOf, resultWords } from "./command.mjs";
 import { allyGets, allyResult, canPointOut, hasLost, pointLines, previewLines, squareFeet, withBelief, wrongSquare } from "./pointout.mjs";
 import { changedForPacket, sideCardWords, sideChange, sideTag, sideWord } from "./sides.mjs";
+import { asleepNow, deriveStart, noiseDC, readyGear, startWords } from "./start.mjs";
 import { HOLD_MS, MODELS, apiNoteWords, modelFor, routeOf, wakeState, whoGets } from "./route.mjs";
 
 const ID = "lythara-encounter-builder", WORKBENCH = "xdy-pf2e-workbench", TOOLBELT = "pf2e-toolbelt", VISIONER = "pf2e-visioner", HUD = "pf2e-hud", GROUND_RADIUS = 10, STEP_MS = 20000, SETTLE_MS = 400, SCENE_MS = 30000, RESUMABLE = ["ready", "running", "held", "stopped", "saves"];
@@ -348,6 +349,8 @@ async function buildPacket(combat, tok, turn = {}) {
   const turned = turnedPacket(combat, tok, id => nameable.has(id) ? labels[id] ?? null : null); if (turned) you.changedSides = turned;
   /* earth barriers (0.35.0): what it sees of each slab on the map, its caster by label only when it perceives them */
   const barriers = a.hasCondition?.("blinded") ? [] : barriersOf(combat, scene.id).map(b => ({ label: b.label, squares: b.squares, by: nameable.has(b.caster) ? labels[b.caster] ?? null : null, ac: b.ac, hardness: b.hardness, hp: `${Math.max(0, b.hp)}/${b.max}` }));
+  /* how the fight found it (0.41.0, F-3: "fully integrated with the monster minds"): one line of its mind, the same bytes all fight until it wakes */
+  if (!onParty(a)) { const st = startOf(combat, tok), w = startWords(st, P(tok, combat), { woke: turns(combat).woke?.[tok.id] ?? null, asleepNow: st === "asleep" && asleepNow(a) }); if (w) minded.mind = { ...(minded.mind ?? {}), started: w }; }
   const packet = packetOf({ you, mind: minded.mind, band: banded.band, bandNow: banded.bandNow, orders, speech, command, notebook, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], barriers, ground: groundAround(model, square, GROUND_RADIUS, undefined, takeCoverSquares(scene), water, soil && !glides ? (x, y) => !soil(x, y) && !model.blocked[model.idx(x, y)] && !water(x, y) : null),
     allies: allies.map(x => ({ label: labels[x.id], name: nameFor(x), square: squareOf(x, scene), ...(heightUp(x) ? { height: heightUp(x) } : {}), ...(isBelow(x) ? { below: true } : {}), healthWord: wordsFor(x.actor), conditions: visibleConditions(conditionsOn(x.actor)), ...(stoodDown(x) ? { yielded: true } : {}) })),
     others: others.map(o => ({ id: o.id, state: o.state, label: labels[o.id], square: o.square, ...(o.pointed ? { pointed: true } : {}), ...(lost.has(o.id) ? { alliesLost: true } : {}), height: o.pointed ? o.height ?? 0 : heightUp(o.token), offGrid: offGrid(o.token, scene), size: o.token.actor.size, distance: o.distance, gear: gearOf(o.token.actor), conditions: visibleConditions(conditionsOn(o.token.actor)), healthWord: wordsFor(o.token.actor), cover: cover?.getAutoCoverState?.(tok.object, o.token.object) ?? "none", ...(stoodDown(o.token) ? { yielded: true } : {}) })) });
@@ -416,6 +419,10 @@ async function onTurnChange(combat) {
   if (cmd && outcomeOf(cmd.degree) === "gm" && !cmd.angel) return;
   if (!tok?.getFlag(ID, "run") || !runnable(tok)) return;
   if ((partyMember(tok.actor) || playerChar(tok.actor)) && isDown(tok.actor)) return;   /* dying or unconscious: its turn (the recovery check) is the GM's, and every plan would be refused (0.18.0 review) */
+  /* a sleeping monster (0.41.0, F-3): its Perception check against the noise at the start of its turn; awake, its turn goes on; still asleep, it passes */
+  await startsDone.get(combat.id);   /* the gear at the fight's start is on before the first packet (review 10) */
+  if (!partyMember(tok.actor) && !playerChar(tok.actor) && asleepNow(tok.actor)) { const woke = await wakeAtTurn(combat, combatant, tok);
+    if (combat.combatant?.id !== combatant?.id) return; if (!woke) return passTurn(combat, combatant, tok, "asleep"); }
   /* the round as this call found it (0.29.0, u-81): a turn asked for late (a tick during the turn) could wait out the settle time while the round
      moved on and the same creature came up again, and was then stamped with the new round beside that round's own request: two for one turn */
   const round = combat.round, key = `${combat.id}.${round}.${combatant.id}`; if (starting.has(key)) return;
@@ -499,6 +506,7 @@ export function onCombatUpdate(combat, change) {
     fallIfAloft(combat, prev).catch(e => console.warn(`${ID} | fall`, e)).then(() => sinkNote(combat, prev)).catch(e => console.warn(`${ID} | sink`, e)).then(() => settleClimbers(combat)).catch(e => console.warn(`${ID} | climbing`, e)).then(() => settleBurrowers(combat)).catch(e => console.warn(`${ID} | burrowing`, e)).then(() => noteWhatTheySense(combat)).catch(e => console.warn(`${ID} | memory`, e)).then(() => checkSides(combat)).catch(e => console.warn(`${ID} | sides`, e)).then(() => settleBands(combat)).catch(e => console.warn(`${ID} | bands`, e)).then(() => onTurnChange(combat)).catch(e => console.error(`${ID} | turn`, e));
     lookLater(combat); lookCheck(combat).catch(e => console.warn(`${ID} | look`, e)); }   /* the fight-start look (0.33.0): started at the fight's start, dropped once round 1 is over */
   if (combat.started && !turns(combat).hidStart) hiddenAtStart(combat).catch(e => console.warn(`${ID} | hidden at the start`, e));   /* B-7 (0.33.2) */
+  if (combat.started && !turns(combat).starts && !startsDone.has(combat.id)) startsDone.set(combat.id, startsAtStart(combat).catch(e => console.warn(`${ID} | starts`, e)));   /* F-3 (0.41.0); a turn waits for it (review 10) */
   act(combat);
 }
 /* ---------- falling ---------- */
@@ -2072,6 +2080,82 @@ async function hiddenAtStart(combat) {
   } finally { startingHidden.delete(combat.id); }
 }
 const startingHidden = new Set();
+/* ---------- how each monster started (0.41.0, F-3) ---------- */
+/** Its start: as the fight's start recorded it, else as set on its token (the build, or Monster Minds), else read from it (placed by hand). */
+export function startOf(combat, tok) {
+  const fixed = combat ? turns(combat).starts?.[tok.id] : null; if (fixed) return fixed;
+  const set = tok.getFlag(ID, "start"); if (set) return set;
+  const a = tok.actor; return deriveStart({ unconscious: !!a?.hasCondition?.("unconscious"), dying: !!a?.hasCondition?.("dying"), hp: a?.hitPoints?.value ?? 1, startHidden: !!tok.getFlag(ID, "startHidden") });
+}
+/** At the fight's start (once, on the runner): each monster's start is written down for the fight, and one whose gear nobody set (placed by hand, or a
+    start changed in Monster Minds) gets it now by the same rule as a build (Rhea, F-3: "Monsters placed by hand get the same rule"). Party members and
+    players' characters are left alone. */
+async function startsAtStart(combat) {
+  if (!combat.started || turns(combat).starts || startingStarts.has(combat.id)) return;
+  const scene = sceneOf(combat); if (!scene) return;
+  startingStarts.add(combat.id);
+  try {
+    const starts = {};
+    for (const c of combat.combatants.contents) { const t = scene.tokens.get(c.tokenId); if (!t?.actor?.isOfType?.("npc") || t.actor.hasPlayerOwner || t.actor.alliance === "party") continue;   /* the party's own NPCs keep their gear */
+      const st = startOf(null, t); starts[t.id] = st;
+      if (!t.getFlag(ID, "readied")) { try { await readyGear(t.actor, st, t.getFlag(ID, "role") ?? null); await t.setFlag(ID, "readied", true); } catch (e) { console.warn(`${ID} | gear at the start`, e); } } }
+    await saveTurns(combat, { starts });
+  } finally { startingStarts.delete(combat.id); }
+}
+const startingStarts = new Set(), startsDone = new Map();
+/** Monster Minds' Starts row (0.41.0, F-3): set how these monsters start, before their fight, and make them so now: the gear by the same rule as a build,
+    Unconscious on or off for Asleep, and for Hidden the build's hidden start (hidden from the party, initiative on Stealth, `startHidden`); leaving a
+    Hidden start shows the token again and puts initiative back on Perception. Refused once their fight has started: the start is the fight's then. */
+export async function setStart(scene, tokenIds, state) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  if (!["alert", "hidden", "unaware", "asleep"].includes(state)) throw new Error(`No start "${state}".`);
+  if (game.combats.some(c => c.started && sceneOf(c)?.id === scene.id && c.combatants.some(x => tokenIds.includes(x.tokenId)))) throw new Error("Their fight has started: how they started is set for this fight.");
+  for (const id of tokenIds) { const t = scene.tokens.get(id), a = t?.actor; if (!a?.isOfType?.("npc")) continue;
+    const was = startOf(null, t);
+    await readyGear(a, state, t.getFlag(ID, "role") ?? null);
+    if (state === "asleep" && !a.hasCondition?.("unconscious")) await a.increaseCondition("unconscious");
+    if (state !== "asleep" && was === "asleep" && asleepNow(a)) { await a.decreaseCondition("unconscious", { forceRemove: true }); if (a.hasCondition?.("prone")) await a.decreaseCondition("prone", { forceRemove: true }); }   /* a setup change, not waking: PF2e leaves the Prone that Unconscious brought */
+    if (state === "hidden" && was !== "hidden") { await a.update({ "system.initiative.statistic": "stealth" }); await t.update({ hidden: true }); }
+    if (state !== "hidden" && was === "hidden") { await a.update({ "system.initiative.statistic": "perception" }); await t.update({ hidden: false }); }
+    await t.update({ [`flags.${ID}.start`]: state, [`flags.${ID}.readied`]: true, [`flags.${ID}.startHidden`]: state === "hidden" }); }
+}
+/** Why a passed turn still passes: a yield, a failed command, or a monster still asleep. */
+function passesStill(combat, tok, why) { return why === "command" ? commandPasses(combat, tok) : why === "asleep" ? asleepNow(tok.actor) : !!yieldOf(tok); }
+const wakeLine = w => w ? `Perception ${w.total} against DC ${w.dc}, ${w.why}` : "no Perception check";
+/** A fight has made noise once an attack, damage or a spell has been rolled since it was made. */
+function fightNoisy(combat) {
+  const since = combat._stats?.createdTime ?? 0, here = new Set(combat.combatants.contents.map(c => c.tokenId));   /* only this fight's creatures (review 6) */
+  return game.messages.contents.some(m => (m.timestamp ?? 0) >= since && here.has(m.speaker?.token) && (["attack-roll", "spell-attack-roll", "damage-roll", "saving-throw"].includes(m.flags?.pf2e?.context?.type) || m.flags?.pf2e?.origin?.type === "spell"));
+}
+/** A sleeping monster's turn begins (Unconscious, Player Core: "At the start of your turn, you automatically attempt a Perception check against the
+    noise's DC ... waking up if you succeed. If creatures are attempting to stay quiet around you, this Perception check uses their Stealth DCs"). Rolled
+    once a turn, publicly (no whispered cards), and kept on the fight, so a second call or a reload reads the same roll. Out: woke or not. */
+async function wakeAtTurn(combat, combatant, tok) {
+  const key = `${combat.round}-${combatant.id}`, had = turns(combat).wakes?.[key]; if (had) return had.woke;
+  if (waking.has(key)) { for (let t = 0; t < 100 && waking.has(key); t++) await sleep(100); return !!turns(combat).wakes?.[key]?.woke; }
+  waking.add(key);
+  try {
+    const scene = sceneOf(combat), foes = combat.combatants.contents.map(c => scene?.tokens.get(c.tokenId)).filter(t => t?.actor && t.id !== tok.id && !t.actor.isAllyOf?.(tok.actor) && !isDeadNow(t.actor));
+    const { dc, why } = noiseDC({ noisy: fightNoisy(combat), loudDC: Number(game.settings.get(ID, "wakeNoiseDC")) || 10, quietDCs: foes.map(t => t.actor.skills?.stealth?.dc?.value ?? null) });
+    let total = null, woke = false;
+    /* public (no whispered cards); PF2e's degree of success, so a natural 1 or 20 counts as for any check (review 4) */
+    try { const roll = await tok.actor.perception.roll({ dc: { value: dc }, skipDialog: true, rollMode: "publicroll", extraRollOptions: ["action:wake"], label: "Waking up" }); total = roll?.total ?? null; const deg = roll?.degreeOfSuccess ?? roll?.options?.degreeOfSuccess; woke = Number.isInteger(deg) ? deg >= 2 : Number.isFinite(total) && total >= dc; }
+    catch (e) { console.warn(`${ID} | waking`, e); }
+    if (woke) await tok.actor.decreaseCondition("unconscious", { forceRemove: true });
+    await saveTurns(combat, { [`wakes.${key}`]: { total, dc, why, woke }, ...(woke ? { [`woke.${tok.id}`]: combat.round } : {}) });
+    return woke;
+  } finally { waking.delete(key); }
+}
+const waking = new Set();
+/** Damage or healing wakes a sleeping monster (Unconscious, Player Core: "You take damage, though if the damage reduces you to 0 Hit Points, you remain
+    unconscious ... You receive healing"). On the runner, for a monster in a started fight; a change of its HP while it sleeps with HP left. */
+export function wakeOnHarm(actor, change) {
+  if (!isRunner() || !actor?.isOfType?.("npc") || actor.hasPlayerOwner) return;
+  if (foundry.utils.getProperty(change, "system.attributes.hp.value") === undefined || !asleepNow(actor)) return;
+  const combat = game.combats.find(c => c.started && c.combatants.some(x => x.token?.actor === actor)); if (!combat) return;   /* by token: unlinked tokens share their base actor's id (review 13) */
+  const tok = combat.combatants.find(x => x.token?.actor === actor)?.token ?? null;
+  actor.decreaseCondition("unconscious", { forceRemove: true }).then(() => tok ? saveTurns(combat, { [`woke.${tok.id}`]: combat.round }) : null).catch(e => console.warn(`${ID} | waking`, e));
+}
 /** A card made by a creature the party can't see (B-8, 0.33.2): marked on the page that makes it (`preCreateChatMessage`), and in a player's browser its
     sender is "An unseen creature" with no portrait, as its spoken lines are "A voice". Only for a creature in a fight that no player owns. */
 export function markUnseen(message) {
@@ -5079,7 +5163,7 @@ async function runSay(combat, id, i, step, tok) {
     thinker. The turn then ends by itself, Auto or not (her sample: "its turns pass on their own"). */
 async function passTurn(combat, combatant, tok, why = "yielded") {
   const round = combat.round, key = `${combat.id}.${round}.${combatant.id}`; if (starting.has(key)) return;
-  const still = () => why === "command" ? commandPasses(combat, tok) : !!yieldOf(tok);   /* 0.30.0: an animal whose handler's command failed does nothing too */
+  const still = () => passesStill(combat, tok, why);   /* 0.30.0: an animal whose handler's command failed does nothing too */
   const had = Object.entries(turns(combat).requests).filter(([, r]) => !r.reaction && r.combatantId === combatant.id && r.round === round && !r.delayed);
   /* this turn is already passing, or is the one it yielded on: the timer lives on this page only, so a reload starts it again (review 5) */
   if (had.length) { const p = had.find(([, r]) => (r.passed || r.yielded) && r.state === "done"); if (p) passAfter(combat, p[0]);
@@ -5092,7 +5176,7 @@ async function passTurn(combat, combatant, tok, why = "yielded") {
     if (combat.combatant?.id !== combatant.id || combat.round !== round) return;
     if (!still()) { again = true; return; }   /* its yield ended while this waited (review 4): the turn is asked for after all */
     const id = foundry.utils.randomID(8), c = why === "command" ? turns(combat).commands?.[tok.id] : null, by = c ? sceneOf(combat).tokens.get(c.by)?.name ?? "its handler" : "";
-    await save(combat, id, { state: "done", passed: why, combatantId: combatant.id, tokenId: tok.id, round, turn: combat.turn, at: Date.now(), settled, log: {}, labels: {}, steps: [], pos: 0, note: why === "command" ? `${tok.name}: {their} handler's command failed (${by}, Nature ${c?.total} vs Will DC ${c?.dc}); {they} {does|do} nothing this turn (turn passed).` : `${tok.name} has yielded and stands down: {their} turn passes. Accepted or Fight on is yours to press on {their} row.` });
+    await save(combat, id, { state: "done", passed: why, combatantId: combatant.id, tokenId: tok.id, round, turn: combat.turn, at: Date.now(), settled, log: {}, labels: {}, steps: [], pos: 0, note: why === "asleep" ? `${tok.name} {is|are} asleep and didn't wake (${wakeLine(turns(combat).wakes?.[`${round}-${combatant.id}`])}): {their} turn passes.` : why === "command" ? `${tok.name}: {their} handler's command failed (${by}, Nature ${c?.total} vs Will DC ${c?.dc}); {they} {does|do} nothing this turn (turn passed).` : `${tok.name} has yielded and stands down: {their} turn passes. Accepted or Fight on is yours to press on {their} row.` });
     passAfter(combat, id);
   } finally { starting.delete(key); if (again) onTurnChange(combat).catch(e => console.error(`${ID} | turn`, e)); }
 }
@@ -5104,7 +5188,7 @@ function passAfter(combat, requestId) {
   setTimeout(async () => {
     try {
       while (game.paused) await new Promise(r => setTimeout(r, 300));
-      if (!combat.started || combat.round !== r.round || combat.combatant?.id !== r.combatantId || currentRequest(combat) || !(r.passed === "command" ? commandPasses(combat, tok) : yieldOf(tok))) return;
+      if (!combat.started || combat.round !== r.round || combat.combatant?.id !== r.combatantId || currentRequest(combat) || !passesStill(combat, tok, r.passed)) return;
       await combat.nextTurn();
     } catch (e) { console.error(`${ID} | passing the turn`, e); } finally { ending.delete(key); }
   }, END_MS);

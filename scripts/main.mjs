@@ -15,6 +15,7 @@ import { acceptYield, backInFight, gmSpeak, onRenderSay, prisonerList, refuseYie
 import { answerCommand, checkSides, commandList, dropBeliefs, onSideChange, pointCard, sideList } from "./fight.mjs";
 import { apiAlive, apiSpend, apiWanted, endTurn, endTurnState, fightRoute, fixRoute, handOff, modelOf, playerBack, setApiNote, setModelPick, setRoute, wakeAngel } from "./fight.mjs";
 import { acceptEscapeLines, answerLook, dismissLook, escapeOffers, lookNow } from "./fight.mjs";
+import { startOf, wakeOnHarm } from "./fight.mjs";
 import { barriersOf, clearBarriers, readiedNow, readyAct, removeBarrier, markUnseen, maskUnseen, chooseFor, onReactionCard, partyReactors, setReactionUsed, doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, onConditionGained, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCombatGone, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, onMemoryCard, onMemoryUpdate, onMemoryHp, notebookOf, previewRemember, rememberAdd, rememberCross, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
 
 const CONTROL = "encounters", apps = new Map(), mindsApps = new Map(); let turnsApp = null, historyApp = null, historyTimer = null, turnsTimer = null;
@@ -30,6 +31,9 @@ const redrawChip = () => { try { drawChip(); } catch (e) { console.warn(`${ID} |
 Hooks.once("init", () => {
   game.settings.register(ID, "partySize", { name: "Party size for balance", hint: "How many PCs threat is worked out for. The campaign's rules say how many; PF2e's Low budget differs from the published one away from 4.", scope: "world", config: true, type: Number, default: 4 });
   game.settings.register(ID, "applyMonsterDamage", { name: "Apply monster damage automatically", hint: "A monster's hit changes HP at once, with PF2e's undo card. Off: damage is rolled and you apply it from the card.", scope: "world", config: true, type: Boolean, default: true });
+  /* a sleeping monster's wake check (0.41.0, F-3): the DC of a fight's noise. PF2e names no number; 10 is the Simple DC for an untrained task, Angel's
+     pick that a fight next to it is easy to hear (a quiet party uses its own Stealth DCs instead) */
+  game.settings.register(ID, "wakeNoiseDC", { name: "Noise DC to wake a sleeping monster", hint: "A monster that starts Asleep rolls Perception at the start of each of its turns against this DC once the fight has made noise (an attack, damage or a spell); before that, against the lowest Stealth DC of its foes. Damage, healing or an ally's Interact also wake it.", scope: "world", config: true, type: Number, range: { min: 5, max: 40, step: 1 }, default: 10 });
   game.settings.register(ID, "autoPause", { name: "Pause between a monster's actions (seconds)", hint: "With a monster's Auto ticked, how long to wait after each action before the next, so each roll can be followed. Without Auto, Do it does one action and then shows Next step.", scope: "world", config: true, type: Number, range: { min: 0, max: 15, step: 0.5 }, default: 3 });
   game.settings.register(ID, "reactionTimer", { name: "Time to answer a reaction (seconds)", hint: "When a monster's action lets a player react (Reactive Strike and the like), how long their React / Pass window waits before the reaction passes. 0: no countdown; the turn waits for them or your Continue. Reactions you answer on your own card have no countdown.", scope: "world", config: true, type: Number, range: { min: 0, max: 60, step: 5 }, default: 20 });
   game.settings.register(ID, "runner", { name: "Account that runs monster turns", hint: "The GM account whose page carries out monster turns: its name, exactly. It targets for real on its own account, so yours are never touched. If it's offline, turns wait and the card says so.", scope: "world", config: true, type: String, default: "Angel Bridge" });
@@ -107,7 +111,7 @@ Hooks.on("updateItem", (item, change) => { onItemHands(item, change); noteChange
 Hooks.on("deleteItem", item => { onConditionGone(item); noteChange(item); });
 /* the start of a turn settles (0.23.0): the runner notes every change to a creature in a fight, and reads a monster only once they have stopped */
 Hooks.on("createItem", item => { onConditionGained(item); noteChange(item); });
-Hooks.on("updateActor", (actor, change, options) => { noteChange(actor); try { onSideChange(actor, change); if ("ownership" in change || "==ownership" in change) redrawTurns(); } catch (e) { console.warn(`${ID} | sides`, e); } try { onMemoryHp(actor, change, options); } catch (e) { console.warn(`${ID} | notebook`, e); } });
+Hooks.on("updateActor", (actor, change, options) => { noteChange(actor); try { onSideChange(actor, change); if ("ownership" in change || "==ownership" in change) redrawTurns(); } catch (e) { console.warn(`${ID} | sides`, e); } try { onMemoryHp(actor, change, options); } catch (e) { console.warn(`${ID} | notebook`, e); } try { wakeOnHarm(actor, change); } catch (e) { console.warn(`${ID} | waking`, e); } });
 Hooks.on("updateChatMessage", (message, change) => { onMessageUpdate(message, change); try { onMemoryUpdate(message, change); } catch (e) { console.warn(`${ID} | notebook`, e); } });
 Hooks.on("preUpdateCombatant", (combatant, change, options) => { keepTurn(combatant, change, options); });
 Hooks.on("updateCombatant", (combatant, change, options, userId) => { saveTurn(combatant, options, userId); noteChange(combatant); });
@@ -160,7 +164,7 @@ Hooks.once("ready", () => {
          Angel. The worker waits with `waitForEvent(cursor, s, { generation, route: "api" })` and hands in with `by: "api"`. */
       /* End turn on the Monster Turns window (0.40.0, F-1): `endTurn.state(combat)` { can, left, busy, why }; `endTurn.end(combat, { left, round,
          combatantId })` ends it like the tracker's Next turn (the GM's button; `left` is what she was asked about) */
-      endTurn: { state: endTurnState, end: endTurn },
+      endTurn: { state: endTurnState, end: endTurn }, startOf,
       route: { of: fightRoute, set: setRoute, model: modelOf, pick: setModelPick, wanted: apiWanted, note: setApiNote, wake: wakeAngel, alive: apiAlive, spend: apiSpend }, handOff,
       /* the fight-start look (0.33.0): `look.now(combat)` the look as it stands; `look.answer(combat, i | "all", "accept" | "keep")` and
          `look.dismiss(combat)` are the GM's buttons on its card (never Angel's door: Angel answers the "look" event through submitPlan with

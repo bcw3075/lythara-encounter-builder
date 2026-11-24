@@ -1,10 +1,10 @@
 /* The brief: everything a build needs that the module can't work out itself. The module can't read the campaign notes and
    invents no creatures or story, so a chat or the GM writes this. Pure: no Foundry globals. */
 import { MIND_SCHEMA, rowLines, rowOwn } from "./minds.mjs";
-import { briefBands } from "./bands.mjs";
+import { briefBands, rowRemoved } from "./bands.mjs";
 export const MOODS = ["ambush", "lair", "patrol", "chase", "standoff"];
 export const ROLES = ["ambusher", "brute", "ranged", "caster", "guard", "beast"];
-export const STATES = ["alert", "hidden", "asleep"];
+export const STATES = ["alert", "hidden", "unaware", "asleep"];   /* unaware since 0.41.0 (F-3): awake, not expecting a fight; the same order as start.mjs STARTS */
 export const ADJUSTMENTS = ["", "weak", "elite"];
 const MAX_TEXT = 8000;
 const text = (v, max = MAX_TEXT) => String(v ?? "").trim().slice(0, max);
@@ -44,4 +44,31 @@ export function expandCreatures(brief, info = () => ({})) {
   const out = [];
   brief.creatures.forEach((c, g) => { const i = info(c) ?? {}; for (let k = 0; k < c.count; k++) out.push({ key: `c${g}-${k}`, group: g, n: i.n ?? 1, swim: !!i.swim, role: c.role, state: c.state, anchor: c.anchor, label: i.name ?? c.name }); });
   return out;
+}
+
+/* ---------- one row per creature (0.41.0, F-5: "identical ones merged as ×n, split only when settings or notes differ") ---------- */
+const lineKey = l => l == null ? null : typeof l === "object" ? JSON.stringify({ p: l.pick ?? null, t: l.text ?? null, b: !!l.blank }) : JSON.stringify(l);
+const mindKey = m => JSON.stringify(Object.keys(m ?? {}).sort().map(k => [k, lineKey(m[k])]));
+const sameRow = (a, b) => a.uuid === b.uuid && a.uuid && a.adjust === b.adjust && a.role === b.role && a.state === b.state && a.run === b.run && !!a.opus === !!b.opus && (a.anchor ?? "") === (b.anchor ?? "") && (a.band ?? "") === (b.band ?? "") && !!a.leader === !!b.leader && mindKey(a.mind) === mindKey(b.mind);
+const refs = (bands, g) => (bands ?? []).some(b => [b.leader, b.second, ...(b.plan?.jobs ?? [])].some(r => r?.row === g));
+const ownless = c => !Object.keys(c.own ?? {}).length;
+/** Rows of the same creature with the same settings, notes and mind lines become one, its count the sum (at most 30). A row a band names (its leader,
+    second or a job) or with a single monster's own profile stays apart: those point at a monster by its row and number. only: merge just that row
+    with the others (the row just changed or added), so a row split off stays apart until it is set back to match (0.41.0 review 1). Pure. */
+export function mergeRows(creatures = [], bands = [], only = null) {
+  let rows = creatures.map(c => ({ ...c })), bs = bands;
+  for (let i = 0; i < rows.length; i++) for (let j = i + 1; j < rows.length; j++) {
+    const a = rows[i], b = rows[j];
+    if (only != null && i !== only && j !== only) continue;
+    if (!sameRow(a, b) || !ownless(a) || !ownless(b) || refs(bs, i) || refs(bs, j) || a.count + b.count > 30) continue;
+    a.count += b.count; rows.splice(j, 1); bs = rowRemoved(bs, j); if (only != null) only = only === j ? i : only > j ? only - 1 : only; j--; }
+  return { creatures: rows, bands: bs };
+}
+/** One monster of a row of several split off into its own row just below, to be set apart (its own start, strength, notes). Pure. */
+export function splitRow(creatures = [], bands = [], g = 0) {
+  const c = creatures[g]; if (!c || c.count < 2) return { creatures, bands };
+  const rows = creatures.map(x => ({ ...x })); rows[g].count -= 1; rows.splice(g + 1, 0, { ...c, count: 1, own: {}, leader: false, mind: structuredClone(c.mind ?? {}) });
+  /* the rows behind move down one; a mark on the row's last monster goes with it to the new row (review 3) */
+  const fix = r => r?.row == null || r.row < g ? r : r.row > g ? { ...r, row: r.row + 1 } : r.n === c.count - 1 ? { ...r, row: g + 1, n: 0 } : r;
+  return { creatures: rows, bands: (bands ?? []).map(b => ({ ...b, leader: fix(b.leader), second: fix(b.second), plan: { ...b.plan, jobs: (b.plan?.jobs ?? []).map(fix) } })) };
 }

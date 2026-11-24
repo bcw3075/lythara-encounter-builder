@@ -1,5 +1,6 @@
 /* The Foundry side of a build: gathers the map, imports creatures, places tokens, treasure, journal and notes, and removes them again.
    Every document made here carries flags[ID].built = the build id, and Rebuild and Clear delete only those, by id. */
+import { readyGear } from "./start.mjs";
 import { cleanBrief, expandCreatures } from "./brief.mjs";
 import { mergeBrief, stampBrief } from "./minds.mjs";
 import { adjustedLevel, chooseTreasure, claimDiffers, ledgerLine, levelTotal, toGp, treasureFor } from "./budget.mjs";
@@ -192,15 +193,13 @@ export async function place(prep) {
     foundry.utils.setProperty(t, `flags.${ID}`, { built: buildId, key: p.key, group: p.group, role: p.role, run: c.run, auto: false, model: null, opus: c.opus, band: c.band || null, leader: brief.bands.some(b => b.key === c.band && b.leader?.row === p.group && b.leader.n === idx) });   /* band and leader: a copy for the eye; the brief is what is read (0.26.0). Was: stored for the group releases, nothing acts on them yet (0.24.0) */
     tokenData.push(t); }
   const made = await scene.createEmbeddedDocuments("Token", tokenData), byKey = new Map(made.map(t => [t.getFlag(ID, "key"), t]));
-  for (const t of made) if (plan.placed.find(p => p.key === t.getFlag(ID, "key"))?.state === "asleep") await t.actor.increaseCondition("unconscious");
-  /* a ranged creature starts with its ranged weapon in hand (0.33.2, from the live test: a hidden lookout had to draw its worn bow, and drawing
-     brought it out of hiding before it could shoot): its melee weapons go back to worn, its first ranged weapon to its hands */
-  for (const t of made) { const p = plan.placed.find(x => x.key === t.getFlag(ID, "key")); if (p?.role !== "ranged" || p.state === "asleep") continue;   /* asleep: an unconscious creature holds nothing ready (review) */
-    const ws = t.actor?.itemTypes?.weapon ?? []; if (ws.some(w => w.isRanged && w.system.equipped?.carryType === "held")) continue;   /* one in hand already: keep it (review) */
-    const bow = ws.find(w => w.isRanged); if (!bow) continue;
-    /* everything else it holds (a blade, a shield, a torch) goes back to worn, so the bow's other hand is free to shoot (review) */
-    try { for (const it of t.actor.items.filter(i => i !== bow && i.isOfType?.("physical") && i.system.equipped?.carryType === "held")) await t.actor.changeCarryType(it, { carryType: "worn", handsHeld: 0 });
-      await t.actor.changeCarryType(bow, { carryType: "held", handsHeld: bow.system.usage?.value === "held-in-two-hands" ? 2 : 1 }); } catch (e) { console.warn(`${ID} | ranged weapon in hand`, e); } }
+  /* how each starts (0.41.0, F-3, Rhea's "A for sure"): Alert or Hidden hold their main weapon (a ranged row its ranged weapon, as since 0.33.2: a hidden
+     lookout that had to draw came out of hiding before it could shoot); Unaware and Asleep hold nothing, so they must Draw; then Asleep is Unconscious.
+     The start goes on the token (`start`, `readied`), so the fight's start knows it and leaves the gear alone */
+  for (const t of made) { const p = plan.placed.find(x => x.key === t.getFlag(ID, "key")); if (!p) continue;
+    try { await readyGear(t.actor, p.state, p.role); } catch (e) { console.warn(`${ID} | gear at the start`, e); }
+    if (p.state === "asleep") await t.actor.increaseCondition("unconscious");
+    await t.update({ [`flags.${ID}.start`]: p.state, [`flags.${ID}.readied`]: true }); }
   /* hidden at the start (B-7, 0.33.2): its initiative is rolled on Stealth, and the fight's start hides it in Visioner by that roll (fight.mjs hiddenAtStart) */
   for (const t of made) if (plan.placed.find(p => p.key === t.getFlag(ID, "key"))?.state === "hidden") { await t.setFlag(ID, "startHidden", true); await t.actor.update({ "system.initiative.statistic": "stealth" }); }
   /* treasure on who carries it, or in a cache */

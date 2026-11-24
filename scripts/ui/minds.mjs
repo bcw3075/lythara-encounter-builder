@@ -8,7 +8,8 @@ import { BAND_CAPS, FALL_BACK, NATURE, NATURE_LABEL, NATURE_PICKS, NATURE_SUGGES
 import { bandViews, joinBand, removeBand, setBand } from "../bandlib.mjs";
 import { pronounOf, dropOwn, giveOwn, kindFacts, libraryEntries, libraryExport, libraryGet, libraryImport, libraryPut, libraryRemove, mindRows, partyPeople, rowActor, rowProfile, setLines } from "../library.mjs";
 import { formsOf, fromGender, pro } from "../pronoun.mjs";
-import { modelOf, setModelPick, sceneOf } from "../fight.mjs";
+import { modelOf, setModelPick, sceneOf, setStart, startOf } from "../fight.mjs";
+import { STARTS, START_HINT, START_LABEL } from "../start.mjs";
 import { MODELS, MODEL_WORDS, modelName } from "../route.mjs";
 
 const STYLE = `.leb-minds .window-content{overflow:hidden!important;padding:0;display:flex;flex-direction:column}
@@ -101,7 +102,14 @@ export class MindsApp extends ApplicationV2 {
       const box = `<select class="lm-mod" data-model title="Which model thinks for ${ms.length === 1 ? "this monster" : "these monsters"} on the API route">${same ? "" : `<option value="" selected>(only some of them: pick one to set all)</option>`}${MODELS.map(k => `<option value="${k}"${same && ms[0].m.model === k ? " selected" : ""}>${MODEL_WORDS[k]}</option>`).join("")}</select>`;
       const why = !same ? ms.map(x => `${x.t.name}: ${modelName(x.m.model)}${x.m.why ? ` (${x.m.why})` : ""}.`).join(" ") : mine ? (ms[0].m.rule !== ms[0].m.model ? `The rule would pick ${modelName(ms[0].m.rule)}${whys[0] ? `: ${whys[0]}` : ""}.` : cap(whys[0])) : whys.length === 1 ? cap(whys[0]) : "";
       return `<div class="lm-row lm-modelrow"><label>Model</label><div>${box}${why ? `<div class="lm-hint">${esc(why)}</div>` : ""}</div><div class="lm-from${mine ? " gm" : ""}">${mine ? `yours · <a data-modelrule>back to the rule</a>` : "by the rule"}</div></div>`; })();
-    return `<div class="lm-body"><div class="lm-side">${side}</div><div class="lm-main"><div class="lm-head">${head}</div>${bandRow}${modelRow}${LINES.map(lineRow).join("")}
+    /* the Starts row (0.41.0, F-3: "fully integrated with the monster minds"): how these monsters start; their packet says it all fight. Set before the
+       fight; once it has started, the fight's own record is shown */
+    this.startToks = row.party ? [] : mtoks.filter(t => t.actor?.isOfType?.("npc"));
+    const startRow = !this.startToks.length ? "" : (() => { const sts = this.startToks.map(t => startOf(fight, t)), same = sts.every(x => x === sts[0]);
+      const set = this.startToks.every(t => !!t.getFlag(ID, "start")) || !!fight, hint = !same ? this.startToks.map((t, k) => `${t.name}: ${START_LABEL[sts[k]]}.`).join(" ") : START_HINT[sts[0]];
+      const box = fight ? `<b>${same ? START_LABEL[sts[0]] : "(not all the same)"}</b>` : `<select data-start title="How ${this.startToks.length === 1 ? "this monster starts" : "these monsters start"} the fight">${same ? "" : `<option value="" selected>(only some of them: pick one to set all)</option>`}${STARTS.map(k => `<option value="${k}"${same && sts[0] === k ? " selected" : ""}>${START_LABEL[k]}</option>`).join("")}</select>`;
+      return `<div class="lm-row lm-startrow"><label>Starts</label><div>${box}<div class="lm-hint">${esc(hint)}</div></div><div class="lm-from">${fight ? "as this fight began" : set ? "changed at once" : "read from the token"}</div></div>`; })();
+    return `<div class="lm-body"><div class="lm-side">${side}</div><div class="lm-main"><div class="lm-head">${head}</div>${bandRow}${modelRow}${startRow}${LINES.map(lineRow).join("")}
       <div class="lm-note">Tags show where each line comes from. ${single ? "This profile is this monster's alone." : "Changing a line here changes it for this encounter only, until you choose Save to library."} Angel is told these lines at every plan; a line naming a party member is left out until the monster perceives them.</div></div></div>
       ${this.message ? `<div class="lm-msg">${esc(this.message)}</div>` : ""}<div class="lm-foot">${foot}</div>`;
   }
@@ -145,6 +153,7 @@ export class MindsApp extends ApplicationV2 {
     root.querySelector('select[name="band"]')?.addEventListener("change", ev => { if (ev.target.value === "?") return; joinBand(this.scene, this.row.ref, ev.target.value).then(() => { this.message = ev.target.value ? "In that band now." : "In no band now."; this.render(); }).catch(e => { ui.notifications.error(e.message); this.render(); }); });
     /* the Model tick (0.31.0): what she ticks is kept only where it differs from the rule, so the rule still moves Opus to a new leader */
     root.querySelectorAll("select[data-model]").forEach(el => el.addEventListener("change", () => { if (!MODELS.includes(el.value)) return; this.setModel(el.value).catch(e => { ui.notifications.error(e.message); this.render(); }); }));
+    root.querySelectorAll("select[data-start]").forEach(el => el.addEventListener("change", () => { if (!el.value) return; setStart(this.scene, (this.startToks ?? []).map(t => t.id), el.value).then(() => this.render()).catch(e => { ui.notifications.error(e.message); this.render(); }); }));
     root.querySelectorAll("[data-modelrule]").forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); this.setModel(null).catch(e => { ui.notifications.error(e.message); this.render(); }); }));
     root.querySelectorAll(".lm-row:not(.lm-modelrow) textarea,.lm-row:not(.lm-modelrow) input,.lm-row:not(.lm-modelrow) select:not([name=band])").forEach(el => { const k = el.name.split(".")[0]; for (const ev of ["input", "change"]) el.addEventListener(ev, () => this.touch(k)); });
     /* a pronoun pill: the pick goes into the hidden field, "other…" shows the box for her own words; no redraw (as for any field) */

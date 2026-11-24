@@ -15,6 +15,7 @@ Hide, Sneak and Seek: the module presses Visioner's buttons on PF2e's secret car
 - **A card from a creature the party can't see doesn't name it (0.33.2, B-8):** its Strike and spell cards are marked on the page that makes them, and in a player's browser the sender reads "An unseen creature" and the header's portrait (picture and alt text) is taken out, as its spoken lines are "A voice". The GM sees the name.
 
 ## How it works
+- **Hidden is one of four starts (0.41.0, F-3):** the build's Starts column and Monster Minds' Starts row set it; leaving Hidden in Monster Minds shows the token again and puts initiative back on Perception (`docs/features/starts.md`).
 - **Burrow (0.16.0):** a Burrow isn't Hide, Sneak or Step, so a hidden monster comes out of hiding just before it (`actWords` says "burrowing"); below ground it is hidden from everyone anyway.
 - **Climb and Release come out of hiding like any other action (0.15.0):** `actWords` says "its Climb" or "letting go of what it holds". Release is free and doesn't trigger reactions, but Hide's rule ends hiding on any action other than Hide, Sneak or Step.
 - **Interact comes out of hiding like any other action (0.12.0);** a Delay is no action at all and keeps it hidden (`KEEPS_HIDDEN`); `actWords` says "its Interact" on the card.
