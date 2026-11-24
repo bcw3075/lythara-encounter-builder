@@ -57,7 +57,8 @@ const warnHtml = (text, people, library = false) => { const w = lineWarnings(tex
   return out.map(x => `<div class="lm-warn">⚠ ${x}</div>`).join(""); };
 const input = (title, content, ok = "Save", width = 520) => DialogV2.input({ window: { title }, classes: ["lm-dialog"], position: { width }, content, ok: { label: ok }, rejectClose: false });
 let libraryApp = null;
-export const openLibrary = (sel = null) => { libraryApp ??= new LibraryApp(); if (typeof sel === "string" && sel) { libraryApp.sel = sel; libraryApp.message = ""; } libraryApp.render(true); return libraryApp; };
+export const openLibrary = (sel = null) => { if (!game.user.isGM) return null;   /* GM only (9-8): a player page never draws it, even from the console */
+  libraryApp ??= new LibraryApp(); if (typeof sel === "string" && sel) { libraryApp.sel = sel; libraryApp.message = ""; } libraryApp.render(true); return libraryApp; };
 export const redrawLibrary = () => { if (libraryApp?.rendered) libraryApp.render(); };
 
 /* ---------- Monster Minds: one scene ---------- */

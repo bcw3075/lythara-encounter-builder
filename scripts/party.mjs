@@ -190,7 +190,7 @@ export function cleanTurn(t = {}) {
     ...(own && Number.isFinite(t.moved) ? { moved: t.moved } : {}), ...(Array.isArray(t.hp) && t.hp.length === 2 ? { hp: t.hp.map(n => Math.round(Number(n) || 0)) } : {}),
     acts, ...(t.spent && Object.keys(t.spent).length ? { spent: t.spent } : {}), ...(t.partial ? { partial: true } : {}), ...(own && t.end && Object.keys(t.end).length ? { end: t.end } : {}) };
 }
-/** A turn in words, for the saved page and the daily check: "Round 2: moved 25 ft; Strike (Longsword) on Goblin Warrior: success, 12 damage; spent 1 spell slot; ended next to Corwin, 5 ft from Goblin Warrior." */
+/** A turn in words, for the saved page and the daily check: "Round 2: moved 25 ft; Strike (Longsword) on Goblin Warrior: success, 12 damage; spent 1 spell slot; ended next to Corwin; foes close: Goblin Warrior (5 ft)." */
 export function turnWords(t) {
   if (!t) return ""; const parts = [];
   if (t.own !== false && t.moved) parts.push(`moved ${t.moved} ft`);
@@ -199,10 +199,10 @@ export function turnWords(t) {
     parts.push(`${what}${a.on?.length ? ` on ${a.on.join(", ")}` : ""}${a.o ? `: ${a.o}` : ""}${a.d != null ? `${a.o ? "," : ":"} ${a.d} ${a.heal ? "healing" : "damage"}` : ""}`); }
   const s = t.spent ?? {}, sp = [s.slots ? `${s.slots} spell slot${s.slots === 1 ? "" : "s"}` : "", s.focus ? `${s.focus} focus point${s.focus === 1 ? "" : "s"}` : "", s.hero ? `${s.hero} hero point${s.hero === 1 ? "" : "s"}` : "", ...(s.items ?? [])].filter(Boolean);
   if (sp.length) parts.push(`spent ${sp.join(", ")}`);
-  const e = t.end ?? {}, at = [e.allies?.length ? `next to ${e.allies.join(", ")}` : "", e.foes?.length ? `${e.foes.join(", ")} close` : e.nearestFoe != null ? `nearest foe ${e.nearestFoe} ft away` : ""].filter(Boolean);
+  const e = t.end ?? {}, at = [e.allies?.length ? `next to ${e.allies.join(", ")}` : "", e.foes?.length ? `foes close: ${e.foes.join(", ")}` : e.nearestFoe != null ? `with the nearest foe ${e.nearestFoe} ft away` : ""].filter(Boolean);
   if (at.length) parts.push(`ended ${at.join("; ")}`);
   if (t.own !== false && !parts.length) parts.push("nothing the cards show");
-  return `${t.own === false ? `On another's turn in round ${t.round}` : `Round ${t.round}`}${t.angel ? " (Angel played it)" : ""}: ${parts.join("; ")}.`;
+  return `${t.own === false ? `On another's turn in round ${t.round}` : `Round ${t.round}`}${t.angel ? " (Angel's turn)" : ""}: ${parts.join("; ")}.`;
 }
 /** The fight's record by party member, as saved with the History: { [actorId]: { name, angel, turns: [...] } }. A character Angel played on any
     turn of the fight is marked `angel` (Angel's call 2: that fight isn't learned from for them). turns: the cleaned turns in order. */

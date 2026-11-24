@@ -85,7 +85,7 @@ async function partyTurn(combat) {
   if (open?.tokenId) { const ids = cards.get(open.tokenId) ?? []; cards.delete(open.tokenId);
     /* this page started after that turn did (a reload), or another page was the runner when it began (review 26): the cards before it weren't heard here, so the turn is marked part-seen */
     const t = closeTurn(combat, open, ids); if (t) change[`turns.${open.key}`] = pageSince > (open.at ?? 0) || (open.by && open.by !== game.user.id) ? { ...t, partial: true } : t; }
-  Object.assign(change, Object.fromEntries(Object.entries(offTurns(combat, cards, open?.round ?? combat.round, now, open?.key ?? `r${combat.round}t${now}`)).map(([k, v]) => [`turns.${k}`, v])));
+  Object.assign(change, Object.fromEntries(Object.entries(offTurns(combat, cards, open?.round ?? combat.round, now, open?.key ?? `r${open?.round ?? combat.round}t${now}`)).map(([k, v]) => [`turns.${k}`, v])));
   /* the turn now beginning: a snapshot if it is a party member's; for anyone else only its round and time, so what the party does on it is filed
      under the right round (review 10). Replaced whole (review 1: a plain write merged the last member's consumables into the next one's) */
   const tok = cur?.token, a = tok?.actor, base = { combatantId: cur?.id ?? null, round: combat.round, at: now, by: game.user.id };

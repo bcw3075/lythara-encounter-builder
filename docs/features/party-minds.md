@@ -36,7 +36,7 @@ Settled by Angel at the build, told to the GM, hers to change:
 - **The pages:** library entries of type `party` (`cleanPartyEntry`: key `party:<actor id>`, name, kind, class, lines `{ text, by, at, seen }`, suggestions `{ id, line, text, why, seen, session }`, declined words, the fights and sessions learned from). `minds.mjs` `cleanEntry` hands them to `party.mjs`, so the library's cache, Export and Import carry them like any entry.
 - **API (`api.minds.party`):** `list`, `get(actor | id | key)`, `ensure(actor | id)`, `set(ref, lines)` (her words only: written for her when she asked; Angel's words reach a page only as suggestions), `suggest(ref, { session, fights, suggestions })`, `answer(ref, id, "accept" | "keep")`, `relink(ref, actorId)` (the old actor id is kept in `formerIds`, so fights saved under it still count), `lost()`, `records({ since })` (every saved fight's party record by night, with what each page hasn't learned from), `recordOf(combat)`, `open(ref)`.
 - **The packet:** `mindOf` gives a party-side creature whose page has at least one line `partyForPacket` (an empty page leaves the token's old lines in force): `mind: { profile: "party", pronoun, role, … }`, each line through the name gate, a learned line ending "(seen in N fights)"; `mindLayers` gives such a creature no layers. Packet schema 13, prompt version 39.
-- **Windows:** the Minds Library's Party section (`partyPage`), and Monster Minds' party rows (`partyHtml`: plays by the page, or Make a page).
+- **Windows:** the Minds Library's Party section (`partyPage`), and Monster Minds' party rows (`partyHtml`: plays by the page, or Make a page). GM only: `openLibrary` draws nothing on a player's page.
 
 ## Checks
 - (pm-1) {unit} A page: key from the actor, known lines only, whose words, seen counts, caps; minds.mjs hands a party entry to party.mjs.
@@ -58,6 +58,7 @@ Settled by Angel at the build, told to the GM, hers to change:
 - (pm-17) {live,player} As the test player: the Party pages aren't openable (the library journal isn't theirs), and what their browser holds is noted.
 
 ## Traps
+- **A player's character is never played by the module** (B-7): ticked, it shows "a player's" in Monster Minds, so a party page's packet is only ever built for a companion the GM ticked or an away player's character handed to Angel; test the packet with a companion.
 - **PF2e action cards from `game.pf2e.actions` carry no `flags.pf2e`** (the traps doc): their title is read from the flavor's `<h4 class="action"><strong>`.
 - **A chat card's `timestamp` is the creating browser's clock:** only the fight's last turn, closed at save on another page, is found by time; every other turn by the ids the runner heard.
 
