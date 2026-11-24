@@ -5,16 +5,44 @@ import { rowRemoved } from "../bands.mjs";
 import { adjustedLevel, partySizeNote, treasureFor } from "../budget.mjs";
 import { esc } from "../journal.mjs";
 import { askRoom, dropRoomAsk } from "../roomask.mjs";
+import { askBuild, clearAsk, markApplied } from "../askangel.mjs";
+import { ASK_TTL_S, costWords, waitWords } from "../askprompt.mjs";
+import { mergeBrief } from "../minds.mjs";
 import { ROOM_WAIT_S, offersRooms } from "../room.mjs";
-import { ID, ROOM_BY, applyReplace, clear, clearPreview, findCreatures, ledgerFor, partyLevels, partySize, place, prepare, prepareReplace, setManualTreasure, showPreview, suggestedLevel, summary, threatOf } from "../builder.mjs";
+import { ID, ROOM_BY, applyReplace, clear, clearPreview, findCreatures, ledgerFor, partyLevels, partySize, place, prepare, prepareReplace, setManualTreasure, showPreview, suggestedLevel, threatOf } from "../builder.mjs";
 
-const STYLE = `.leb-build .window-content{overflow:hidden!important;padding:0;display:block}.leb-build form.leb-form{display:flex;flex-direction:column;height:100%}.leb-build .leb-scroll{flex:1;overflow-y:auto;padding:8px 12px}.leb-build fieldset{margin:0 0 8px;padding:6px 8px}.leb-build .leb-row,.leb-build .leb-head{display:grid;grid-template-columns:minmax(120px,1fr) 52px 92px 100px 96px 44px 22px 22px;gap:5px;align-items:center;margin-bottom:2px}.leb-build .leb-head{font-size:.85em;opacity:.8;text-align:center;border-bottom:1px solid #0004;padding-bottom:3px;margin-bottom:5px;line-height:1.15}.leb-build .leb-head span:first-child{text-align:left}.leb-build .leb-row select{width:100%}.leb-build .leb-row input[type=checkbox]{justify-self:center}.leb-build .leb-row a{text-align:center}.leb-build .leb-row a.leb-x{color:#d05050}.leb-build details.leb-notes{margin:0 0 6px 14px;font-size:.9em}.leb-build details.leb-notes summary{cursor:pointer;opacity:.8}.leb-build details.leb-notes summary i{opacity:.75}.leb-build .leb-purpose{background:#1e2a3a;border:1px solid #4a6a90;border-radius:5px;padding:8px 10px;margin:0 0 8px;color:#e8eef6;line-height:1.4}.leb-build .leb-add{display:flex;gap:6px;align-items:center}.leb-build .leb-add input{flex:1}.leb-build .leb-add span{opacity:.75;white-space:nowrap;font-size:.9em}.leb-build .leb-drop{outline:2px dashed #6a9ad0;outline-offset:2px}.leb-build .leb-threat{color:#7cc47c;font-weight:600}.leb-build .leb-row b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.leb-build .leb-row input[type=number]{width:100%}.leb-build .leb-results{max-height:150px;overflow-y:auto;margin-top:4px}.leb-build .leb-results button{display:block;width:100%;text-align:left;line-height:1.5;height:auto;margin-bottom:1px}.leb-build .leb-warn{color:#e07050}.leb-build .leb-num{font-weight:600}.leb-build textarea{width:100%;min-height:42px}.leb-build .leb-two{display:grid;grid-template-columns:1fr 1fr;gap:6px}.leb-build .leb-actions{display:flex;gap:6px;padding:8px 12px;border-top:1px solid #0006}.leb-build .leb-actions button{flex:1}.leb-build label{font-size:.9em}`;
+const STYLE = `.leb-build .window-content{overflow:hidden!important;padding:0;display:block}.leb-build form.leb-form{display:flex;flex-direction:column;height:100%}.leb-build .leb-scroll{flex:1;overflow-y:auto;padding:8px 12px}.leb-build fieldset{margin:0 0 8px;padding:6px 8px}.leb-build .leb-row,.leb-build .leb-head{display:grid;grid-template-columns:minmax(120px,1fr) 52px 92px 100px 96px 44px 22px 22px;gap:5px;align-items:center;margin-bottom:2px}.leb-build .leb-head{font-size:.85em;opacity:.8;text-align:center;border-bottom:1px solid #0004;padding-bottom:3px;margin-bottom:5px;line-height:1.15}.leb-build .leb-head span:first-child{text-align:left}.leb-build .leb-row select{width:100%}.leb-build .leb-row input[type=checkbox]{justify-self:center}.leb-build .leb-row a{text-align:center}.leb-build .leb-row a.leb-x{color:#d05050}.leb-build details.leb-notes{margin:0 0 6px 14px;font-size:.9em}.leb-build details.leb-notes summary{cursor:pointer;opacity:.8}.leb-build details.leb-notes summary i{opacity:.75}.leb-build .leb-purpose{background:#1e2a3a;border:1px solid #4a6a90;border-radius:5px;padding:8px 10px;margin:0 0 8px;color:#e8eef6;line-height:1.4}.leb-build .leb-add{display:flex;gap:6px;align-items:center}.leb-build .leb-add input{flex:1}.leb-build .leb-add span{opacity:.75;white-space:nowrap;font-size:.9em}.leb-build .leb-drop{outline:2px dashed #6a9ad0;outline-offset:2px}.leb-build .leb-threat{color:#7cc47c;font-weight:600}.leb-build .leb-row b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.leb-build .leb-row input[type=number]{width:100%}.leb-build .leb-results{max-height:150px;overflow-y:auto;margin-top:4px}.leb-build .leb-results button{display:block;width:100%;text-align:left;line-height:1.5;height:auto;margin-bottom:1px}.leb-build .leb-warn{color:#e07050}.leb-build .leb-num{font-weight:600}.leb-build textarea{width:100%;min-height:42px}.leb-build .leb-two{display:grid;grid-template-columns:1fr 1fr;gap:6px}.leb-build .leb-actions{display:flex;gap:6px;padding:8px 12px;border-top:1px solid #0006}.leb-build .leb-actions button{flex:1}.leb-build label{font-size:.9em}.leb-build .leb-ask-log{max-height:190px;overflow-y:auto;margin:0 0 6px}.leb-build .leb-ask-log p{margin:0 0 4px;line-height:1.35}.leb-build .leb-ask-log .leb-me b{color:#6a9ad0}.leb-build .leb-ask-log .leb-angel b{color:#c08ad8}.leb-build .leb-ask-log i{opacity:.7}.leb-build .leb-ask-send{display:flex;gap:6px;margin-top:4px}.leb-build .leb-ask-send button{flex:1}.leb-build .leb-ask-send button.leb-small{flex:0 0 auto}`;
 const ensureStyle = () => { if (!document.getElementById("leb-style")) { const s = document.createElement("style"); s.id = "leb-style"; s.textContent = STYLE; document.head.append(s); } };
 const options = (list, cur, label = v => v) => list.map(v => `<option value="${esc(v)}"${v === cur ? " selected" : ""}>${esc(label(v))}</option>`).join("");
 
 export class BuildApp extends foundry.applications.api.ApplicationV2 {
   static DEFAULT_OPTIONS = { id: "leb-build", classes: ["leb-build"], window: { title: "Build Encounter", resizable: true }, position: { width: 760, height: 760, top: 20 } };
-  constructor(scene) { super(); this.scene = scene; this.results = []; this.message = ""; this.loadBrief(); }
+  constructor(scene) { super(); this.scene = scene; this.results = []; this.message = ""; this.draft = ""; this.loadBrief(); this.takeAnswer(); }
+  /* Ask Angel (0.43.0, F-7): an answer with a brief that this GM asked for and hasn't taken yet fills the window; the GM's own lines stay */
+  takeAnswer() {
+    const a = this.scene.getFlag(ID, "askAngel"), b = a?.answer?.brief;
+    if (!b || a.answer.applied || a.user !== game.user.id || this.previewing) return false;   /* not under a running Preview: taken when it ends (review 6) */
+    const level = this.brief.partyLevel, next = cleanBrief(mergeBrief(this.brief, b, { by: "angel" }).brief); next.partyLevel ??= level;
+    this.brief = next; this.openNotes?.clear(); this.message = "Angel filled this in: check it, then Preview."; markApplied(this.scene, next).catch(e => console.warn(`${ID} | ask`, e)); return true;
+  }
+  _onFirstRender(context, options) { super._onFirstRender?.(context, options);
+    this.askHook = (scene, change) => { if (scene.id !== this.scene.id || !foundry.utils.hasProperty(change, `flags.${ID}`)) return; const f = change.flags[ID]; if (!Object.keys(f).some(k => k.endsWith("askAngel"))) return;
+      this.element?.querySelectorAll("input:not([name=search]):not([name=askText]),select,textarea:not([name=askText])").forEach(el => this.readForm(el));   /* typed but not yet left (review 4) */
+      this.takeAnswer(); this.render(); };
+    Hooks.on("updateScene", this.askHook);
+    this.askTimer = setInterval(() => { const el = this.element?.querySelector(".leb-ask-status"); if (!el) return; const was = this.askOpen(); el.innerHTML = this.askStatus(); if (was && !this.askOpen()) this.render(); }, 5000); }
+  /** Is an ask waiting for its answer (unanswered and not yet lapsed)? */
+  askOpen() { const a = this.scene.getFlag(ID, "askAngel"); return !!a && !a.answer && game.time.serverTime - a.at < ASK_TTL_S * 1000; }
+  _onClose(options) { super._onClose?.(options); if (this.askHook) Hooks.off("updateScene", this.askHook); clearInterval(this.askTimer); }
+  /** The chat box's status line: thinking (with how long), the wait words, or why the last ask failed. */
+  askStatus() {
+    const a = this.scene.getFlag(ID, "askAngel"); if (!a) return "";
+    if (a.answer?.error) return `<span class="leb-warn">Angel couldn't answer: ${esc(a.answer.error)}. Send again to retry.</span>`;
+    if (a.answer) return "";
+    const s = Math.max(0, (game.time.serverTime - a.at) / 1000), late = waitWords(s);
+    if (s >= ASK_TTL_S) return `<span class="leb-warn">Angel didn't answer that in ${Math.round(ASK_TTL_S / 60)} minutes, so it has lapsed. Answers need the bridge's API worker (version 0.4.4 or later) with its API key, running and not stopped. Send again to retry.</span>`;
+    return late ? `<span class="leb-warn">${esc(late)}</span>` : `<i class="fa-solid fa-spinner fa-spin"></i> Angel is reading the map's notes and filling this in (${Math.round(s)} s).`;
+  }
   loadBrief() {
     const stored = this.scene.getFlag(ID, "brief");
     this.brief = cleanBrief(stored ?? { mood: "ambush" }); this.brief.partyLevel ??= suggestedLevel(); this.fromChat = !!stored;
@@ -37,7 +65,8 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
     const rows = head + b.creatures.map((c, k) => { const i = this.rowInfo.get(c.uuid), note = c.mind?.notes?.blank ? "" : c.mind?.notes?.text ?? "";
       return `<div class="leb-row" data-row="${k}"><b title="${esc(c.uuid)}">${esc(c.name)}${i ? ` (${i.level})` : ""}</b><input type="number" name="count" min="1" max="30" value="${c.count}" title="How many"><select name="adjust" title="Strength: PF2e's Weak or Elite adjustment">${options(["weak", "", "elite"].filter(v => ADJUSTMENTS.includes(v)), c.adjust, v => STRENGTH[v])}</select><select name="role" title="Role: where it is placed and how it stands">${options(ROLES, c.role, cap)}</select><select name="state" title="${esc(START_HINT[c.state] ?? "How it starts")}">${options(STATES, c.state, v => START_LABEL[v] ?? cap(v))}</select><input type="checkbox" name="run" ${c.run ? "checked" : ""} title="Angel plays it in the fight (its tick on Monster Turns)">${c.count > 1 ? `<a data-action="splitRow" title="Split one off, to give it its own settings or notes"><i class="fa-solid fa-code-branch"></i></a>` : "<span></span>"}<a data-action="removeRow" class="leb-x" title="Remove"><i class="fa-solid fa-xmark"></i></a></div><details class="leb-notes" data-row="${k}"${open.has(k) ? " open" : ""}><summary>Notes for ${esc(c.name)} in this fight${note ? ` <i>(${esc(note.length > 50 ? `${note.slice(0, 50)}…` : note)})</i>` : ""}</summary><textarea name="notes" data-row="${k}" placeholder="How they fight here, what they are told to do (the Notes line of their mind; the rest is in Monster Minds once built)">${esc(note)}</textarea></details>`; }).join("");
     return `<form class="leb-form"><div class="leb-scroll">
-      <div class="leb-purpose"><b>Builds a fight on this map.</b> 1. Add the creatures (search, or drag them in from the Actors or a compendium). 2. Set how each starts. 3. Say what they're doing here. 4. <b>Preview</b> shows where they'd stand; <b>Place it</b> puts them on the map with their notes and treasure. Or press <b>Ask Angel</b> and she fills it in for you.</div>
+      <div class="leb-purpose"><b>Builds a fight on this map.</b> 1. Add the creatures (search, or drag them in from the Actors or a compendium). 2. Set how each starts. 3. Say what they're doing here. 4. <b>Preview</b> shows where they'd stand; <b>Place it</b> puts them on the map with their notes and treasure. Or tell <b>Angel</b> below what you want, and she fills it in for you.</div>
+      ${this.askBox()}
       ${built ? `<p class="leb-warn">This map already has a build. Placing replaces what that build made. Anything placed by hand stays.</p>` : ""}
       ${this.fromChat ? `<p>Brief filled in from what's stored on this map. You can still change it.</p>` : ""}
       ${this.message ? `<p class="leb-num">${esc(this.message)}</p>` : ""}
@@ -60,6 +89,15 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
       </div><div class="leb-actions"><button type="button" data-action="askAngel"><i class="fa-solid fa-comments"></i> Ask Angel</button><button type="button" data-action="preview"><i class="fa-solid fa-eye"></i> Preview</button></div>
     </form>`;
   }
+  askBox() {
+    const a = this.scene.getFlag(ID, "askAngel"), msgs = a?.messages ?? [], asked = this.askOpen();
+    const MODEL = { sonnet: "Sonnet", opus: "Opus", fable: "Fable" }, log = msgs.map(m => m.who === "gm" ? `<p class="leb-me"><b>You:</b> ${esc(m.text)}</p>`
+      : `<p class="leb-angel"><b>Angel:</b> ${esc(m.text)}${m.model || Number.isFinite(m.cost) ? ` <i>(${esc([m.model ? MODEL[Object.keys(MODEL).find(k => m.model.includes(k))] ?? m.model : "", costWords(m.cost)].filter(Boolean).join(", "))})</i>` : ""}</p>`).join("");
+    return `<fieldset class="leb-ask"><legend>Ask Angel</legend>${log ? `<div class="leb-ask-log">${log}</div>` : `<p>Say what you want, for example "a random encounter on this road at night, Moderate" or "build what the notes say is here". She reads this map's journal notes first.</p>`}
+      <p class="leb-ask-status">${this.askStatus()}</p>
+      <textarea name="askText" placeholder="Tell Angel what to build or change" ${asked ? "disabled" : ""}>${esc(this.draft)}</textarea>
+      <div class="leb-ask-send"><button type="button" data-action="askSend" ${asked ? "disabled" : ""}><i class="fa-solid fa-paper-plane"></i> Send to Angel</button>${msgs.length ? `<button type="button" class="leb-small" data-action="askClear" title="Start a new conversation"><i class="fa-solid fa-broom"></i> New conversation</button>` : ""}</div></fieldset>`;
+  }
   _replaceHTML(html, content) { const top = content.querySelector(".leb-scroll")?.scrollTop ?? 0; content.innerHTML = html; const box = content.querySelector(".leb-scroll"); if (box) box.scrollTop = top; }
   /* whatever the form holds goes into the brief at once, so a re-render loses nothing */
   readForm(el) {
@@ -71,7 +109,7 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
   _onRender() {
     const root = this.element;
     root.querySelectorAll("input,select,textarea").forEach(el => el.addEventListener("change", async ev => {
-      if (el.name === "search") return;
+      if (el.name === "search" || el.name === "askText") return;
       if (el.name === "manual") { await setManualTreasure(this.brief.partyLevel, el.value); return this.render(); }
       this.readForm(el);
       /* rows that now match another become one (F-5): the brief changes shape, so the open notes are forgotten */
@@ -84,6 +122,9 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
     zone?.addEventListener("dragover", ev => { ev.preventDefault(); zone.classList.add("leb-drop"); });
     zone?.addEventListener("dragleave", ev => { if (!zone.contains(ev.relatedTarget)) zone.classList.remove("leb-drop"); });
     zone?.addEventListener("drop", ev => { ev.preventDefault(); zone.classList.remove("leb-drop"); this.dropped(ev).catch(e => { ui.notifications.error(e.message); console.error(e); }); });
+    root.querySelector("[name=askText]")?.addEventListener("input", ev => { this.draft = ev.target.value; });
+    root.querySelector("[name=askText]")?.addEventListener("keydown", ev => { if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); this.act(root.querySelector("[data-action=askSend]")).catch(e => { ui.notifications.error(e.message); console.error(e); }); } });
+    const log = root.querySelector(".leb-ask-log"); if (log) log.scrollTop = log.scrollHeight;
     const box = root.querySelector("[name=search]"); let timer = null, seq = 0;
     box?.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(async () => { const mine = ++seq, list = await findCreatures(box.value).catch(() => []); if (mine !== seq) return; this.results = list;
       root.querySelector(".leb-results").innerHTML = list.map((r, k) => `<button type="button" data-action="addResult" data-k="${k}">${esc(r.name)}, level ${r.level}, ${esc(r.size)}: ${esc(r.pack)}</button>`).join(""); this.bindActions(); }, 250); });
@@ -114,10 +155,14 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
     if (a === "addResult") { const r = this.results[+el.dataset.k]; if (r) { this.addCreature(r); this.results = []; this.render(); } }
     else if (a === "removeRow") { const g = +el.closest("[data-row]").dataset.row; this.brief.creatures.splice(g, 1); this.brief.bands = rowRemoved(this.brief.bands, g); this.openNotes?.clear(); this.render(); }
     else if (a === "splitRow") { const g = +el.closest("[data-row]").dataset.row, r = splitRow(this.brief.creatures, this.brief.bands, g); this.brief.creatures = r.creatures; this.brief.bands = r.bands; this.openNotes?.clear(); this.render(); }
-    else if (a === "askAngel") { const s = await summary(this.scene); await this.scene.setFlag(ID, "design", { requested: Date.now(), summary: s }); this.message = `Asked. In your chat, say "build an encounter on ${this.scene.name}". The brief appears here when it's sent.`; this.render(); }
+    else if (a === "askAngel") { const t = this.element.querySelector("[name=askText]"); t?.scrollIntoView({ block: "center" }); t?.focus(); }
+    else if (a === "askSend") { if (!el || el.disabled) return; const words = (this.element.querySelector("[name=askText]")?.value ?? this.draft).trim(); if (!words) return ui.notifications.warn("Type what you'd like Angel to build first.");
+      el.disabled = true; try { await askBuild(this.scene, words, this.brief); } catch (e) { el.disabled = false; throw e; } this.draft = ""; this.message = ""; this.render(); }
+    else if (a === "askClear") { await clearAsk(this.scene); this.draft = ""; this.render(); }
     else if (a === "preview") { /* out of the way while she looks at the map */
-      await this.minimize();
-      let r; try { r = await previewLoop(this.scene, (s, room) => prepare(this.scene, this.brief, { seed: s, room }), place, "Build this?"); } catch (e) { await this.maximize(); throw e; }   /* a brief prepare refuses must not leave the window minimized (0.39.10) */
+      await this.minimize(); this.previewing = true;
+      let r; try { r = await previewLoop(this.scene, (s, room) => prepare(this.scene, this.brief, { seed: s, room }), place, "Build this?"); } catch (e) { this.previewing = false; await this.maximize(); throw e; }   /* a brief prepare refuses must not leave the window minimized (0.39.10) */
+      this.previewing = false; if (!r && this.takeAnswer()) this.render();   /* an answer that came during the Preview (review 6) */
       if (r) { this.close(); ui.notifications.info(`Placed ${r.tokens} creatures: ${r.threat.rating}, ${r.threat.xp} XP.`); for (const w of r.warnings) ui.notifications.warn(w); } else await this.maximize(); }
   }
 }

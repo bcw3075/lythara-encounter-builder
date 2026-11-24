@@ -177,3 +177,4 @@ The gate counts the open ones; above 8 open at a release's start, that release m
 - (u-169) [0.41.0] open: 0.41.0 starts: the mind's started words for Alert, Hidden and Unaware, and a sleeper woken by hand (an ally's Interact applied by the GM: 'has since woken'), read from a live packet; only the woken-at-turn line was seen live
 - (u-170) [0.41.0] open: 0.41.0 starts: the fight-start look weighing the started line (the route was Off in the live test, so no look ran)
 - (u-171) [0.42.0] open: Angel's room pick through the real Claude API (bridge 0.4.3 with its key): the picture it is sent, its pick and cost, on a real map with rooms
+- (u-172) [0.43.0] open: Ask Angel through the real Claude API (bridge 0.4.4 with its key): the tool loop, the answer filling the window and its cost on a real ask; and the Notion tools against Rhea's real Notion once she has made and pasted the read-only key. Seen live only with stand-in answers and the bridge's stand-ins.

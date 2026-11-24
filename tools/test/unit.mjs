@@ -14,6 +14,7 @@ import { aimArea, burstReachable, caughtBy, crossesWall, placeable, shapeOf, squ
 import { aimText, areaHurt, forThinker, listWords, nextArea } from "../../scripts/turn.mjs";
 import { COSTS, SEEK, SIDES, edgeSides, isAttack, nextInteract, nextStealth, revealsAfter, revealsBefore, sneakSpeed } from "../../scripts/turn.mjs";
 import { promptText } from "../../scripts/prompt.mjs";
+import * as Ak from "../../scripts/askprompt.mjs";
 import * as Bd from "../../scripts/bands.mjs";
 import { historyHTML, historyOf, journalHTML, stepResult } from "../../scripts/history.mjs";
 import { cutShort, diagonalsIn, distanceBetween, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, headingOf, heightCost, heightWhenCut, routeWords, swimDistance, swimWorld, waterKinds, waterUnder } from "../../scripts/move.mjs";
@@ -2342,5 +2343,26 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
   const ask = roomAsk(cleanBrief({ name: "Den", beat: "a goblin den", doing: "sleeping off a raid", mood: "lair", creatures: [{ uuid: "Compendium.x.Actor.gob", name: "Goblin", count: 6, state: "asleep" }] }), rl, pick, six);
   check("ro-5 the ask: the brief in short, each room's numbers and the builder's pick; no compendium id", ask.brief.creatures[0].starts === "asleep" && ask.brief.doing === "sleeping off a raid" && ask.rooms.length === 2 && ask.rooms[1].partyStartsHere === false && ask.builderPick.n === pick.n && !JSON.stringify(ask).includes("Compendium"));
   check("ro-5 the room prompt: the picture, the rules of a pick and the answer's JSON", /numbered in a circle|each room's number in a circle/.test(ROOM_PROMPT) && /Never the party's own room unless nothing else fits/.test(ROOM_PROMPT) && /\{"room": <its number>, "why":/.test(ROOM_PROMPT));
+}
+
+/* ---------- Ask Angel inside Foundry (0.43.0, F-7) ---------- */
+{
+  const html = "<h3>The ford</h3><p>Three <b>bandits</b> wait&nbsp;here.</p><ul><li>one asleep</li><li>one on watch</li></ul><p>A &amp; B<br>line two</p>";
+  const t = Ak.plainText(html);
+  check("ak-1 journal HTML as plain text: headings, lists, line breaks and entities", t === "The ford\nThree bandits wait here.\n- one asleep\n- one on watch\nA & B\nline two", JSON.stringify(t));
+  check("ak-1 a long note is cut and says so", /… \(cut\)$/.test(Ak.plainText("x".repeat(9000))) && Ak.plainText("x".repeat(9000)).length < 6100);
+  const msgs = Ak.cleanMessages([{ who: "gm", text: " hi " }, { who: "x", text: "no" }, { who: "angel", text: "ok", model: "claude-sonnet-5-5", cost: 0.012345 }, { who: "gm", text: "" }, ...Array.from({ length: 30 }, (_, i) => ({ who: "gm", text: `m${i}` }))]);
+  check("ak-2 the conversation kept: the GM's and Angel's words only, trimmed, the newest 20, Angel's model and cost", msgs.length === 20 && msgs[19].text === "m29" && Ak.cleanMessages([{ who: "angel", text: "ok", model: "m", cost: 0.012345 }])[0].cost === 0.0123 && Ak.cleanMessages([{ who: "gm", text: " hi ", cost: 1 }])[0].cost === undefined);
+  const brief = cleanBrief({ name: "Road", mood: "patrol", creatures: [{ uuid: "Compendium.pf2e.x.Actor.a", name: "Wolf", count: 3, mind: { notes: { text: "circle the weakest", by: "gm" } } }] });
+  const txt = Ak.askText({ scene: "Map A", map: { cols: 40 }, party: { level: 3, size: 4 }, brief, notes: [{ name: "Ford notes", text: "Bandits here." }, { name: "Last build", text: "x", made: true }], messages: [{ who: "gm", text: "a random fight" }, { who: "angel", text: "done" }, { who: "gm", text: "harder" }] });
+  check("ak-3 the ask's text: the map, party and brief as JSON, the map's notes (the module's own marked), the conversation with the GM's latest last", /"brief":\{"name":"Road"/.test(txt) && /"notes":"circle the weakest"/.test(txt) && /## Ford notes\nBandits here\./.test(txt) && /## Last build \(written by the module's last build here\)/.test(txt) && /The GM: a random fight\nYou \(Angel\): done\nThe GM now: harder/.test(txt) && /Answer with the JSON alone\.$/.test(txt));
+  check("ak-3 with no notes the text says so", /\(none on this map\)/.test(Ak.askText({ messages: [{ who: "gm", text: "x" }] })));
+  const ok = Ak.cleanAskAnswer('```json\n{"reply": "Three wolves.", "brief": {"creatures": [{"uuid": "u"}]}}\n```');
+  check("ak-4 Angel's answer: a code fence read, the reply and brief kept", ok.reply === "Three wolves." && ok.brief.creatures.length === 1);
+  check("ak-4 a question answered without a brief", Ak.cleanAskAnswer({ reply: "Level 3.", brief: null }).brief === null);
+  check("ak-4 refused in words: no JSON, no reply, a brief without creatures", /JSON/.test(Ak.cleanAskAnswer("sure!").error) && /no reply/.test(Ak.cleanAskAnswer({ brief: null }).error) && /creatures/.test(Ak.cleanAskAnswer({ reply: "x", brief: {} }).error) && /object/.test(Ak.cleanAskAnswer({ reply: "x", brief: [] }).error));
+  check("ak-5 the prompt: never places, notes first, Notion when offered, find_creatures uuids, the answer's JSON", /You never place anything/.test(Ak.ASK_PROMPT) && /Read the notes first/.test(Ak.ASK_PROMPT) && /notion_search and notion_page/.test(Ak.ASK_PROMPT) && /every creature you use must come from it: copy its uuid/.test(Ak.ASK_PROMPT) && /\{"reply":/.test(Ak.ASK_PROMPT) && /"unaware"/.test(Ak.ASK_PROMPT));
+  check("ak-5 the tools: five reads, each with a schema; no write tool", Ak.ASK_TOOL_NAMES.join() === "find_creatures,find_items,check_threat,search_journals,read_journal" && Ak.ASK_TOOLS.every(t => t.input_schema?.type === "object" && t.description));
+  check("ak-6 the wait words: nothing before the wait, then what answers need; the cost in cents", Ak.waitWords(30) === null && /0\.4\.4 or later/.test(Ak.waitWords(200)) && Ak.costWords(0.004) === "under 1¢" && Ak.costWords(0.123) === "12¢" && Ak.costWords(null) === "");
 }
 console.log(`${good} passed, ${bad} failed`); process.exit(bad ? 1 : 0);

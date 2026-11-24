@@ -68,13 +68,13 @@ async function allCreatures() {
   if (creatureIndex) return creatureIndex;
   const out = [], fields = ["system.details.level.value", "system.traits.size.value", "system.traits.value", "system.traits.rarity"];
   await Promise.all(game.packs.filter(p => p.documentName === "Actor").map(async p => { const ix = await p.getIndex({ fields }); const rank = FIRST.includes(p.collection) ? 1 : 2;
-    for (const e of ix) if (e.type === "npc") out.push({ uuid: e.uuid, name: e.name, level: e.system?.details?.level?.value ?? 0, size: e.system?.traits?.size?.value ?? "med", rarity: e.system?.traits?.rarity ?? "common", pack: p.title, rank }); }));
+    for (const e of ix) if (e.type === "npc") out.push({ uuid: e.uuid, name: e.name, level: e.system?.details?.level?.value ?? 0, size: e.system?.traits?.size?.value ?? "med", rarity: e.system?.traits?.rarity ?? "common", traits: e.system?.traits?.value ?? [], pack: p.title, rank }); }));
   return creatureIndex = out;
 }
 /** Creatures by name, best match first: world actors, then Monster Core and NPC Core, then every other pack. Names repeat, so a brief keeps the UUID. */
 export async function findCreatures(query, limit = 30) {
   gmOnly(); const q = String(query ?? "").trim().toLowerCase(); if (q.length < 2) return [];
-  const world = game.actors.filter(a => a.type === "npc" && !a.getFlag(ID, "built")).map(a => ({ uuid: a.uuid, name: a.name, level: a.level, size: a.size, rarity: a.rarity ?? "common", pack: "This world", rank: 0 }));
+  const world = game.actors.filter(a => a.type === "npc" && !a.getFlag(ID, "built")).map(a => ({ uuid: a.uuid, name: a.name, level: a.level, size: a.size, rarity: a.rarity ?? "common", traits: [...(a.system?.traits?.value ?? [])], pack: "This world", rank: 0 }));
   const score = c => { const n = c.name.toLowerCase(); return n === q ? 0 : n.startsWith(q) ? 1 : 2; };
   return [...world, ...await allCreatures()].filter(c => c.name.toLowerCase().includes(q)).sort((a, b) => score(a) - score(b) || a.rank - b.rank || a.name.localeCompare(b.name) || a.level - b.level).slice(0, limit);
 }
