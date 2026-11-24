@@ -42,7 +42,7 @@ export function startWords(state, forms, { woke = null, asleepNow = false } = {}
     asleep: "asleep: {they} {was|were} asleep when the fight began, with nothing in hand.",
   }[state];
   if (!w) return null;
-  const now = state !== "asleep" ? "" : asleepNow ? " {they} {is|are} still asleep." : woke != null ? ` {they} woke in round ${woke}: {they} {is|are} probably still prone and must Draw a weapon before using it.` : " {they} {has|have} since woken: {they} may still be prone and must Draw a weapon before using it.";
+  const now = state !== "asleep" ? "" : asleepNow ? " {They} {is|are} still asleep." : woke != null ? ` {They} woke in round ${woke}: {they} {is|are} probably still prone and must Draw a weapon before using it.` : " {They} {has|have} since woken: {they} may still be prone and must Draw a weapon before using it.";
   return pro(w + now, forms);
 }
 

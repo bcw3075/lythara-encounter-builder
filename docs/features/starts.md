@@ -38,6 +38,7 @@ Record every id below in the release's change record when this feature, or a fea
 - (sa-6) {live} Monster Minds by real clicks: the Starts row shows the start; changing it applies at once (gear, Unconscious, hidden); during the fight it shows the fight's record and can't be changed.
 
 ## Traps
+- `pro()` capitalises only a capital marker: a sentence after a full stop starts with `{They}`; after a creature's name write the verb plainly ("is"), as the other turn notes do (0.41.0 live test).
 - the fight's `wakes` (turns flag) keys are `<round>-<combatantId>`: a dot in a flag key makes a nested path.
 
 ## Open items
