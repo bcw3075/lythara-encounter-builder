@@ -2157,6 +2157,8 @@ fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "layouts
   check("rt-6 names, cents and the History's words", Rt.modelName("claude-opus-5-5") === "Opus 5.5" && Rt.modelName("claude-sonnet-5-5") === "Sonnet 5.5" && Rt.modelName("opus") === "Opus" && Rt.modelName("x") === "x"
     && Rt.cents(0.018) === "2¢" && Rt.cents(0.001) === "under 1¢" && Rt.cents(0) === "0¢" && Rt.cents(1.234) === "$1.23" && Rt.byWords({ by: "api", model: "claude-opus-5-5", usage: { seconds: 9.84, cost: 0.037 } }) === "Angel (API, Opus 5.5) · 9.8 s · 4¢"
     && Rt.byWords({ by: "chat" }) === "Angel (chat)" && Rt.byWords(null) === null && Rt.byWords({ by: "gm" }) === "a GM");
+  check("rt-17 Fable is a third pick, named in the window and from its id (0.40.0, F-4)", Rt.MODELS.join() === "sonnet,opus,fable" && Rt.modelFor({ pick: "fable" }).model === "fable" && Rt.modelFor({ pick: "fable" }).by === "gm"
+    && Rt.modelFor({ pick: "fable", leads: true }).rule === "opus" && Rt.modelName("fable") === "Fable" && Rt.modelName("claude-fable-5-2") === "Fable 5.2");
   check("rt-7 the fight's API total counts every answer the worker kept, landed or not, and says when no price is known", (() => {
     const t = { apiUse: { a: { model: "claude-sonnet-5-5", cost: 0.02 }, b: { model: "claude-opus-5-5", cost: 0.04 }, c: { model: "claude-sonnet-5-5", cost: 0.01 } }, requests: { a: { by: { by: "api", model: "x", usage: { cost: 9 } } } } };
     return Hi3.apiUseWords(t) === "Angel through the API this fight: 3 answers, 7¢ (Sonnet 2, Opus 1)." && Hi3.apiUseWords({ requests: { a: { by: { by: "api" } } } }) === "" && Hi3.apiUseWords({}) === ""

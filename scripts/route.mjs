@@ -7,8 +7,10 @@
 /** The ways a fight's monsters can be thought for: the API (the bridge's worker), a chat (through the bridge's fight tools), or nobody. */
 export const ROUTES = ["api", "chat", "off"];
 export const ROUTE_WORDS = { api: "API", chat: "Chat", off: "Off" };
-export const MODELS = ["sonnet", "opus"];
-const MODEL_WORDS = { sonnet: "Sonnet", opus: "Opus" };
+/* Fable (0.40.0, F-4; Rhea, 2026-11-24: a Model column, Sonnet / Opus / Fable on every row Angel plays): hers to pick, never the rule's; it
+needs bridge 0.4.2, and an older bridge thinks a Fable pick with Sonnet (its fallback for a model it doesn't map) */
+export const MODELS = ["sonnet", "opus", "fable"];
+export const MODEL_WORDS = { sonnet: "Sonnet", opus: "Opus", fable: "Fable" };
 /** How many levels above the party a spellcaster must be for Opus (q-28-api). */
 export const OPUS_LEVELS_ABOVE = 2;
 /** The event kinds the API answers: a stall asks the thinker to look into something, which only a chat with tools can do. The fight-start look
@@ -19,7 +21,7 @@ export const API_KINDS = ["turn", "retry", "replan", "choice", "look"];
 export const routeOf = (own, fallback = "api") => ROUTES.includes(own) ? own : ROUTES.includes(fallback) ? fallback : "api";
 
 /** Which model thinks for one monster, and why, in words for the GM.
-    In: pick (her tick: "opus" | "sonnet" | null for the rule); leads (it leads its band now, a successor included); casts (its stat block has a
+    In: pick (her pick: "sonnet" | "opus" | "fable" | null for the rule); leads (it leads its band now, a successor included); casts (its stat block has a
     spell outside rituals); level, partyLevel (numbers, or null when unknown). Out: { model, by: "gm" | "rule", why, rule } where `rule` is what
     the rule alone would pick, so the window can say what unticking undoes. */
 export function modelFor({ pick = null, leads = false, casts = false, level = null, partyLevel = null } = {}) {

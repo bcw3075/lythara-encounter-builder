@@ -13,7 +13,7 @@ import { dropLibraryCache, dropOwn, giveOwn, kindFacts, libraryEntries, libraryE
 import { bandLog, bandLogWords, giveOrder, onRenderOrder, orderCard, orderPreview, setHearCall } from "./fight.mjs";
 import { acceptYield, backInFight, gmSpeak, onRenderSay, prisonerList, refuseYield, speakPreview, yieldedList } from "./fight.mjs";
 import { answerCommand, checkSides, commandList, dropBeliefs, onSideChange, pointCard, sideList } from "./fight.mjs";
-import { apiAlive, apiSpend, apiWanted, fightRoute, fixRoute, handOff, modelOf, setApiNote, setModelPick, setRoute, wakeAngel } from "./fight.mjs";
+import { apiAlive, apiSpend, apiWanted, endTurn, endTurnState, fightRoute, fixRoute, handOff, modelOf, playerBack, setApiNote, setModelPick, setRoute, wakeAngel } from "./fight.mjs";
 import { acceptEscapeLines, answerLook, dismissLook, escapeOffers, lookNow } from "./fight.mjs";
 import { barriersOf, clearBarriers, readiedNow, readyAct, removeBarrier, markUnseen, maskUnseen, chooseFor, onReactionCard, partyReactors, setReactionUsed, doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, onConditionGained, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCombatGone, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, onMemoryCard, onMemoryUpdate, onMemoryHp, notebookOf, previewRemember, rememberAdd, rememberCross, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
 
@@ -127,7 +127,7 @@ Hooks.on("updateToken", (tok, change) => { if (foundry.utils.hasProperty(change,
 for (const h of ["createJournalEntryPage", "updateJournalEntryPage", "deleteJournalEntryPage"]) Hooks.on(h, page => { onLibraryPage(page); });
 Hooks.on("deleteJournalEntry", entry => { if (entry.getFlag(ID, "mindsLibrary")) { dropLibraryCache(); redrawLibrary(); } });
 for (const h of ["createToken", "deleteToken"]) Hooks.on(h, tok => { redrawMinds(tok.parent); });
-Hooks.on("userConnected", () => { redrawTurns(); });
+Hooks.on("userConnected", (user, connected) => { redrawTurns(); playerBack(user, connected).catch(e => console.warn(`${ID} | back`, e)); });   /* a player back: their characters are theirs again (0.40.0, F-2) */
 /* the history: opened from Monster Turns; at End Encounter a GM is asked Save or Discard. This pre-hook returns false only to cancel that one delete
    (it then deletes again once asked); otherwise it returns nothing, like every other handler here. */
 Hooks.on(`${ID}.openHistory`, () => { openHistory(); });
@@ -153,11 +153,14 @@ Hooks.once("ready", () => {
          the runner's look at every monster's side (it runs by itself at each turn change and when an actor's side or owners change) */
       commands: { list: commandList, answer: answerCommand }, pointOut: { card: pointCard }, sides: { list: sideList, check: checkSides },
       /* the API route (0.31.0): `route.of(combat)` / `route.set(combat, "api" | "chat" | "off")` her "Thinks by" list; `route.model(token)` which
-         model thinks for it and why; `route.pick(scene, tokenIds, "opus" | "sonnet" | null)` her Model tick (null: the rule again). The rest is the
+         model thinks for it and why; `route.pick(scene, tokenIds, "sonnet" | "opus" | "fable" | null)` her Model pick (null: the rule again; Fable since 0.40.0). The rest is the
          bridge worker's door: `route.wanted()` (a read: is a fight on the API route, Wake Angel's latest press), `route.note(note)`, and
          `handOff(combat, requestId, reason, meta)` when the API can't plan a turn (it falls back to a chat, then the GM), `route.alive(generation)`
          while an answer takes long, `route.spend(combat, use)` for every answer the API gave. `route.wake(combat?, requestId?)` is the card's Wake
          Angel. The worker waits with `waitForEvent(cursor, s, { generation, route: "api" })` and hands in with `by: "api"`. */
+      /* End turn on the Monster Turns window (0.40.0, F-1): `endTurn.state(combat)` { can, left, busy, why }; `endTurn.end(combat, { left, round,
+         combatantId })` ends it like the tracker's Next turn (the GM's button; `left` is what she was asked about) */
+      endTurn: { state: endTurnState, end: endTurn },
       route: { of: fightRoute, set: setRoute, model: modelOf, pick: setModelPick, wanted: apiWanted, note: setApiNote, wake: wakeAngel, alive: apiAlive, spend: apiSpend }, handOff,
       /* the fight-start look (0.33.0): `look.now(combat)` the look as it stands; `look.answer(combat, i | "all", "accept" | "keep")` and
          `look.dismiss(combat)` are the GM's buttons on its card (never Angel's door: Angel answers the "look" event through submitPlan with

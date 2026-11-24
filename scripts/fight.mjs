@@ -23,7 +23,7 @@ import { breaksYield, cleanGmSay, gestureWords, orderHtml, sayHtml, speechFor, s
 import { canCommand, commandForPacket, commandInForce, commandSpent, commandTag, commandWords, degreeOf, outcomeOf, resultWords } from "./command.mjs";
 import { allyGets, allyResult, canPointOut, hasLost, pointLines, previewLines, squareFeet, withBelief, wrongSquare } from "./pointout.mjs";
 import { changedForPacket, sideCardWords, sideChange, sideTag, sideWord } from "./sides.mjs";
-import { HOLD_MS, apiNoteWords, modelFor, routeOf, wakeState, whoGets } from "./route.mjs";
+import { HOLD_MS, MODELS, apiNoteWords, modelFor, routeOf, wakeState, whoGets } from "./route.mjs";
 
 const ID = "lythara-encounter-builder", WORKBENCH = "xdy-pf2e-workbench", TOOLBELT = "pf2e-toolbelt", VISIONER = "pf2e-visioner", HUD = "pf2e-hud", GROUND_RADIUS = 10, STEP_MS = 20000, SETTLE_MS = 400, SCENE_MS = 30000, RESUMABLE = ["ready", "running", "held", "stopped", "saves"];
 export const runnerName = () => game.settings.get(ID, "runner");
@@ -56,7 +56,14 @@ export const lastNote = combat => latestNote(turns(combat).requests);
     Angel can run it like a monster, only when the GM ticks it; the module never ticks it. */
 export const partyMember = actor => !!actor?.isOfType?.("character") && !actor.hasPlayerOwner && actor.alliance === "party";   /* a villain built as a character isn't one (0.18.0 review) */
 /** Who Angel can run: a monster (any NPC, on either side) or a party member the GM plays. */
-export const runnable = t => (!!t?.actor?.isOfType?.("npc") && !t.actor.hasPlayerOwner) || partyMember(t?.actor);   /* 0.30.0 (R3-15): the module stops playing a monster once a player owns it */
+/** A player's own character (0.40.0, F-2; Rhea, 2026-11-24: "If the player isn't there and controling a chat [character], then the option for
+    Angel to take ofer should be there"): a party character a player owns. `ownerOnline`: one of its owning players is logged in now. */
+export const playerChar = actor => !!actor?.isOfType?.("character") && !!actor.hasPlayerOwner && actor.alliance === "party";
+export const ownerOnline = actor => game.users.some(u => !u.isGM && u.active && actor?.testUserPermission?.(u, "OWNER"));
+/** Angel can stand in for a player's character while its player is away; once ticked it stays Angel's until the tick clears (her pick, 12:47 AM:
+    when the player logs back in Angel finishes any turn in progress, and from the character's next turn it is theirs again: `playerBack`). */
+export const standIn = t => playerChar(t?.actor) && (!ownerOnline(t.actor) || !!t.getFlag?.(ID, "back")?.pending);   /* a leftover tick never plays a logged-in player (0.40.0 review 3) */
+export const runnable = t => (!!t?.actor?.isOfType?.("npc") && !t.actor.hasPlayerOwner) || partyMember(t?.actor) || standIn(t);   /* 0.30.0 (R3-15): the module stops playing a monster once a player owns it */
 /** On the party's side (a party member, or an NPC fighting with the party): fleeing off the map is a monster's escape, not theirs. */
 const onParty = actor => actor?.alliance === "party";
 /** What the thinker calls a character (0.18.0): never its name (the module's rule: no PC's name goes to the thinker), but its ancestry and class. */
@@ -408,7 +415,7 @@ async function onTurnChange(combat) {
   if (cmd && outcomeOf(cmd.degree) === "nothing") return cmd.own ? undefined : passTurn(combat, combatant, tok, "command");   /* taken with Play it myself: hers, and Angel isn't asked */
   if (cmd && outcomeOf(cmd.degree) === "gm" && !cmd.angel) return;
   if (!tok?.getFlag(ID, "run") || !runnable(tok)) return;
-  if (partyMember(tok.actor) && isDown(tok.actor)) return;   /* dying or unconscious: its turn (the recovery check) is the GM's, and every plan would be refused (0.18.0 review) */
+  if ((partyMember(tok.actor) || playerChar(tok.actor)) && isDown(tok.actor)) return;   /* dying or unconscious: its turn (the recovery check) is the GM's, and every plan would be refused (0.18.0 review) */
   /* the round as this call found it (0.29.0, u-81): a turn asked for late (a tick during the turn) could wait out the settle time while the round
      moved on and the same creature came up again, and was then stamped with the new round beside that round's own request: two for one turn */
   const round = combat.round, key = `${combat.id}.${round}.${combatant.id}`; if (starting.has(key)) return;
@@ -423,6 +430,7 @@ async function onTurnChange(combat) {
     if (combat.combatant?.id !== combatant.id || combat.round !== round) return;
     const opened = await ensureScene(combat);
     if (combat.combatant?.id !== combatant.id || combat.round !== round) return;
+    if (!tok.getFlag(ID, "run") || !runnable(tok)) return;   /* its tick went while the turn settled: a player back mid-start (0.40.0 review 4) */
     const id = foundry.utils.randomID(8), base = { state: "requested", combatantId: combatant.id, tokenId: tok.id, round, turn: combat.turn, at: Date.now(), since: clock(), settled, log: {}, ...(afterDelay ? { afterDelay: true } : {}) };
     if (!opened || !tok.object) return await save(combat, id, { ...base, labels: {}, note: cantOpen() });   /* no map, no packet: words instead of silent wrong answers */
     /* with the fight-start look's packets, one at a time (0.33.0): two packets built at once could give one label to two creatures */
@@ -444,7 +452,7 @@ function packetExtras(combat, tok, built) {
   return change;
 }
 /* Down: no HP left, dying, unconscious or dead. A creature the monster can see falling is the change that matters most. */
-const isDown = actor => !actor || (actor.hitPoints?.value ?? 1) <= 0 || !!actor.isDead || ["dying", "unconscious"].some(c => actor.hasCondition?.(c));
+export const isDown = actor => !actor || (actor.hitPoints?.value ?? 1) <= 0 || !!actor.isDead || ["dying", "unconscious"].some(c => actor.hasCondition?.(c));
 const conditionWords = actor => (actor.conditions?.active ?? []).map(c => c.value ? `${c.slug} ${c.value}` : c.slug);
 /** What the rest of the turn rests on, as things stand: the monster itself, and each creature it could name when asked (labels: label to token id). */
 function situationNow(combat, tok, labels = {}, others = null) {
@@ -487,6 +495,7 @@ export function onCombatUpdate(combat, change) {
   if ("turn" in change || "round" in change) turnReactions(combat, combat.previous?.tokenId ?? null).catch(e => console.warn(`${ID} | reactions`, e));   /* the turn that ended, read before anything awaits (review 7, 0.37.0) */   /* monsters' reactions (0.21.0): open offers lapse, the new creature's reaction comes back */
   if ("turn" in change || "round" in change) leaveWaiting(combat).catch(e => console.warn(`${ID} | waiting`, e)).then(() => dropInstantAreas(combat, currentRequest(combat) ? { id: currentRequest(combat).id, pos: 0 } : null)).catch(e => console.warn(`${ID} | areas`, e));
   if ("turn" in change || "round" in change) { const prev = { ...(combat.previous ?? {}) };   /* the turn that just ended, read before anything awaits */
+    finishBack(combat, prev).catch(e => console.warn(`${ID} | back`, e));   /* a player came back during that turn (0.40.0, F-2) */
     fallIfAloft(combat, prev).catch(e => console.warn(`${ID} | fall`, e)).then(() => sinkNote(combat, prev)).catch(e => console.warn(`${ID} | sink`, e)).then(() => settleClimbers(combat)).catch(e => console.warn(`${ID} | climbing`, e)).then(() => settleBurrowers(combat)).catch(e => console.warn(`${ID} | burrowing`, e)).then(() => noteWhatTheySense(combat)).catch(e => console.warn(`${ID} | memory`, e)).then(() => checkSides(combat)).catch(e => console.warn(`${ID} | sides`, e)).then(() => settleBands(combat)).catch(e => console.warn(`${ID} | bands`, e)).then(() => onTurnChange(combat)).catch(e => console.error(`${ID} | turn`, e));
     lookLater(combat); lookCheck(combat).catch(e => console.warn(`${ID} | look`, e)); }   /* the fight-start look (0.33.0): started at the fight's start, dropped once round 1 is over */
   if (combat.started && !turns(combat).hidStart) hiddenAtStart(combat).catch(e => console.warn(`${ID} | hidden at the start`, e));   /* B-7 (0.33.2) */
@@ -1115,13 +1124,14 @@ export function modelOf(tok, combat = null) {
   /* the party's level: the brief's, else the sheets' most common; unknown (no party found) means the rule can't call anyone 2+ above (review 12) */
   const pl = scene?.getFlag(ID, "brief")?.partyLevel, partyLevel = Number.isFinite(pl) ? pl : partyLevels().length ? suggestedLevel() : null;
   const pick = tok.getFlag(ID, "modelPick");
-  const m = modelFor({ pick: pick === "opus" || pick === "sonnet" ? pick : null, leads, casts, level: Number.isFinite(actor.level) ? actor.level : null, partyLevel });
+  const m = modelFor({ pick: MODELS.includes(pick) ? pick : null, leads, casts, level: Number.isFinite(actor.level) ? actor.level : null, partyLevel });
   return m.why ? { ...m, why: pro(m.why, P(tok, combat)) } : m;   /* "leads {their} band": its own pronoun (0.32.0, 0.31.0's known gap) */
 }
-/** Her tick on Monster Minds: "opus", "sonnet", or null to follow the rule again. On each token given. Any GM. */
+/** Her pick on the Monster Turns window's Model column or on Monster Minds (one setting, two places; 0.40.0, F-4): "sonnet", "opus", "fable",
+    or null to follow the rule again. On each token given. Any GM. */
 export async function setModelPick(scene, tokenIds, pick) {
   if (!game.user.isGM) throw new Error("Only a GM can do this.");
-  const v = pick === "opus" || pick === "sonnet" ? pick : null;
+  const v = MODELS.includes(pick) ? pick : null;
   const updates = tokenIds.map(id => scene.tokens.get(id)).filter(Boolean).map(t => ({ _id: t.id, [`flags.${ID}.${v ? "modelPick" : "-=modelPick"}`]: v }));
   if (updates.length) await scene.updateEmbeddedDocuments("Token", updates);
   return updates.length;
@@ -1884,7 +1894,6 @@ async function runAbility(combat, id, i, step, tok, target) {
    spell attack's damage as a hit; its DOUBLE button is the critical); a save spell waits for the target's save on Toolbelt's row on the spell card: a
    player rolls their own and the turn waits with no timer, while a creature no player owns, or one whose player is offline, is rolled by the module
    through Toolbelt's own buttons. A basic save's damage is applied by degree. Anything else a spell does is the GM's, from its card. */
-const ownerOnline = actor => game.users.some(u => !u.isGM && u.active && actor?.testUserPermission?.(u, "OWNER"));
 /** The degree of a creature's save on a spell's card, from Toolbelt's row (its flag, which Workbench reads too), or null. */
 /* ---------- Hide, Sneak and Seek ---------- */
 /* Rhea, 2026-11-07: PF2e's own action posts the secret card, and the module presses Visioner's own buttons on it on this page (Apply Changes; Start Sneak
@@ -2935,8 +2944,8 @@ export const notePress = (combat, id, what, extra = {}) => save(combat, id, { pr
     only, so a ticked party member doesn't come up ticked in the next fight (0.18.0 review). */
 export async function untickParty(combat) {
   if (!isRunner()) return;
-  for (const c of combat.combatants) { const tok = c.token; if (!tok || !partyMember(tok.actor)) continue;
-    for (const k of ["run", "auto"]) if (tok.getFlag(ID, k) != null) await tok.unsetFlag(ID, k).catch(e => console.warn(`${ID} | untick`, e)); }
+  for (const c of combat.combatants) { const tok = c.token; if (!tok || !(partyMember(tok.actor) || playerChar(tok.actor))) continue;   /* a player's character Angel stood in for too (0.40.0) */
+    for (const k of ["run", "auto", "back", "modelPick"]) if (tok.getFlag(ID, k) != null) await tok.unsetFlag(ID, k).catch(e => console.warn(`${ID} | untick`, e)); }
 }
 
 /* ---------- player reactions during a monster's turn (0.20.0) ---------- */
@@ -5716,4 +5725,44 @@ export async function acceptEscapeLines(combat, accepted = {}) {
     } catch (e) { console.error(`${ID} | escape lines`, e); ui.notifications?.warn(`I couldn't add what ${tok.name} saw: ${e.message}`); }
   }
   return done;
+}
+
+/* ---------- the Monster Turns window's End turn and a player coming back (0.40.0, F-1 and F-2) ---------- */
+/** What End turn would leave undone for the creature whose turn it is: { left } plan steps not yet carried out (0 when there is no plan, or it is
+    done), and `busy` while a step is being carried out or a save is awaited, when ending would cut it off half way. */
+export function endTurnState(combat) {
+  if (!combat?.started) return { can: false, why: "The fight hasn't started." };
+  const r = currentRequest(combat); if (!r) return { can: true, left: 0 };
+  if (r.state === "running" || r.go) return { can: false, busy: true, why: "A step is being carried out: wait for it, or press Hold." };
+  const n = r.steps?.length ?? 0, pos = r.pos ?? 0, left = ["ready", "held", "stopped"].includes(r.state) && !idlePlan(r.steps) ? Math.max(0, n - pos) : 0;
+  return { can: true, left, id: r.id };
+}
+/** End turn (F-1; Rhea, 2026-11-24: works like the tracker's Next turn). The turn's request, if any, is the GM's from here (as Play it myself),
+    with a note of what was left, and the next creature is up. `left` is what the window asked her about, so a plan that moved on meanwhile is
+    refused rather than ended on a question she didn't see. */
+export async function endTurn(combat, { left = 0, round = null, combatantId = null } = {}) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  if (round != null && (combat.round !== round || combat.combatant?.id !== combatantId)) throw new Error("The turn has already moved on.");
+  const st = endTurnState(combat); if (!st.can) throw new Error(st.why);
+  if (st.left !== left) throw new Error("The plan changed while you were asked: press End turn again.");
+  if (st.id) { const r = request(combat, st.id);
+    if (r && !["done", "manual", "saves", "fled"].includes(r.state)) await save(combat, st.id, { state: "manual", tookAt: clock(), endedBy: game.user.name, ...(st.left ? { note: joinNote(combat, st.id, `Ended with End turn, ${st.left} step${st.left === 1 ? "" : "s"} not taken.`) } : {}) }); }
+  await combat.nextTurn();
+}
+/** A player logged back in (F-2; her pick at 12:47 AM): each of their characters Angel stands in for is theirs again. One whose turn is in progress
+    keeps Angel until that turn ends (`back.pending`, finished at the turn change); the others are unticked now. The row then says they're back.
+    On the runner only. A player logging out clears the tag: the row says "player away" again. */
+export async function playerBack(user, connected) {
+  if (!isRunner() || !user || user.isGM) return;
+  for (const combat of game.combats) { const scene = sceneOf(combat); if (!scene) continue;
+    for (const c of combat.combatants) { const tok = c.token; if (!tok || !playerChar(tok.actor) || !tok.actor.testUserPermission(user, "OWNER")) continue;
+      if (!connected) { if (tok.getFlag(ID, "back") != null && !ownerOnline(tok.actor)) await tok.unsetFlag(ID, "back").catch(e => console.warn(`${ID} | back`, e)); continue; }
+      if (!tok.getFlag(ID, "run") && !tok.getFlag(ID, "auto")) continue;
+      const inTurn = combat.started && combat.combatant?.tokenId === tok.id;
+      await tok.update({ [`flags.${ID}.back`]: { round: combat.round, pending: inTurn, user: user.name }, ...(inTurn ? {} : { [`flags.${ID}.-=run`]: null, [`flags.${ID}.-=auto`]: null }) }).catch(e => console.warn(`${ID} | back`, e)); } }
+}
+/** The turn of a character whose player came back has ended: Angel's ticks go now (F-2). prev: Combat#previous, read before anything awaits. */
+async function finishBack(combat, prev) {
+  const tok = prev?.combatantId ? combat.combatants.get(prev.combatantId)?.token : null; const b = tok?.getFlag(ID, "back"); if (!b?.pending) return;
+  await tok.update({ [`flags.${ID}.back`]: { ...b, pending: false }, [`flags.${ID}.-=run`]: null, [`flags.${ID}.-=auto`]: null });
 }
