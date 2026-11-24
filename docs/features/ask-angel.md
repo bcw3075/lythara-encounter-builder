@@ -42,6 +42,5 @@ Record every id below in the release's change record when this feature, or a fea
 - The answer is written only after every await, by reading the ask again and writing it whole (`==askAngel`) when its seq still matches and it has no answer: a New conversation or a new message meanwhile wins (review 1). Not a lock: a clear sent while the answer's own write is on its way can still lose (test build 1 saw it with both sent from one page at once); the window is one round trip to the server.
 
 ## Open items
-- Angel's answer through the real API (bridge 0.4.4 with its key) is Rhea's to install and see.
-- The read-only Notion key is Rhea's: in Notion, Settings, Connections, Develop or manage integrations, a new internal integration with only "Read content", then share the campaign's pages with it (a page's ⋯ menu, Connections), and paste its secret into the bridge's config.json as `"notionApiKey"`; restart the bridge. Not seen live.
+- The read-only Notion key is Rhea's: in Notion, Settings, Connections, Develop or manage integrations, a new internal integration with only "Read content", then share the campaign's pages with it (a page's ⋯ menu, Connections), and paste its secret into the bridge's config.json as `"notionApiKey"`; restart the bridge. Done and seen live on 2026-11-24 (u-173): the bridge's status shows a Notion key, and a real ask read two of her pages and named them.
 - Cost per ask is measured on each answer (shown in the box and in the bridge's log) but not yet seen on real asks: the guess was 10 to 30 cents a build.
