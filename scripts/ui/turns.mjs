@@ -247,7 +247,7 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     const modelSel = t => { const m = modelOf(t, c), mine = m.by === "gm";
       return `<select class="leb-msel${mine ? " leb-pick" : ""}" data-model title="${esc(mine ? `Your pick ✎ · the rule would choose ${modelName(m.rule)}: choose that to go back to the rule` : pro(`The rule's pick${m.why ? `: ${m.why}` : ""}`, formsFor(c, t.id)))}">${MODELS.map(k => `<option value="${k}" ${k === m.model ? "selected" : ""}>${MODEL_WORDS[k]}${k === m.model && mine ? " ✎" : ""}</option>`).join("")}</select>`; };
     const tagsFor = (x, t) => { const out = [];
-      if (playerChar(x.actor)) { const back = t.getFlag(ID, "back");
+      if (playerChar(x.actor)) { const back = ownerOnline(x.actor) ? t.getFlag(ID, "back") : null;   /* a "back" the runner never saw cleared (a relaunch) reads as away */
         if (back) out.push(`<span class="leb-tag leb-tag-ok" title="${esc(back.pending ? "Their player is back: Angel finishes this turn, then it's theirs" : "Their player is back and plays them")}">back</span>`);
         else if (!ownerOnline(x.actor)) out.push(`<span class="leb-tag leb-tag-away" title="Nobody who plays this character is logged in: Angel can play them">player away</span>`);
         else out.push(`<span class="leb-tag leb-tag-away" title="Their player is logged in and plays them">player</span>`); }
