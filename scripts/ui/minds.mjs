@@ -6,6 +6,8 @@ import { ID, findCreatures } from "../builder.mjs";
 import { CAPS, LAYER_WORDS, LIBRARY_LINES, LINES, LINE_LABEL, PICKS, SUGGEST, assemble, cleanLine, libraryChanges, lineWarnings, lineWords, peopleKey } from "../minds.mjs";
 import { BAND_CAPS, FALL_BACK, NATURE, NATURE_LABEL, NATURE_PICKS, NATURE_SUGGEST, NATURE_LAYER_WORDS, bandId, cleanPart, natureWords } from "../bands.mjs";
 import { bandViews, joinBand, removeBand, setBand } from "../bandlib.mjs";
+import { partyAnswer, partyEnsure, partyEntries, partyFor, partyLost, partyRelink, partySet } from "../library.mjs";
+import { PARTY_CAPS, PARTY_HINT, PARTY_LABEL, PARTY_LINES, lineTag } from "../party.mjs";
 import { pronounOf, dropOwn, giveOwn, kindFacts, libraryEntries, libraryExport, libraryGet, libraryImport, libraryPut, libraryRemove, mindRows, partyPeople, rowActor, rowProfile, setLines } from "../library.mjs";
 import { formsOf, fromGender, pro } from "../pronoun.mjs";
 import { modelOf, setModelPick, sceneOf, setStart, startOf } from "../fight.mjs";
@@ -34,6 +36,12 @@ const STYLE = `.leb-minds .window-content{overflow:hidden!important;padding:0;di
 .leb-minds table.lm-tbl{width:100%;border-collapse:collapse;table-layout:fixed}.leb-minds .lm-tbl td,.leb-minds .lm-tbl th{padding:6px 8px;border-top:1px solid #8883;text-align:left;vertical-align:top;word-wrap:break-word}
 .leb-minds .lm-tbl th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;border-top:0}.leb-minds .lm-tbl td.lm-cell{cursor:pointer}.leb-minds .lm-tbl td.lm-cell:hover{background:#8882}.leb-minds .lm-same{opacity:.5}
 .leb-minds .lm-tbl th a{margin-left:6px;opacity:.7}.leb-minds input.lm-search{width:100%;margin-bottom:6px}
+.leb-minds .lm-ptag{font-style:normal;font-size:11px;padding:0 6px;border-radius:9px;white-space:nowrap;border:1px solid #6f9fd8;color:#6f9fd8}.leb-minds .lm-ptag.gm{border-color:#d9a441;color:#d9a441}.leb-minds .lm-ptag.few{border-color:#d07a4a;color:#d07a4a}
+.leb-minds .lm-badge{background:#d9a441;color:#1d1b1a;border-radius:9px;padding:0 6px;font-size:11px;font-weight:600;align-self:center}.leb-minds .lm-it .lm-sub{display:block;opacity:.7;font-size:11px}
+.leb-minds .lm-sugg{border:1px solid #d9a441;border-radius:5px;background:#d9a44112;padding:8px 10px;margin:8px 0}.leb-minds .lm-sugg h3{margin:0 0 4px;font-size:14px;color:#d9a441;border:0}
+.leb-minds .lm-s{display:grid;grid-template-columns:1fr auto;gap:4px 10px;border-top:1px solid #8883;padding-top:6px;margin-top:6px}.leb-minds .lm-s .lm-why{grid-column:1/-1;opacity:.75;font-size:12px}.leb-minds .lm-s .lm-was{opacity:.6;text-decoration:line-through}
+.leb-minds .lm-s button{width:auto}.leb-minds .lm-s button.ok{background:#5fae6a;color:#0f1a10;font-weight:600}.leb-minds .lm-lost{margin:6px 0;padding:6px 9px;border:1px solid #d07a4a;border-radius:5px;background:#d07a4a22}
+.leb-minds table.lm-ptbl td{padding:7px 6px;border-top:1px solid #8883;vertical-align:top}.leb-minds table.lm-ptbl td.k{width:110px;opacity:.8;font-weight:600}.leb-minds table.lm-ptbl td.lm-cell{cursor:pointer}.leb-minds table.lm-ptbl td.lm-cell:hover{background:#8882}
 .lm-dialog textarea{width:100%;min-height:70px}.lm-dialog label.lm-line{display:block;margin:4px 0}.lm-dialog .lm-old{opacity:.6}`;
 const ensureStyle = () => { if (!document.getElementById("leb-minds-style")) { const s = document.createElement("style"); s.id = "leb-minds-style"; s.textContent = STYLE; document.head.append(s); } };
 const { ApplicationV2, DialogV2 } = foundry.applications.api;
@@ -42,13 +50,14 @@ const refKey = ref => JSON.stringify(ref ?? null);
 /* the line under the Pronoun row: how the pick reads, so she sees it before saving (it follows a click on a pill and her typing; 0.30.1 live test) */
 const pronHint = (who, line) => { const f = line?.pick && cleanLine("pronoun", line) ? formsOf(line) : null; return `How cards, chat lines and the History write about ${who}${f ? `: “${pro("{they} {is|are} hurt", f)}”, “${pro("{their} turn", f)}”` : ""}.`; };
 const tag = (from, name) => `<i class="lm-tag ${esc(from)}">${esc(LAYER_WORDS[from] ?? from)}</i>${name ? esc(name) : ""}`;
+const partyTagHtml = l => { const t = lineTag(l); return t ? `<i class="lm-ptag ${t.tone}">${esc(t.words)}</i>` : ""; };
 const warnHtml = (text, people, library = false) => { const w = lineWarnings(text, people), out = [];
   for (const n of w.names) out.push(library ? `“${esc(n)}” in this line is a party member's name. Library text is used in every encounter, so it should name nobody.` : `“${esc(n)}” in this line is a party member's name. A monster only gets a line like this while it perceives that creature. Reword it?`);
   if (w.stats) out.push("This reads like a number off a character sheet. A monster couldn't know it.");
   return out.map(x => `<div class="lm-warn">⚠ ${x}</div>`).join(""); };
 const input = (title, content, ok = "Save", width = 520) => DialogV2.input({ window: { title }, classes: ["lm-dialog"], position: { width }, content, ok: { label: ok }, rejectClose: false });
 let libraryApp = null;
-export const openLibrary = () => { libraryApp ??= new LibraryApp(); libraryApp.render(true); return libraryApp; };
+export const openLibrary = (sel = null) => { libraryApp ??= new LibraryApp(); if (typeof sel === "string" && sel) { libraryApp.sel = sel; libraryApp.message = ""; } libraryApp.render(true); return libraryApp; };
 export const redrawLibrary = () => { if (libraryApp?.rendered) libraryApp.render(); };
 
 /* ---------- Monster Minds: one scene ---------- */
@@ -67,11 +76,13 @@ export class MindsApp extends ApplicationV2 {
     let at = bandSel ? null : this.find(rows);
     if (!at && !bandSel && rows.length) { this.sel = refKey(rows[0].ref); this.draft = {}; at = this.find(rows); }
     const built = rows.filter(r => Number.isInteger(r.ref.row)), loose = rows.filter(r => r.ref.kind), party = rows.filter(r => r.party);
-    const item = r => `<div class="lm-it${refKey(r.ref) === this.sel ? " on" : ""}" data-sel="${esc(refKey(r.ref))}">${esc(r.name)} <small>${r.party ? (r.owned ? "a player's" : pro("Angel plays {them}", (() => { try { return pronounOf(scene?.tokens.get(r.tokens?.[0]), null); } catch { return undefined; } })())) : `× ${r.count}`}</small></div>${r.own.map(o => `<div class="lm-it sub${refKey(o.ref) === this.sel ? " on" : ""}" data-sel="${esc(refKey(o.ref))}">${esc(o.name)} <small>own profile</small></div>`).join("")}`;
+    const item = r => `<div class="lm-it${refKey(r.ref) === this.sel ? " on" : ""}" data-sel="${esc(refKey(r.ref))}">${esc(r.name)} <small>${r.party ? (r.page ? pro("plays by {their} profile", (() => { try { return pronounOf(scene?.tokens.get(r.tokens?.[0]), null); } catch { return undefined; } })()) : r.owned ? "a player's" : pro("Angel plays {them}", (() => { try { return pronounOf(scene?.tokens.get(r.tokens?.[0]), null); } catch { return undefined; } })())) : `× ${r.count}`}</small></div>${r.own.map(o => `<div class="lm-it sub${refKey(o.ref) === this.sel ? " on" : ""}" data-sel="${esc(refKey(o.ref))}">${esc(o.name)} <small>own profile</small></div>`).join("")}`;
     const side = `${built.length ? `<h4>In this encounter</h4>${built.map(item).join("")}` : ""}${loose.length ? `<h4>${built.length ? "Not placed by the build" : "On this map"}</h4>${loose.map(item).join("")}` : ""}${party.length ? `<h4>With the party</h4>${party.map(item).join("")}` : ""}<h4>Bands</h4>${bands.map(v => `<div class="lm-it${`band:${v.band.key}` === this.sel ? " on" : ""}" data-sel="band:${esc(v.band.key)}">${esc(v.band.name)} <small>${v.members} in it</small></div>`).join("")}<div class="lm-it" data-action="newBand"><span><i class="fa-solid fa-plus"></i> New band…</span></div>`;
     if (bandSel) return this.bandHtml(bandSel, side);
     if (!at) return `<div class="lm-body"><div class="lm-side">${side}</div><div class="lm-main"><p>No monsters on this map yet. Build an encounter or put monsters on it, then open this again.</p></div></div><div class="lm-foot"><button type="button" class="lm-left" data-action="library"><i class="fa-solid fa-book"></i> Minds Library…</button></div>`;
     const { row, ref } = at; this.row = row; this.ref = ref;
+    /* a party member's page (0.45.0, F-9, 9-6): its profile lives in the Party section of the Minds Library, tied to the character; this view only says so */
+    if (row.party && (row.page || row.learn)) return this.partyHtml(row, side);   /* a page tied to a character no longer in the party still opens (review 18) */
     const profile = this.profile = await rowProfile(scene, row, ref), layer = this.layer = this.layerOf(ref), people = partyPeople(scene);
     /* what a line falls back to when this layer's is taken away: for a monster's own profile only the stat block (its own is the whole profile) */
     const below = this.below = assemble(profile.layers.filter(l => l.from !== layer && (layer !== "own" || l.from === "statblock"))).lines, mine = this.mine = profile.layers.find(l => l.from === layer)?.lines ?? {};
@@ -112,6 +123,14 @@ export class MindsApp extends ApplicationV2 {
     return `<div class="lm-body"><div class="lm-side">${side}</div><div class="lm-main"><div class="lm-head">${head}</div>${bandRow}${modelRow}${startRow}${LINES.map(lineRow).join("")}
       <div class="lm-note">Tags show where each line comes from. ${single ? "This profile is this monster's alone." : "Changing a line here changes it for this encounter only, until you choose Save to library."} Angel is told these lines at every plan; a line naming a party member is left out until the monster perceives them.</div></div></div>
       ${this.message ? `<div class="lm-msg">${esc(this.message)}</div>` : ""}<div class="lm-foot">${foot}</div>`;
+  }
+  partyHtml(row, side) {
+    const tok = this.scene.tokens.get(row.tokens?.[0]), page = tok ? partyFor(tok.actor) : null, f = (() => { try { return pronounOf(tok, null); } catch { return undefined; } })();
+    const lines = page ? PARTY_LINES.filter(k => page.lines[k]).map(k => `<div class="lm-row"><label>${esc(PARTY_LABEL[k])}</label><div>${esc(page.lines[k].text)}</div><div class="lm-from">${partyTagHtml(page.lines[k])}</div></div>`).join("") : "";
+    const body = page ? `<p>${esc(pro("Angel plays {them} by {their} profile in the Party section of the Minds Library, where it is learned from how {they} {is|are} really played.", f))}${page.suggestions.length ? ` <b>${page.suggestions.length} suggestion${page.suggestions.length === 1 ? "" : "s"} waiting for you there.</b>` : ""}</p>${lines || `<p class="lm-note">Nothing written on ${esc(pro("{their}", f))} page yet.</p>`}`
+      : `<p>${esc(pro("{They} {has|have} no page in the Party section of the Minds Library yet. Make one, and Angel plays {them} by it (and learns it from the fights you save).", f))}</p>`;
+    return `<div class="lm-body"><div class="lm-side">${side}</div><div class="lm-main"><div class="lm-head"><b>${esc(row.name)}</b><small>with the party</small></div>${body}</div></div>${this.message ? `<div class="lm-msg">${esc(this.message)}</div>` : ""}
+      <div class="lm-foot"><button type="button" class="lm-left" data-action="library"><i class="fa-solid fa-book"></i> Minds Library…</button>${page ? `<button type="button" data-action="partyOpen" class="lm-go"><i class="fa-solid fa-user"></i> Open ${esc(pro("{their}", f))} page</button>` : `<button type="button" data-action="partyMake" class="lm-go"><i class="fa-solid fa-plus"></i> Make ${esc(pro("{their}", f))} page</button>`}</div>`;
   }
   _replaceHTML(html, content) { const top = content.querySelector(".lm-main")?.scrollTop ?? 0; content.innerHTML = html; const box = content.querySelector(".lm-main"); if (box) box.scrollTop = top; }
   /* a field's value goes into the draft at once, so a redraw loses nothing */
@@ -273,6 +292,8 @@ export class MindsApp extends ApplicationV2 {
   async act(a) {
     const scene = this.scene, row = this.row, ref = this.ref;
     if (a === "library") return openLibrary();
+    if (a === "partyOpen" || a === "partyMake") { const tok = scene.tokens.get(row.tokens?.[0]); if (!tok?.actor) return;
+      if (a === "partyMake") await partyEnsure(tok.actor, { token: tok }); return openLibrary(partyFor(tok.actor)?.key ?? null); }
     if (["newBand", "saveBand", "renameBand", "removeBand", "bandToLibrary", "pickSpot"].includes(a)) return this.actBand(a);
     if (["save", "giveOwn", "toLibrary"].includes(a)) {
       for (const k of LINES) if (this.element.querySelector(`[name="${k}.text"]`)) this.take(k);   /* a field still being typed in counts */
@@ -306,19 +327,26 @@ export class MindsApp extends ApplicationV2 {
 }
 
 /* ---------- the Minds Library ---------- */
-const NO_PEOPLE = "(no people)", GROUPS = "(groups)";
+const NO_PEOPLE = "(no people)", GROUPS = "(groups)", PARTY_NEW = "party-new:", PEOPLES = "(peoples)";
 export class LibraryApp extends ApplicationV2 {
   static DEFAULT_OPTIONS = { id: "leb-minds-library", classes: ["leb-minds"], window: { title: "Minds Library", resizable: true }, position: { width: 980, height: 640, top: 50 } };
   constructor() { super(); this.sel = null; this.search = ""; this.message = ""; }
   async _renderHTML() {
-    ensureStyle(); const all = libraryEntries(), peoples = all.filter(e => e.type === "people").sort((a, b) => a.name.localeCompare(b.name)), kinds = all.filter(e => e.type === "kind").sort((a, b) => a.name.localeCompare(b.name));
+    ensureStyle(); const all = libraryEntries(), pages = partyEntries().sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "player" ? -1 : 1) || a.name.localeCompare(b.name));
+    /* the Party section (0.45.0, F-9, 9-6): above the monster peoples, each party member with a page, then PF2e's party members who have none yet */
+    const noPage = (game.actors.party?.members ?? []).filter(m => !pages.some(e => e.actorId === m.id));
+    const partySide = `<h4>Party</h4>${pages.map(e => `<div class="lm-it${e.key === this.sel ? " on" : ""}" data-sel="${esc(e.key)}"><span>${esc(e.name)}<span class="lm-sub">${esc([e.what, e.kind === "player" ? "player" : "companion"].filter(Boolean).join(" · "))}${game.actors.get(e.actorId) ? "" : " · not tied to an actor here"}</span></span>${e.suggestions.length ? `<span class="lm-badge" title="suggestions waiting">${e.suggestions.length}</span>` : ""}</div>`).join("")}${noPage.map(m => `<div class="lm-it${PARTY_NEW + m.id === this.sel ? " on" : ""}" data-sel="${PARTY_NEW}${esc(m.id)}"><span>${esc(m.name)}<span class="lm-sub">no page yet</span></span></div>`).join("")}<div class="lm-it" data-action="addParty"><span><i class="fa-solid fa-plus"></i> Add a party member…</span></div>`;
+    if (typeof this.sel === "string" && (this.sel.startsWith("party:") || this.sel.startsWith(PARTY_NEW))) return this.partyPage(partySide, pages);
+    const peoples = all.filter(e => e.type === "people").sort((a, b) => a.name.localeCompare(b.name)), kinds = all.filter(e => e.type === "kind").sort((a, b) => a.name.localeCompare(b.name));
     const q = this.search.trim().toLowerCase(), hit = e => !q || e.name.toLowerCase().includes(q) || Object.values(e.lines).some(l => (l.text ?? "").toLowerCase().includes(q));
     const of = key => kinds.filter(k => (k.people ?? null) === key), orphans = kinds.filter(k => !k.people || !peoples.some(p => p.key === k.people));
     const groups = [...peoples.map(p => ({ key: p.key, name: p.name, people: p, kinds: of(p.key) })), ...(orphans.length ? [{ key: NO_PEOPLE, name: "Kinds with no people", people: null, kinds: orphans }] : [])].filter(g => !q || (g.people && hit(g.people)) || g.kinds.some(hit));
     const groupsAll = all.filter(e => e.type === "band").sort((a, b) => a.name.localeCompare(b.name));
-    if (this.sel !== GROUPS && !groups.some(g => g.key === this.sel)) this.sel = groups[0]?.key ?? (groupsAll.length ? GROUPS : null);
+    /* "Show the monster peoples" asks for this view even when it is empty (review 19), so it never falls through to the first party page */
+    if (this.sel !== GROUPS && !groups.some(g => g.key === this.sel)) this.sel = groups[0]?.key ?? (groupsAll.length ? GROUPS : this.sel === PEOPLES ? PEOPLES : pages[0]?.key ?? null);
+    if (this.sel?.startsWith?.("party:")) return this.partyPage(partySide, pages);
     const g = groups.find(x => x.key === this.sel) ?? null;
-    const side = `<input type="search" class="lm-search" placeholder="Search…" value="${esc(this.search)}"><h4>Peoples and families</h4>${groups.map(x => `<div class="lm-it${x.key === this.sel ? " on" : ""}" data-sel="${esc(x.key)}">${esc(x.name)} <small>${x.kinds.length} kind${x.kinds.length === 1 ? "" : "s"}</small></div>`).join("") || `<div class="lm-later">${q ? "Nothing matches." : "Nothing saved yet."}</div>`}<h4>Kinds of group</h4><div class="lm-it${this.sel === GROUPS ? " on" : ""}" data-sel="${GROUPS}">All kinds of group <small>${groupsAll.length}</small></div>`;
+    const side = `<input type="search" class="lm-search" placeholder="Search…" value="${esc(this.search)}">${partySide}<h4>Monster peoples and families</h4>${groups.map(x => `<div class="lm-it${x.key === this.sel ? " on" : ""}" data-sel="${esc(x.key)}">${esc(x.name)} <small>${x.kinds.length} kind${x.kinds.length === 1 ? "" : "s"}</small></div>`).join("") || `<div class="lm-later">${q ? "Nothing matches." : "Nothing saved yet."}</div>`}<h4>Kinds of group</h4><div class="lm-it${this.sel === GROUPS ? " on" : ""}" data-sel="${GROUPS}">All kinds of group <small>${groupsAll.length}</small></div>`;
     let main = `<p>The library is empty. Save a kind from Monster Minds with <b>Save to library…</b>, or start with <b>New people…</b> below.</p>`;
     if (g) {
       const cols = [...(g.people ? [g.people] : []), ...g.kinds], cell = (e, k) => { const l = e.lines[k], base = e.type === "kind" && g.people ? g.people.lines[k] : null;
@@ -339,11 +367,55 @@ export class LibraryApp extends ApplicationV2 {
       <div class="lm-foot"><button type="button" data-action="import">Import…</button><button type="button" data-action="export">Export…</button><button type="button" data-action="newPeople">New people…</button><button type="button" data-action="newKind">New kind…</button><button type="button" data-action="newGroup">New kind of group…</button></div>`;
   }
   _replaceHTML(html, content) { content.innerHTML = html; }
+  /* a party member's page (9-5, 9-6): which actor it is tied to and what it was learned from, the waiting suggestions with Accept / Keep mine, the
+     seven lines with whose words each is, Relink and Export at the foot */
+  partyPage(partySide, pages) {
+    const side = `<input type="search" class="lm-search" placeholder="Search…" value="${esc(this.search)}">${partySide}<h4>Monster peoples and families</h4><div class="lm-it" data-sel="${PEOPLES}">Show the monster peoples</div>`;
+    const foot = btns => `<div class="lm-foot"><button type="button" data-action="import">Import…</button><button type="button" data-action="export">Export…</button>${btns}</div>`;
+    if (this.sel.startsWith(PARTY_NEW)) { const a = game.actors.get(this.sel.slice(PARTY_NEW.length));
+      return `<div class="lm-body"><div class="lm-side">${side}</div><div class="lm-main"><div class="lm-head"><b>${esc(a?.name ?? "A party member")}</b><small>no page yet</small></div><p>Make a page and Angel plays this character by it whenever she plays them, and learns it from the fights you save to the History. Every line she learns or drafts waits for your Accept.</p></div></div>${this.message ? `<div class="lm-msg">${esc(this.message)}</div>` : ""}${foot(`<button type="button" class="lm-go" data-make="${esc(a?.id ?? "")}"><i class="fa-solid fa-plus"></i> Make a page</button>`)}`; }
+    const e = pages.find(x => x.key === this.sel); if (!e) { this.sel = null; return this._renderHTML(); }
+    const actor = game.actors.get(e.actorId), lost = actor ? null : partyLost().find(x => x.entry.key === e.key);
+    const last = e.sessions.at(-1), meta = `${actor ? `Tied to the actor “${esc(actor.name)}”` : `<b>Not tied to an actor in this world</b>`} · learned from ${e.sessions.length} session${e.sessions.length === 1 ? "" : "s"}, ${e.fights.length} fight${e.fights.length === 1 ? "" : "s"}${last ? ` · last session ${esc(last)}` : ""}`;
+    const lostBox = lost ? `<div class="lm-lost">The actor this page was tied to isn't in this world (it was rebuilt, or the page came from another world).${lost.candidates.length ? ` ${lost.candidates.map(c => `<button type="button" data-relinkto="${esc(c.id)}">Tie it to “${esc(game.actors.get(c.id)?.name ?? c.name)}”</button>`).join(" ")}` : " Use Relink to another actor below."}</div>` : "";
+    const sessions = [...new Set(e.suggestions.map(x => x.session).filter(Boolean))], from = sessions.length === 1 ? ` from the session of ${esc(sessions[0])}` : sessions.length ? " from recent sessions" : "";
+    const sugg = e.suggestions.length ? `<div class="lm-sugg"><h3>${e.suggestions.length} suggestion${e.suggestions.length === 1 ? "" : "s"}${from}</h3>${e.suggestions.map(x => { const was = e.lines[x.line];
+      return `<div class="lm-s" data-sid="${esc(x.id)}"><div><b>${esc(PARTY_LABEL[x.line])}:</b> ${was ? `<span class="lm-was">${esc(was.text)}</span> ` : ""}${esc(x.text)}</div><div><button type="button" class="ok" data-answer="accept">Accept</button> <button type="button" data-answer="keep">${was ? "Keep mine" : "Leave it out"}</button></div>${x.why ? `<div class="lm-why">Why: ${esc(x.why)}${x.seen ? ` ${was ? "Changes a line" : "New line"}, seen in ${x.seen} fight${x.seen === 1 ? "" : "s"}.` : ""}</div>` : ""}</div>`; }).join("")}</div>` : "";
+    const rows = PARTY_LINES.map(k => { const l = e.lines[k]; return `<tr><td class="k">${esc(PARTY_LABEL[k])}</td><td class="lm-cell" data-pline="${k}" title="Click to edit">${l ? `${esc(l.text)} ${partyTagHtml(l)}` : `<span class="lm-same">(nothing yet)</span>`}</td></tr>`; }).join("");
+    return `<div class="lm-body"><div class="lm-side">${side}</div><div class="lm-main"><div class="lm-head"><b>${esc(e.name)}</b><small>${meta}</small></div>${lostBox}${sugg}
+      <table class="lm-ptbl" style="width:100%;border-collapse:collapse">${rows}</table>
+      <div class="lm-note">Click any line to edit it; your words are never overwritten by Angel. Angel plays this character by these lines only while she plays them (an away player, or a companion you ticked), and learns them from the fights you save: never from a fight you discard, or one she played for them. A line seen in only one fight has an orange tag. GM only: nothing secret here, as a player with the console open could read it.</div></div></div>
+      ${this.message ? `<div class="lm-msg">${esc(this.message)}</div>` : ""}${foot(`<button type="button" data-action="relink">Relink to another actor…</button><button type="button" data-action="exportParty">Export this page…</button><button type="button" data-remove="${esc(e.key)}">Remove page…</button>`)}`;
+  }
+  async editParty(k) {
+    const e = libraryGet(this.sel); if (!e) return; const l = e.lines[k];
+    const data = await input(`${e.name}: ${PARTY_LABEL[k]}`, `<p class="lm-old">${esc(PARTY_HINT[k])}</p><textarea name="text" maxlength="${k === "notes" ? PARTY_CAPS.notes : PARTY_CAPS.line}">${esc(l?.text ?? "")}</textarea><label class="lm-line"><input type="checkbox" name="clear"> Take this line away</label>`); if (!data) return;
+    const text = String(data.text ?? "").trim(), next = data.clear || !text ? null : text;
+    if ((next ?? null) === (l?.text ?? null)) return;   /* unchanged: nothing is written as hers */
+    await partySet(e.key, { [k]: next }); this.message = "Saved."; this.render();
+  }
+  async addParty() {
+    const pick = [...game.actors.filter(a => a.isOfType?.("character") || game.actors.party?.members?.some(m => m.id === a.id))].filter(a => !partyFor(a)).sort((a, b) => a.name.localeCompare(b.name));
+    if (!pick.length) return ui.notifications.info("Every character here already has a page.");
+    const data = await input("Add a party member", `<p>A character or companion whose way of fighting Angel learns, to play them when you tick them.</p><div class="form-group"><label>Actor</label><select name="actor">${pick.map(a => `<option value="${esc(a.id)}">${esc(a.name)}${a.folder ? ` (${esc(a.folder.name)})` : ""}</option>`).join("")}</select></div>`, "Make a page"); if (!data?.actor) return;
+    const r = await partyEnsure(data.actor); this.sel = r.entry.key; this.message = `${r.entry.name}'s page is made.`; this.render();
+  }
+  async relink(to = null) {
+    const e = libraryGet(this.sel); if (!e) return;
+    if (!to) { const pick = game.actors.filter(a => (a.isOfType?.("character") || game.actors.party?.members?.some(m => m.id === a.id)) && a.id !== e.actorId && !partyFor(a)).sort((a, b) => a.name.localeCompare(b.name));
+      if (!pick.length) return ui.notifications.info("No other character without a page to tie it to.");
+      const data = await input(`Relink: ${e.name}`, `<p>Tie this page, with its lines, suggestions and what it was learned from, to another actor: the character was rebuilt, or the page came from another world.</p><div class="form-group"><label>Actor</label><select name="actor">${pick.map(a => `<option value="${esc(a.id)}">${esc(a.name)}${a.folder ? ` (${esc(a.folder.name)})` : ""}</option>`).join("")}</select></div>`, "Relink"); if (!data?.actor) return; to = data.actor; }
+    const next = await partyRelink(e.key, to); this.sel = next.key; this.message = `Tied to ${next.name}.`; this.render();
+  }
+  async exportParty() { const e = libraryGet(this.sel); if (!e) return; const data = { ...libraryExport(), entries: libraryExport().entries.filter(x => x.key === e.key) };
+    foundry.utils.saveDataToFile(JSON.stringify(data, null, 2), "application/json", `party-${e.name.replace(/[^\p{L}\p{N}]+/gu, "-").toLowerCase()}.json`); this.message = "Exported this page: Import it in another world, then tie it to the character there."; this.render(); }
   _onRender() {
     const root = this.element, on = (sel, fn) => root.querySelectorAll(sel).forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); ev.stopPropagation(); Promise.resolve(fn(el)).catch(e => { ui.notifications.error(e.message); console.error(e); }); }));
     on("[data-sel]", el => { this.sel = el.dataset.sel; this.message = ""; this.render(); });
     const box = root.querySelector(".lm-search"); box?.addEventListener("change", () => { this.search = box.value; this.render(); });
-    on("[data-edit]", el => this.editCell(el.dataset.edit, el.dataset.line)); on("[data-nature]", el => this.editNature(el.dataset.nature, el.dataset.line)); on("[data-rename]", el => this.rename(el.dataset.rename)); on("[data-remove]", el => this.remove(el.dataset.remove));
+    on("[data-edit]", el => this.editCell(el.dataset.edit, el.dataset.line)); on("[data-pline]", el => this.editParty(el.dataset.pline)); on("[data-relinkto]", el => this.relink(el.dataset.relinkto));
+    on("[data-make]", async el => { if (!el.dataset.make) return; const r = await partyEnsure(el.dataset.make); this.sel = r.entry.key; this.message = `${r.entry.name}'s page is made.`; this.render(); });
+    on("[data-answer]", async el => { const id = el.closest("[data-sid]")?.dataset.sid; await partyAnswer(this.sel, id, el.dataset.answer); this.message = el.dataset.answer === "accept" ? "Accepted." : "Kept yours."; this.render(); }); on("[data-nature]", el => this.editNature(el.dataset.nature, el.dataset.line)); on("[data-rename]", el => this.rename(el.dataset.rename)); on("[data-remove]", el => this.remove(el.dataset.remove));
     on("[data-action]", el => this[el.dataset.action]());
   }
   async editCell(key, k) {

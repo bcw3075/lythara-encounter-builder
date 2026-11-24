@@ -6,6 +6,7 @@ import { ID } from "./builder.mjs";
 import { cleanBrief } from "./brief.mjs";
 import { applyNature } from "./bands.mjs";
 import { IT, formsOf, fromGender, guessPronoun } from "./pronoun.mjs";
+import { addSuggestions, answerSuggestion, applyPartyLines, cleanPartyEntry, freshFights, partyForPacket, partyKey, relinkCandidates, seedFromToken } from "./party.mjs";
 import { MIND_SCHEMA, LINES, applyLines, assemble, baseName, baseLevel, cleanEntry, cleanLines, exportData, forPacket, fromStatBlock, importPlan, kindKey, namesFor, rowLines } from "./minds.mjs";
 
 const LIBRARY_NAME = "Minds Library (Encounter Builder)";
@@ -119,7 +120,7 @@ export function mindLayers(scene, tok, combat = null) {
   /* a monster that changed sides in this fight keeps its mind (0.30.0, design review 2): only a creature that began on the party's side has
      nothing but its own lines */
   const turned = actor.isOfType?.("npc") && combat?.getFlag(ID, "turns")?.sides?.[tok.id]?.from === "opposition";
-  if (actor.alliance === "party" && !turned) return Object.keys(mine).length ? [{ from: "own", lines: mine }] : [];
+  if (actor.alliance === "party" && !turned) return playsByPage(partyFor(actor)) ? [] : Object.keys(mine).length ? [{ from: "own", lines: mine }] : [];   /* a party member with a page in the Party section plays by it (0.45.0, F-9): mindOf */
   const kind = kindFacts(actor), ref = builtRef(scene, tok), brief = ref ? briefOf(scene) : null, row = brief?.creatures[ref.row] ?? null, layers = [];
   /* this fight's lines (release 4, 0.33.0): its kind's, with this one monster's laid over them line by line (a Discipline the leader's fall dropped
      to Loose no longer hides a line the fight-start look agreed for its whole kind) */
@@ -155,6 +156,9 @@ export function pronounOf(tok, combat = null) {
 }
 /** A monster's profile as things stand: { assembled, mind, held } (`mind` is what its packet carries, null when nothing is left to say). */
 export function mindOf(scene, tok, combat = null, labelOf = () => null) {
+  /* a party member with a page (0.45.0, F-9, 9-2): its own lines, through the same name gate; the pronoun from its sheet */
+  const page = partyOn(tok, combat);
+  if (playsByPage(page)) { const f = pronounOf(tok, combat), { mind, held } = partyForPacket(page, partyPeople(scene, labelOf), `${f.they}/${f.them}/${f.their}`); return { assembled: { lines: {}, own: false, party: page }, mind, held }; }
   const assembled = assemble(mindLayers(scene, tok, combat)), { mind, held } = forPacket(assembled, partyPeople(scene, labelOf));
   return { assembled, mind, held };
 }
@@ -213,7 +217,7 @@ export function mindRows(scene) {
     rows.push({ ref: { row: g }, name: c.name || toks[0]?.name || "Creature", count: toks.length || c.count, tokens: toks.map(t => t.id), uuid: c.uuid,
       own: Object.keys(c.own).map(n => { const t = toks.find(x => builtRef(scene, x)?.n === +n); return { ref: { row: g, n: +n }, name: t?.name ?? `${c.name} ${+n + 1}`, token: t?.id ?? null }; }) }); });
   for (const t of npcs) { if (builtRef(scene, t)) continue; const a = t.actor;
-    if (a.alliance === "party") { party.push({ ref: { token: t.id }, name: t.name, count: 1, tokens: [t.id], party: true, owned: !!a.hasPlayerOwner, own: [] }); continue; }   /* owned: a player's creature, which the module no longer plays (B-7, 0.31.0) */
+    if (a.alliance === "party") { party.push({ ref: { token: t.id }, name: t.name, count: 1, tokens: [t.id], party: true, owned: !!a.hasPlayerOwner, own: [], learn: learnableActor(a), page: !!partyFor(a) }); continue; }   /* owned: a player's creature, which the module no longer plays (B-7, 0.31.0) */
     if (t.getFlag(ID, "cache") || a.isOfType?.("loot")) continue;
     const k = kindFacts(a), row = loose.get(k.key) ?? { ref: { kind: k.key }, name: k.kindName, count: 0, tokens: [], own: [] }; row.count++; row.tokens.push(t.id);
     if (Object.keys(cleanLines(t.getFlag(ID, "mind"))).length) row.own.push({ ref: { token: t.id }, name: t.name, token: t.id });
@@ -233,4 +237,78 @@ export async function rowProfile(scene, row, ref = row.ref) {
     layers = [...(single && r?.own[String(ref.n)] ? [{ from: "own", lines: r.own[String(ref.n)] }] : []), ...(r && Object.keys(rowLines(r)).length ? [{ from: "encounter", lines: rowLines(r) }] : []), ...(entry ? [{ from: "kind", name: entry.name, lines: entry.lines }] : []), ...(people ? [{ from: "people", name: people.name, lines: people.lines }] : []), ...(actor ? [{ from: "statblock", lines: fromStatBlock(statFacts(actor)) }] : [])];
   }
   return { layers, assembled: assemble(layers), kind: actor && actor.alliance !== "party" ? kindFacts(actor) : null, token: tok?.id ?? null };
+}
+
+/** Whose profile lives in the Party section (0.45.0): a character on the party's side, or a member of PF2e's party (the same test as the record's). */
+export const learnableActor = a => !!a && (!!game.actors.party?.members?.some(m => m.id === worldId(a)) || (!!a.isOfType?.("character") && a.alliance === "party"));
+/* ---------- the Party section (0.45.0, F-9): one page per party member, tied to its actor by id ---------- */
+/** The world actor behind a token's actor: an unlinked token's synthetic actor has the world actor's id. */
+const worldId = actor => actor?.isToken ? (actor.token?.baseActor?.id ?? actor.id) : actor?.id ?? null;
+export const partyEntries = () => libraryEntries().filter(e => e.type === "party");
+/** A party member's page by its actor (or the actor's id), or null. */
+export const partyFor = actorOrId => { if (typeof actorOrId === "string" && actorOrId.startsWith("party:")) return libraryGet(actorOrId);   /* a page's own key (review 3) */
+  const id = typeof actorOrId === "string" ? actorOrId : worldId(actorOrId); return id ? libraryGet(partyKey(id)) : null; };
+/** Whether a creature plays by its page: only once the page has a line (review 17); a page made but still empty leaves the token's old lines in force. */
+export const playsByPage = page => !!page && Object.keys(page.lines ?? {}).length > 0;
+/** The page a token in a fight plays by: a party-side creature with a page, never a monster that changed sides. */
+export function partyOn(tok, combat = null) {
+  const actor = tok?.actor; if (!actor || actor.alliance !== "party") return null;
+  if (actor.isOfType?.("npc") && combat?.getFlag(ID, "turns")?.sides?.[tok.id]?.from === "opposition") return null;
+  return partyFor(actor);
+}
+/** What a party member is, for its page's list line: its class (or "NPC") and whether a player plays it (a companion otherwise). */
+const partyFacts = actor => ({ actorId: worldId(actor), name: (actor.isToken ? actor.token?.baseActor?.name : null) ?? actor.name, kind: actor.hasPlayerOwner ? "player" : "companion", what: actor.class?.name ?? (actor.isOfType?.("npc") ? "NPC" : "") });
+async function writeParty(entry) {
+  gmOnly(); const e = cleanPartyEntry(entry); if (!e) throw new Error("A party page needs its actor and a name.");
+  const have = libraryIndex().get(e.key) ?? null, j = await ensureLibrary();
+  if (have) await have.page.update({ name: e.name, [`flags.${ID}.==mind`]: e });
+  else await j.createEmbeddedDocuments("JournalEntryPage", [{ name: e.name, type: "text", text: { content: `<p>A party member's page in the Minds Library. Read and edit it in the Minds Library window (the Encounters tools); what is typed on this page is not used.</p>`, format: CONST.JOURNAL_ENTRY_PAGE_FORMATS.HTML }, flags: { [ID]: { mind: e } } }]);
+  dropLibraryCache(); return e;
+}
+/** A party member's page, made if it has none (her press on "Make a page", or Angel drafting a first profile). A token's own lines from before
+    0.45.0 are carried over where they mean the same (party.mjs `seedFromToken`), so nothing she wrote on it is lost. */
+export async function partyEnsure(actorOrId, { token = null } = {}) {
+  gmOnly(); const actor = typeof actorOrId === "string" ? game.actors.get(actorOrId) : actorOrId; if (!actor) throw new Error("No such actor.");
+  const have = partyFor(actor); if (have) return { entry: have, created: false };
+  const seed = token ? seedFromToken(cleanLines(token.getFlag(ID, "mind"))) : {};
+  return { entry: await writeParty({ ...partyFacts(actor), lines: seed }), created: true };
+}
+/* the cache is dropped first (review 6): a write from another page since this one last read must not be overwritten by an older copy */
+const partyOrThrow = ref => { dropLibraryCache(); const e = partyFor(ref); if (!e) throw new Error("That party member has no page in the Minds Library."); return e; };
+/** Change lines of a page: her own words, from the window or written for her when she asked (review 30: always hers; Angel's words reach a
+    page only as a suggestion she accepts, 9-3). Out: { entry, skipped }. */
+export async function partySet(ref, lines) {
+  const e = partyOrThrow(ref), r = applyPartyLines(e.lines, lines, { by: "gm", force: true, now: Date.now() });
+  return { entry: await writeParty({ ...e, lines: r.lines }), skipped: r.skipped };
+}
+/** Angel's suggestions (the daily check, or her first draft), waiting for the GM's Accept or Keep mine. Out: { entry, added, dropped }. */
+export async function partySuggest(ref, payload = {}) {
+  const e = partyOrThrow(ref), r = addSuggestions(e, payload, { now: Date.now(), newId: i => `${foundry.utils.randomID(8)}${i}` });
+  if (r.entry) await writeParty(r.entry); return r;
+}
+/** Her answer to a suggestion: "accept" or "keep". */
+export async function partyAnswer(ref, id, answer) {
+  const e = partyOrThrow(ref), r = answerSuggestion(e, id, answer, { now: Date.now() }); if (!r) throw new Error("That suggestion isn't waiting any more.");
+  return writeParty(r.entry);
+}
+/** Tie a page to another actor (9-2): the character was rebuilt, or the page came from another world. Its lines, suggestions and counts go with it. */
+export async function partyRelink(ref, actorId) {
+  const e = partyOrThrow(ref), actor = game.actors.get(actorId); if (!actor) throw new Error("No such actor.");
+  if (partyFor(actor) && partyFor(actor).key !== e.key) throw new Error(`${actor.name} already has a page.`);
+  const have = libraryIndex().get(e.key); const next = cleanPartyEntry({ ...e, ...partyFacts(actor), formerIds: [...(e.formerIds ?? []), e.actorId] });   /* the old id kept, so fights saved under it still count (review 15) */
+  await have.page.update({ name: next.name, [`flags.${ID}.==mind`]: next }); dropLibraryCache(); return next;
+}
+/** Pages whose actor isn't in this world, each with the actors that have its name (brackets aside: "Odile Fenn (L5 test)" finds "Odile Fenn"). */
+export function partyLost() {
+  const bare = n => String(n ?? "").replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim(), actors = game.actors.contents.filter(a => !partyFor(a)).map(a => ({ id: a.id, name: bare(a.name) }));   /* an actor that has a page of its own isn't offered (review 16) */
+  return partyEntries().filter(e => !game.actors.get(e.actorId)).map(e => ({ entry: e, candidates: relinkCandidates({ ...e, name: bare(e.name) }, actors) }));
+}
+/** The saved fights' party records (9-1), for the daily check: every History page that has one, with its night's date. Characters Angel played
+    in a fight are marked; `fresh` lists, per page, the fights it hasn't learned from yet (party.mjs `freshFights`). since: "YYYY-MM-DD". */
+export function partyRecords({ since = null } = {}) {
+  const folder = game.folders.find(f => f.type === "JournalEntry" && f.getFlag(ID, "history")), fights = [];
+  for (const j of game.journal.filter(x => folder && x.folder?.id === folder.id)) { const date = j.getFlag(ID, "historyDate") ?? null; if (since && date && date < since) continue;
+    for (const p of j.pages) { const rec = p.getFlag(ID, "partyRecord"); if (!rec?.members) continue; fights.push({ combatId: p.getFlag(ID, "historyCombat"), date, scene: p.name, members: rec.members }); } }
+  fights.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  return { fights, fresh: Object.fromEntries(partyEntries().map(e => [e.actorId, freshFights(e, fights).map(f => ({ combatId: f.combatId, date: f.date, scene: f.scene, turns: f.me.turns }))])) };
 }

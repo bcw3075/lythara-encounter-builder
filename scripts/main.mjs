@@ -18,6 +18,9 @@ import { acceptEscapeLines, answerLook, dismissLook, escapeOffers, lookNow } fro
 import { startOf, wakeOnHarm } from "./fight.mjs";
 import { answerRoom, dropMyRoomAsks, roomPending, showRoomPicture } from "./roomask.mjs";
 import { answerAsk, askPending, askTool } from "./askangel.mjs";
+import { onPartyCard, onPartyTurn, partyRecordOf } from "./partyrec.mjs";
+import { partyAnswer, partyEnsure, partyEntries, partyFor, partyLost, partyRecords, partyRelink, partySet, partySuggest } from "./library.mjs";
+import { PARTY_LINES } from "./party.mjs";
 import { barriersOf, clearBarriers, readiedNow, readyAct, removeBarrier, markUnseen, maskUnseen, chooseFor, onReactionCard, partyReactors, setReactionUsed, doReaction, skipReaction, openReactions, onTokenMoved, onActionCard, onItemHands, onConditionGone, onConditionGained, askAngel, changePlan, onSocket, noteReactionRoll, busy, untickParty, checkOnly, keepTurn, saveTurn, noteChange, currentRequest, doIt, fightState, hold, onCombatUpdate, onTurnHandedOn, onCombatGone, onCreateMessage, onMessageUpdate, onPreCreateMessage, onRenderMessage, onRunnerReady, onTokenFlag, onMemoryCard, onMemoryUpdate, onMemoryHp, notebookOf, previewRemember, rememberAdd, rememberCross, perceived, playMyself, reportFailure, rollFor, submitPlan, waitForEvent, watchStalls } from "./fight.mjs";
 
 const CONTROL = "encounters", apps = new Map(), mindsApps = new Map(); let turnsApp = null, historyApp = null, historyTimer = null, turnsTimer = null;
@@ -108,7 +111,7 @@ Hooks.on("activateNote", note => {
 Hooks.on("preCreateChatMessage", message => { onPreCreateMessage(message); markUnseen(message);
   /* a net (0.30.1): a pronoun marker nothing turned reads as "it" in chat, never as a brace; only on a GM's page, where the module writes (0.33.1, review: a player's own words are theirs) */
   if (game.user.isGM) try { const fix = {}; for (const k of ["content", "flavor"]) if (hasMarker(message[k])) fix[k] = pro(message[k]); if (Object.keys(fix).length) message.updateSource(fix); } catch (e) { console.warn(`${ID} | pronoun`, e); } });
-Hooks.on("createChatMessage", message => { onCreateMessage(message); noteReactionRoll(message); onActionCard(message).catch(e => console.warn(`${ID} | reactions`, e)); try { onReactionCard(message); } catch (e) { console.warn(`${ID} | reaction box`, e); } try { onMemoryCard(message); } catch (e) { console.warn(`${ID} | notebook`, e); } });
+Hooks.on("createChatMessage", message => { onCreateMessage(message); onPartyCard(message); noteReactionRoll(message); onActionCard(message).catch(e => console.warn(`${ID} | reactions`, e)); try { onReactionCard(message); } catch (e) { console.warn(`${ID} | reaction box`, e); } try { onMemoryCard(message); } catch (e) { console.warn(`${ID} | notebook`, e); } });
 /* monsters reacting on players' turns (0.21.0): the runner watches moves, cards, items changing hands and Prone coming off. Block bodies: no handler returns anything. */
 Hooks.on("moveToken", (doc, movement) => { onTokenMoved(doc, movement); try { dropBeliefs(doc); } catch (e) { console.warn(`${ID} | point out`, e); } });
 Hooks.on("updateItem", (item, change) => { onItemHands(item, change); noteChange(item); });
@@ -123,7 +126,9 @@ Hooks.on("renderChatMessageHTML", (message, html) => { onRenderMessage(message, 
 Hooks.on("pauseGame", () => { redrawTurns(); });   /* the card says when Auto is waiting on the pause */
 Hooks.on("updateCombat", (combat, change) => { if (foundry.utils.hasProperty(change, `flags.${ID}`) || "turn" in change || "round" in change) redrawHistory(); if (turnsApp?.rendered && (foundry.utils.hasProperty(change, `flags.${ID}`) || "turn" in change || "round" in change)) renderTurns(); onCombatUpdate(combat, change); });
 /* a turn handed on with no `updateCombat` (the current combatant deleted, 0.24.0): `combatTurnChange` on the pages core tells, `deleteCombatant` on every page */
-Hooks.on("combatTurnChange", combat => { onTurnHandedOn(combat); });
+Hooks.on("combatTurnChange", combat => { onTurnHandedOn(combat); onPartyTurn(combat); });   /* the party record (0.45.0, F-9) */
+/* the first turn (combatStart's round 1) and any turn change combatTurnChange misses: the record's own guard skips the same change heard twice */
+Hooks.on("updateCombat", (combat, change) => { if ("turn" in change || "round" in change) onPartyTurn(combat); });
 Hooks.on("deleteCombatant", combatant => { onTurnHandedOn(combatant.parent); });
 /* B-6 (0.31.0): a creature that joins a fight already begun gets its side books at once (the runner's `checkSides`), so a first change of side
    is kept as a change and not as the side it started on */
@@ -188,5 +193,11 @@ Hooks.once("ready", () => {
          makes one (as Angel unless `by: "gm"`; never over her words or choices without `force`); `bands.join(scene, ref, key)` puts a row, a kind or
          a token into a band; `bands.remove` only when she asked. */
       bands: { list: bandViews, of: bandOf, join: joinBand, remove: removeBand, set: (scene, key, change, { by = "angel", force = false } = {}) => setBand(scene, key, change, { by, force }) },
-      library: { list: libraryEntries, get: libraryGet, remove: libraryRemove, export: libraryExport, import: libraryImport, put: (entry, { by = "angel", force = false } = {}) => libraryPut(entry, { by, force }) } } };
+      library: { list: libraryEntries, get: libraryGet, remove: libraryRemove, export: libraryExport, import: libraryImport, put: (entry, { by = "angel", force = false } = {}) => libraryPut(entry, { by, force }) },
+      /* api.minds.party, the Party section (0.45.0, F-9): a party member's page, by its actor (or the actor's id, or the page's key). The daily check and Angel's
+         first draft use `records` (api.minds.party.records) (the saved fights' party records, with what each page hasn't learned from yet) and `suggest` (suggestions with
+         their reasons, waiting for her Accept or Keep mine; `fights` and `session` count what was learned from). `set` writes her own words
+         (only what she asked for: Angel's words reach a page as suggestions, 9-3); `set`, `answer`, `relink` and `library.remove` are hers, used only when she asked. */
+      party: { lines: PARTY_LINES, list: partyEntries, get: partyFor, ensure: partyEnsure, set: (ref, lines) => partySet(ref, lines),
+        suggest: partySuggest, answer: partyAnswer, relink: partyRelink, lost: partyLost, records: partyRecords, recordOf: partyRecordOf, open: ref => openLibrary(partyFor(ref)?.key ?? null) } } };
 });

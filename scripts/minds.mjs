@@ -4,6 +4,7 @@
 import { noteForThinker } from "./turn.mjs";
 import { cleanNature } from "./bands.mjs";
 import { PRONOUNS, formsOf, guessPronoun, otherForms } from "./pronoun.mjs";
+import { cleanPartyEntry } from "./party.mjs";
 
 /* 2 since 0.26.0: "Works with others" became "Discipline" (five steps), and a library entry for a kind of group holds a band's nature. Older data is read as it was. */
 export const MIND_SCHEMA = 2;
@@ -49,7 +50,7 @@ export const CAPS = { store: 240, storeNotes: 600, send: 240, sendNotes: 600, na
 /** "Knows about its enemies" belongs to one encounter, one monster or one fight: never the library (design review 10). */
 export const LIBRARY_LINES = LINES.filter(l => l !== "knows");
 export const BY = ["gm", "angel", "module"];
-export const ENTRY_TYPES = ["people", "kind", "band"];
+export const ENTRY_TYPES = ["people", "kind", "band", "party"];   /* "party" since 0.45.0 (F-9): a party member's page, party.mjs */
 
 const str = (v, max) => String(v ?? "").replace(/\r/g, "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim().slice(0, max);
 const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -100,6 +101,7 @@ export const baseLevel = (level, adjustment = null, base = null) => {
 /** A library entry, cleaned: { schema, type, key, name, people, lines }. A kind names its people explicitly (their key, or null): the module never
     guesses it. A people or a band has none. */
 export function cleanEntry(e = {}) {
+  if (e?.type === "party") return cleanPartyEntry(e);
   const type = ENTRY_TYPES.includes(e.type) ? e.type : "kind", name = str(e.name, CAPS.name);
   const key = str(e.key, 200) || (type === "people" ? peopleKey(name) : type === "band" ? bandKey(name) : "");
   if (!key || !name || /^(people|band):$/.test(key)) return null;   /* a name of punctuation alone makes no key */
@@ -207,7 +209,7 @@ export function importPlan(existing = [], data = null) {
   if (!data || data.what !== "minds-library" || !Array.isArray(data.entries)) return { ok: false, reason: "That file isn't a Minds Library export.", rows: [] };
   if (!Number.isFinite(data.schema) || data.schema > MIND_SCHEMA) return { ok: false, reason: `That file is from a newer version of the module (schema ${data.schema}; this one reads ${MIND_SCHEMA}).`, rows: [] };
   const mine = new Map((existing ?? []).map(cleanEntry).filter(Boolean).map(e => [e.key, e])), rows = [], seen = new Set();
-  const core = e => ({ type: e.type, name: e.name, people: e.people, lines: Object.fromEntries(Object.entries(e.lines).map(([k, l]) => [k, { pick: l.pick ?? null, text: l.text ?? "", blank: !!l.blank }])), nature: Object.fromEntries(Object.entries(e.nature ?? {}).map(([k, l]) => [k, { pick: l.pick ?? null, text: l.text ?? "" }])) });
+  const core = e => e.type === "party" ? { type: e.type, actorId: e.actorId, name: e.name, lines: Object.fromEntries(Object.entries(e.lines).map(([k, l]) => [k, { text: l.text }])) } : ({ type: e.type, name: e.name, people: e.people, lines: Object.fromEntries(Object.entries(e.lines).map(([k, l]) => [k, { pick: l.pick ?? null, text: l.text ?? "", blank: !!l.blank }])), nature: Object.fromEntries(Object.entries(e.nature ?? {}).map(([k, l]) => [k, { pick: l.pick ?? null, text: l.text ?? "" }])) });
   for (const raw of data.entries) { const e = cleanEntry(raw); if (!e || seen.has(e.key)) continue; seen.add(e.key);
     const m = mine.get(e.key); rows.push({ status: !m ? "new" : same(core(m), core(e)) ? "match" : "collision", entry: e, mine: m ?? null }); }
   return { ok: true, reason: null, rows };

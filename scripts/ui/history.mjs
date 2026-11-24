@@ -12,6 +12,8 @@ import { bookPrint } from "../memory.mjs";
 import { MINDS } from "../minds.mjs";
 import { pronounOf } from "../library.mjs";
 import { pro } from "../pronoun.mjs";
+import { hasPartyRecord, partyRecordOf } from "../partyrec.mjs";
+import { partyRecordHTML } from "../party.mjs";
 
 const STYLE = `.leb-history .leb-h-grey{opacity:.6;font-style:italic}.leb-history details.leb-h-nb{border:none;padding:0 0 0 4px;margin:2px 0;font-size:12px}.leb-history details.leb-h-nb ul{margin:2px 0;padding-left:16px}.leb-history .window-content{overflow-y:auto;padding:6px 10px}.leb-history .leb-h-top{display:flex;gap:6px;align-items:center;margin-bottom:6px}.leb-history .leb-h-top span{flex:1;opacity:.8}.leb-history h3{margin:10px 0 4px;border-bottom:1px solid #0004}.leb-history details{border:1px solid #0003;border-radius:4px;padding:3px 7px;margin:4px 0}.leb-history details.leb-h-cur{border-color:#4caf50}.leb-history summary{cursor:pointer}.leb-history .leb-h-plan{margin:4px 0}.leb-history ol,.leb-history ul{margin:2px 0 4px 18px;padding:0}.leb-history .leb-h-why{opacity:.75;font-style:italic}.leb-history .leb-h-res{opacity:.95}.leb-history .leb-h-by{opacity:.65;font-size:.9em}.leb-history .leb-h-warn,.leb-history .leb-h-stall,.leb-history .leb-h-end{color:#e07050}.leb-history .leb-h-stall{color:#e0a030}.leb-history .leb-h-press{opacity:.7;list-style:"⏵ "}.leb-history .leb-h-note{color:#c08040}.leb-history .leb-h-gm{opacity:.65;margin:3px 0}.leb-history .leb-h-card{margin-left:4px;cursor:pointer}.leb-history hr.leb-h-sep{margin:6px 0;border-color:#0003}.chat-message.leb-h-flash{outline:2px solid #e0a030}`;
 
@@ -52,23 +54,26 @@ export async function saveHistory(combat) {
   const reqs = Object.values(combat.getFlag(ID, "turns")?.requests ?? {}), nbs = notebooks(combat), logged = Object.keys(combat.getFlag(ID, "turns")?.orders?.log ?? {}).length;
   /* a fight where she played every monster still has its notebooks (0.25.0 design review 8), and its band log: her orders, her box's lines and
      yields (B-8, found in 0.33.0's close-out: End Encounter asked to save a fight whose only history was her yield, then refused to save it) */
-  if (!reqs.length && !nbs.length && !logged) throw new Error("There's no monster turn or notebook to save yet.");
+  /* the party's turns count too (0.45.0, F-9): a fight she played every monster of herself is still learned from once saved */
+  const party = partyRecordOf(combat);
+  if (!reqs.length && !nbs.length && !logged && !Object.keys(party.members).length) throw new Error("There's no monster turn, notebook or party turn to save yet.");
   const folder = game.folders.find(f => f.type === "JournalEntry" && f.getFlag(ID, "history")) ?? await Folder.implementation.create({ name: "Monster Turns history", type: "JournalEntry", sorting: "a", flags: { [ID]: { history: true } } });
   const date = today(), name = `Monster Turns · ${date}`;
   const entry = game.journal.find(e => e.folder?.id === folder.id && e.getFlag(ID, "historyDate") === date) ?? await JournalEntry.implementation.create({ name, folder: folder.id, flags: { [ID]: { historyDate: date } } });
   const first = reqs.length ? Math.min(...reqs.map(r => r.at ?? Date.now())) : Date.now(), title = `${sceneOf(combat)?.name ?? "A fight"} · ${hhmm(first)}`;
-  const content = journalHTML(rounds(combat), esc, { title, when: `${date}, ${reqs.length} plan${reqs.length === 1 ? "" : "s"}, round ${combat.round}` }) + notebooksHTML(nbs, esc, { fold: false });
+  const content = journalHTML(rounds(combat), esc, { title, when: `${date}, ${reqs.length} plan${reqs.length === 1 ? "" : "s"}, round ${combat.round}` }) + notebooksHTML(nbs, esc, { fold: false }) + partyRecordHTML(party, esc);
   /* saved again after midnight: the page stays in the night it was first saved */
   const page = game.journal.filter(e => e.folder?.id === folder.id).flatMap(e => e.pages.contents).find(p => p.getFlag(ID, "historyCombat") === combat.id);
-  if (page) await page.update({ name: title, "text.content": content });
-  else await entry.createEmbeddedDocuments("JournalEntryPage", [{ name: title, type: "text", text: { content, format: 1 }, flags: { [ID]: { historyCombat: combat.id } } }]);
-  await combat.update({ [`flags.${ID}.turns.historySaved`]: signature(combat.getFlag(ID, "turns")?.requests, combat.getFlag(ID, "notebook"), combat.getFlag(ID, "turns")?.orders?.log) }, { render: false, [ID]: { quiet: true } });
+  /* the party record rides on the page's flag (0.45.0): what the daily check reads (library.mjs `partyRecords`) */
+  if (page) await page.update({ name: title, "text.content": content, [`flags.${ID}.==partyRecord`]: party });
+  else await entry.createEmbeddedDocuments("JournalEntryPage", [{ name: title, type: "text", text: { content, format: 1 }, flags: { [ID]: { historyCombat: combat.id, partyRecord: party } } }]);
+  await combat.update({ [`flags.${ID}.turns.historySaved`]: signature(combat.getFlag(ID, "turns")?.requests, combat.getFlag(ID, "notebook"), combat.getFlag(ID, "turns")?.orders?.log, combat.getFlag(ID, "partyLog")) }, { render: false, [ID]: { quiet: true } });
   return entry;
 }
 /** Has anything happened since it was last saved? */
 const unsaved = combat => { const t = combat.getFlag(ID, "turns") ?? {}, nb = combat.getFlag(ID, "notebook"); /* with no monster turn, only her own notebook lines and cross-outs are worth the question at End Encounter: a fight she played herself isn't interrupted for notebooks nobody touched */
   /* nor for a band log with nothing of hers in it (0.28.0): an order she gave from the Give orders box is hers */
-  if (!Object.keys(t.requests ?? {}).length && !Object.values(nb ?? {}).some(b => Object.values(b ?? {}).some(l => l?.k === "gm" || l?.x)) && !Object.values(t.orders?.log ?? {}).some(e => (e?.k === "order" && e.by === "gm") || SPEECH_LOG.includes(e?.k) || COMMAND_LOG.includes(e?.k) || SIDE_LOG.includes(e?.k))) return false; return t.historySaved !== signature(t.requests, nb, t.orders?.log); };
+  if (!hasPartyRecord(combat) && !Object.keys(t.requests ?? {}).length && !Object.values(nb ?? {}).some(b => Object.values(b ?? {}).some(l => l?.k === "gm" || l?.x)) && !Object.values(t.orders?.log ?? {}).some(e => (e?.k === "order" && e.by === "gm") || SPEECH_LOG.includes(e?.k) || COMMAND_LOG.includes(e?.k) || SIDE_LOG.includes(e?.k))) return false; return t.historySaved !== signature(t.requests, nb, t.orders?.log, combat.getFlag(ID, "partyLog")); };
 /** Every creature's notebook as the Remembers fold-out shows it, in names, for the window's last section and the saved page. */
 function notebooks(combat) {
   const labels = combat.getFlag(ID, "turns")?.labels ?? {}, n = namer(labels, Object.fromEntries(sceneOf(combat)?.tokens.map(t => [t.id, t.name]) ?? []));
@@ -78,7 +83,7 @@ function notebooks(combat) {
 }
 /** What the saved page was made from: many writes don't move a request's `since` (saves, notes, presses), and the server clock restarts with the server,
     so a time can't say whether anything changed (found by the review). A short hash of the requests can. */
-function signature(requests, books = null, bandLog = null) { const s = JSON.stringify(requests ?? {}) + bookPrint(books) + (bandLog && Object.keys(bandLog).length ? JSON.stringify(bandLog) : ""); let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return `${s.length}:${h}`; }
+function signature(requests, books = null, bandLog = null, partyLog = null) { const s = JSON.stringify(requests ?? {}) + bookPrint(books) + (bandLog && Object.keys(bandLog).length ? JSON.stringify(bandLog) : "") + (partyLog && (Object.keys(partyLog.turns ?? {}).length || partyLog.open) ? JSON.stringify(partyLog) : ""); let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return `${s.length}:${h}`; }
 
 /* ---------- End Encounter: Save or Discard (Rhea, 2026-11-08) ---------- */
 /** preDeleteCombat: for a GM ending a fight that has unsaved history, stop the delete, ask, then delete again marked as asked. The runner's page and
@@ -103,7 +108,7 @@ function offerHTML(o, i) {
 async function askOnEnd(combat, { history = true, offers = [] } = {}) {
   if (!document.getElementById("leb-endq-style")) { const st = document.createElement("style"); st.id = "leb-endq-style"; st.textContent = ESC_STYLE; document.head.append(st); }   /* DialogV2 strips <style> from content */
   const answers = new Map();   /* "offer.line" → "accept" | "keep", in this window only, until the fight ends */
-  const top = history ? `<p>This fight has a Monster Turns history. Save it to the journal before ending the encounter?</p><p class="hint">Saved fights go in the folder "Monster Turns history", one entry per game night.</p>` : `<p>The Monster Turns history is saved. Before the encounter ends:</p>`;
+  const top = history ? `<p>This fight has a Monster Turns history${hasPartyRecord(combat) ? " and a record of the party's turns (Angel learns how each character fights from saved fights only)" : ""}. Save it to the journal before ending the encounter?</p><p class="hint">Saved fights go in the folder "Monster Turns history", one entry per game night.</p>` : `<p>The Monster Turns history is saved. Before the encounter ends:</p>`;
   const tail = offers.some(o => !o.hers) ? `<p class="leb-hint">Your answers above stand whether you ${history ? "save or discard the history" : "end the encounter now"}.</p>` : "";
   const mark = (root, i, j, a) => { answers.set(`${i}.${j}`, a); const row = root.querySelector(`[data-offer="${i}"] [data-line="${j}"]`); if (!row) return;
     row.querySelectorAll("button").forEach(b => b.remove()); const d = document.createElement("span"); d.className = "leb-done"; d.textContent = a === "accept" ? "✓ Accepted" : "Kept out"; d.style.flex = "0 0 auto"; row.append(d); };
