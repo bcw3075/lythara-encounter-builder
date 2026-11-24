@@ -44,12 +44,13 @@ export async function showRoomPicture(sceneId) {
   const c = document.createElement("canvas"); c.width = cols * cell; c.height = rows * cell; const g = c.getContext("2d");
   g.fillStyle = "#ddd"; g.fillRect(0, 0, c.width, c.height);
   if (src) { const img = new Image(); img.src = src; await new Promise(res => { img.onload = res; img.onerror = res; setTimeout(res, 15000); }); if (img.naturalWidth) g.drawImage(img, 0, 0, c.width, c.height); }
-  g.strokeStyle = "#d00"; g.lineWidth = 2; for (const w of scene.walls) { g.beginPath(); g.moveTo((w.c[0] - d.sceneX) / px * cell, (w.c[1] - d.sceneY) / px * cell); g.lineTo((w.c[2] - d.sceneX) / px * cell, (w.c[3] - d.sceneY) / px * cell); g.stroke(); }
+  /* walls red, doors a thick orange (live test build 1: a door drawn as a wall hid where the rooms open into each other) */
+  for (const w of [...scene.walls].sort((a, b) => !!a.door - !!b.door)) { g.strokeStyle = w.door ? "#f08000" : "#d00"; g.lineWidth = w.door ? 5 : 2; g.beginPath(); g.moveTo((w.c[0] - d.sceneX) / px * cell, (w.c[1] - d.sceneY) / px * cell); g.lineTo((w.c[2] - d.sceneX) / px * cell, (w.c[3] - d.sceneY) / px * cell); g.stroke(); }
   g.fillStyle = "#1e78d0cc"; for (const [i, j] of model.entry.squares) g.fillRect(i * cell, j * cell, cell, cell);
   g.font = `bold ${Math.max(12, Math.min(22, cell))}px sans-serif`; g.textAlign = "center"; g.textBaseline = "middle";
   for (const r of list) { const x = (r.centre[0] + .5) * cell, y = (r.centre[1] + .5) * cell, rad = Math.max(10, Math.min(18, cell * .8));
     g.fillStyle = "#fff"; g.strokeStyle = "#000"; g.lineWidth = 2; g.beginPath(); g.arc(x, y, rad, 0, Math.PI * 2); g.fill(); g.stroke(); g.fillStyle = "#000"; g.fillText(String(r.n), x, y + 1); }
-  const head = document.createElement("div"); head.textContent = `Angel is picking a room on "${scene.name}": rooms numbered in circles, walls red, the party's way in blue.`; head.style.marginBottom = "4px";
+  const head = document.createElement("div"); head.textContent = `Angel is picking a room on "${scene.name}": rooms numbered in circles, walls red, doors orange, the party's way in blue.`; head.style.marginBottom = "4px";
   el.append(head, c); document.body.append(el);
   setTimeout(() => { if (document.getElementById(PICTURE) === el) el.remove(); }, 10 * 60000);
   return true;

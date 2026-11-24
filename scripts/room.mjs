@@ -13,7 +13,7 @@ export const ROOM_ASK_TTL_S = 300;
 
 const windowScore = (d, [lo, hi]) => d < lo ? Math.max(-1, 1 - (lo - d) / Math.max(10, lo) * 2) : d > hi ? Math.max(-1, 1 - (d - hi) / 40) : 1;
 
-/** The rooms worth offering, numbered from 1 in the map's reading order, with what a picker weighs: size, free squares, walking feet from the
+/** The rooms worth offering (at least MIN_ROOM squares, and a door or a way in), numbered from 1 in the map's reading order, with what a picker weighs: size, free squares, walking feet from the
     party's way in (null: no way in), the share of it in the party's first view, what is in it, its doors, the party in it. */
 export function roomList(model) {
   const out = [], party = new Set(model.entry.squares.filter(([i, j]) => model.inMap(i, j)).map(([i, j]) => model.roomOf[model.idx(i, j)]));
@@ -22,6 +22,8 @@ export function roomList(model) {
     let i0 = Infinity, j0 = Infinity, i1 = -1, j1 = -1, sx = 0, sy = 0, seen = 0, near = Infinity, free = 0, rough = 0, cover = 0;
     for (const k of r.squares) { const i = k % model.cols, j = Math.floor(k / model.cols); i0 = Math.min(i0, i); j0 = Math.min(j0, j); i1 = Math.max(i1, i); j1 = Math.max(j1, j); sx += i; sy += j;
       seen += model.exposure[k]; if (Number.isFinite(model.approach[k])) near = Math.min(near, model.approach[k]); if (!model.occupied[k]) free++; if (model.costs[k]) rough++; cover += model.cover[k]; }
+    /* no door and no way in: the solid rock around a dungeon's rooms, or the space outside a building, is no room (live test build 1) */
+    if (!Number.isFinite(near) && !(r.doors ?? 0)) continue;
     const n = r.squares.length, mx = sx / n, my = sy / n;
     const centre = r.squares.map(k => [k % model.cols, Math.floor(k / model.cols)]).sort((a, b) => Math.hypot(a[0] - mx, a[1] - my) - Math.hypot(b[0] - mx, b[1] - my))[0];
     const inside = new Set(r.squares), things = [...new Set(model.anchors.filter(a => (a.squares ?? [a.at]).some(([i, j]) => model.inMap(i, j) && inside.has(model.idx(i, j)))).map(a => a.kind))];
@@ -69,7 +71,7 @@ export function roomWhy(r, creatures, need = roomNeed(creatures), wantThing = ne
 /* ---------- Angel's pick: the ask, the prompt and the answer ---------- */
 export const ROOM_PROMPT = `You help a Pathfinder 2e game master build encounters in Foundry VTT. A builder is about to place a group of creatures on a map that has several rooms (spaces bounded by walls and doors) and asks you which room they start in.
 
-You get the brief (who the creatures are, how many, how each starts: alert, hidden, unaware or asleep; their role; the scene, what they are doing here and want; the mood), the rooms with their numbers (size in squares, free squares, walking feet from where the party comes in, the share of the room in the party's first view, what is in it such as a camp or water, doors, whether the party starts in it), the builder's own pick by the numbers, and a picture of the whole map: the map itself, walls in red, each room's number in a circle, and where the party comes in in blue.
+You get the brief (who the creatures are, how many, how each starts: alert, hidden, unaware or asleep; their role; the scene, what they are doing here and want; the mood), the rooms with their numbers (size in squares, free squares, walking feet from where the party comes in, the share of the room in the party's first view, what is in it such as a camp or water, doors, whether the party starts in it), the builder's own pick by the numbers, and a picture of the whole map: the map itself, walls in red, doors in orange, each room's number in a circle, and where the party comes in in blue.
 
 Pick the room where these creatures would really be, given what they are doing: a lair's sleepers in its back room, guards by what they guard, a patrol in a passage, an ambush where the party must pass. Never the party's own room unless nothing else fits, never a room too small for them all, and keep creatures that aren't alert out of the party's first view. The builder then places each creature inside your room; you don't place them.
 
