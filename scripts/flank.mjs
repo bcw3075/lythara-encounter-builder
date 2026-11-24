@@ -122,11 +122,11 @@ export function flankView({ me, allies = [], foes = [], use = null, world }) {
 /** Did a plan take one of the flank squares it was shown (its last move ends on one)? */
 export const tookFlank = (block, steps = []) => { const last = steps.filter(st => Array.isArray(st.to)).at(-1); return !!last && !!block?.squares?.some(s => sameSq(last.to, s.to)); };   /* where its last move ends (review 12) */
 /** The card's line for the GM when a flank was open and the plan didn't take it (F-10: "the card says why when it doesn't flank"), or null.
-    o: { use, open, block, steps, noFlank (the thinker's own words), mind, discipline (labels, for a mind that doesn't seek) } */
-export function flankNote({ use, open = 0, block = null, steps = [], noFlank = null, mind = "", discipline = "" } = {}) {
-  if (!open) return null;
+    o: { use, open, has (how many flanks it holds already), block, steps, noFlank (the thinker's own words), mind, discipline (labels, for a mind that doesn't seek) } */
+export function flankNote({ use, open = 0, has = 0, block = null, steps = [], noFlank = null, mind = "", discipline = "" } = {}) {
+  if (!open || has) return null;   /* has: the flanks it already holds, which a mind that doesn't seek is never told of (live test, 0.44.0) */
   if (!use) return "A flank was open and not taken: a Mindless creature never thinks to flank.";
   if (!use.seeks) return `A flank was open and not taken: this mind doesn't look for flanks (Mind ${mind || "not set"}, Discipline ${discipline || "not set"}); only being flanked is guarded against.`;
   if (block?.flanking?.length || tookFlank(block, steps)) return null;
-  return `A flank was open and not taken: ${noFlank || "Angel gave no reason"}.`;
+  return `A flank was open and not taken: ${String(noFlank ?? "").trim().replace(/[.!?\s]+$/, "") || "Angel gave no reason"}.`;   /* the thinker's own full stop would make two (live test) */
 }

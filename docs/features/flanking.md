@@ -43,6 +43,9 @@ Settled by Angel at build time, told to Rhea, hers to change:
 ## Traps
 - **A flank square is only as good as its route:** the square is listed with the route the module found at the start of the turn; the thinker's own Stride there is checked again by `checkPlan` like any move.
 - **Spreading a creature over a base one** (`{ ...base, square }`) must put the new square last, or the base's square wins (the unit test's first draft did it the other way round).
+- **A mind that doesn't seek is never told it is flanking, so the card can't learn it from the block** (0.44.0, live test: a Simple goblin standing in a flank by luck got "a flank was open and not taken"). The request keeps `has`, the number of flanks the creature holds, beside `open`, and the card's line is left out when there is one.
+- **The thinker's `noFlank` often ends with its own full stop**: the card's line trims it before adding its own (live test: "attack..").
+- **A test token whose centre sits on a wall line can't be moved by the module** (live test: a Large wolf placed by hand across a wall; its Stride stalled with "This took over 20 seconds" and the token moved one pixel). Place test creatures clear of walls.
 
 ## Open items
 - A foe that can't be flanked (all-around vision, a class feature that denies it) is not known to the monster: it may move to flank and gain nothing. Learning that from a flank that didn't work isn't built.
@@ -50,3 +53,4 @@ Settled by Angel at build time, told to Rhea, hers to change:
 - Heights: a flier, a burrowed creature or one up a tree is left out on both sides.
 - Its back is judged from the squares right beside it only; a second foe with a long weapon could flank from further off.
 - Setting a flank up for an ally who hasn't moved yet is left to the thinker.
+- A thin wall line between a flank square and the foe is not looked at: the geometry is PF2e's own flanking test, which has no walls in it. Survey Sheet's encounter maps block whole squares, which the route already respects; on a hand-walled map a listed square can lie across a wall from the foe, and its back never reads "covered" from a wall line (only from blocked squares and allies).
