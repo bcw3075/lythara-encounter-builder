@@ -19,6 +19,7 @@ Its own GM-only window, **Monster Turns**, listing NPC combatants: "Angel runs t
 
 - **The amber stall line on a fight whose route is Off (0.39.9; Rhea, 2026-11-18: fix).** It said "Angel has been asked to look into it", which isn't true there: nobody gets the stall event. On Off it says Angel is off for this fight, so nobody has been asked, and to play it yourself or pick a route above; on API and Chat it reads as before.
 - **The card's points from the 2026-11-24 live test (0.46.0).** "Angel is thinking" has its own blue box with a turning icon (her words: "make that 'Angel is thinking' line a different color or something"), also on a re-plan; a spent spell or limited use says what's left; a Counterspell that can't fire says why; after a reaction question the card lists the reactions used; a Glimpse of Redemption's result and the condition refused show on the card; "Apply ... from its card" names whose token to select first.
+- **No spinner after the last refusal (0.46.1).** "Angel is thinking" shows only while a try is left (`tries < MAX_TRIES`); after the second refusal the card shows only the GM's buttons.
 
 ## How it works
 - **A question on a finished turn (0.39.2):** when the turn's last step is done but it is still that monster's turn, `currentRequest` is empty; a reaction question opened there (Comforting Presence after a condition clicked on from a spell's card) is drawn under the turn's note in its own `data-request` block (`finishedOf`), with its rows, React, Pass and Continue, and its countdown ticks the card like a running turn's.

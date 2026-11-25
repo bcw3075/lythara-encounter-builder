@@ -1,7 +1,7 @@
 /* What a monster can perceive, and the packet a thinker gets for its turn. Pure: no Foundry globals. The glue in fight.mjs gathers live values on the
    runner, with the fight scene open. Rules: Perception and Detection https://2e.aonprd.com/Rules.aspx?ID=2400, Light https://2e.aonprd.com/Rules.aspx?ID=2401.
    Monsters act only on this, so nothing here may carry a player's numbers: see packetOf. */
-export const PACKET_SCHEMA = 14;   /* 14 since 0.46.0: a spell's "heals" and "missiles", an ability's "blast" and "effect"; 13 since 0.45.0: a party member's own profile in "mind" ("profile": "party", F-9); 12 since 0.44.0: flank (flanking squares, their danger, its own back: F-10); 11 since 0.41.0: mind.started (how the fight found it, F-3); 10 since 0.35.0: barriers (earth slabs on the map);  9 since 0.33.2: a Strike with a worn or stowed weapon is "sheathed"; 8 since 0.30.1: mind.pronoun */
+export const PACKET_SCHEMA = 15;   /* 15 since 0.46.1: ground.walls (thin walls between squares); 14 since 0.46.0: a spell's "heals" and "missiles", an ability's "blast" and "effect"; 13 since 0.45.0: a party member's own profile in "mind" ("profile": "party", F-9); 12 since 0.44.0: flank (flanking squares, their danger, its own back: F-10); 11 since 0.41.0: mind.started (how the fight found it, F-3); 10 since 0.35.0: barriers (earth slabs on the map);  9 since 0.33.2: a Strike with a worn or stowed weapon is "sheathed"; 8 since 0.30.1: mind.pronoun */
 const ORDER = ["observed", "concealed", "hidden", "undetected", "unnoticed"];
 /** The less perceptible of two states. */
 export const worse = (a, b) => ORDER[Math.max(ORDER.indexOf(a), ORDER.indexOf(b))];
@@ -99,6 +99,8 @@ export const strikeMods = labels => labels.map(l => Number(String(l).match(/[+-]
 /** The ground around a square, one string per row. # no footing, D greater difficult, d difficult, c cover worth having, . open. Tokens aren't marked, or an
     unseen one would show as a gap. */
 export const GROUND_KEY = "T blocked, by something it could Take Cover behind (a thick trunk), # blocked by anything else (a thin trunk is too thin to Take Cover behind), W deep calm water (a pond or lake: Swim, not Stride), R deep flowing water (a river or creek channel: Swim, with an Athletics check without a swim Speed), D other greater difficult terrain, d difficult, c some cover, . open. First row is [from], y grows downwards.";
+/** Added to the key when the ground has walls (0.46.1). */
+export const WALLS_KEY = " walls: wall segments no Stride or Step can cross, each [ax, ay, bx, by] in map-square corner units (square [x, y] spans x to x+1 and y to y+1), so a wall can stand between two open squares; \"oneway\" marks a wall that blocks from one side only. Plan a path around them.";
 /** Added to the key for a creature with a burrow Speed (0.16.0): rock it can't burrow through. */
 export const ROCK_KEY = " r rock it can't burrow through (it can still walk there, and some of it is difficult: a Stride's check counts it).";
 export function groundAround(model, [i, j], radius = 10, coverAt = .3, takeCoverAt = null, waterAt = null, rockAt = null) {
@@ -106,7 +108,8 @@ export function groundAround(model, [i, j], radius = 10, coverAt = .3, takeCover
   /* takeCoverAt(x, y): a wall or trunk in that square Take Cover can use (Rhea's rule B: thick trunks yes, thin ones no), marked T instead of #;
      waterAt(x, y): "calm" or "flowing" for a deep-water square (W, R), anything else greater difficult stays D */
   for (let y = y0; y <= y1; y++) { let row = ""; for (let x = x0; x <= x1; x++) { const k = model.idx(x, y); row += model.blocked[k] ? (takeCoverAt?.(x, y) ? "T" : "#") : model.costs[k] === 2 ? ({ calm: "W", flowing: "R" }[waterAt?.(x, y)] ?? "D") : rockAt?.(x, y) ? "r" : model.costs[k] === 1 ? "d" : model.cover[k] >= coverAt ? "c" : "."; } rows.push(row); }
-  return { from: [x0, y0], rows, key: rockAt ? GROUND_KEY + ROCK_KEY : GROUND_KEY };
+  const walls = model.wallsIn?.(x0, y0, x1, y1) ?? [];   /* 0.46.1 (F1): thin walls between squares, which the rows can't show */
+  return { from: [x0, y0], rows, ...(walls.length ? { walls } : {}), key: (rockAt ? GROUND_KEY + ROCK_KEY : GROUND_KEY) + (walls.length ? WALLS_KEY : "") };
 }
 /** What a monster gets told. Everything about others goes through here, and only these fields: never a player's HP, AC, saves, level, slots or anything else off
     a sheet, GM secrets, hidden loot or chat. Text in it is data, never instruction. */

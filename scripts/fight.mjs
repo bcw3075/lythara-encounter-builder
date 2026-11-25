@@ -309,7 +309,7 @@ function spellData(e, base, id, slug) {
     area: base.system.area?.type ? { type: base.system.area.type, size: base.system.area.value } : null, attack: !!base.isAttack, save: save?.statistic ? { stat: save.statistic, basic: !!save.basic } : null,
     damaging: Object.keys(base.system.damage ?? {}).length > 0, damage: Object.values(base.system.damage ?? {}).map(d => `${d.formula} ${d.type ?? ""}`.trim()).join(" + "),
     variants: !!base.hasVariants && act.min !== act.max, lasting: !!String(base.system.duration?.value ?? "").trim() || !!base.system.duration?.sustained, sustained: !!base.system.duration?.sustained,
-    traits: [...(base.system.traits?.value ?? [])], critText: /critical success/i.test(text), dc: e.statistic.dc?.value ?? null, attackMod: e.statistic.check?.mod ?? null, text };
+    traits: [...(base.system.traits?.value ?? [])], critText: /critical(ly)? (success|succeed|fail)/i.test(text), dc: e.statistic.dc?.value ?? null, attackMod: e.statistic.check?.mod ?? null, text };
 }
 /* ---------- sustained spells (0.46.0; Rhea at the live test: "any spell or ability that requires a sustain needs to be factored in") ----------
    A sustained spell the module casts is written down for its caster (`sustain.<token>.<spell id>`: its entry, item, rank, the round it was cast and last
@@ -410,6 +410,25 @@ function spellsOf(book) {
 const spellFor = (actor, step) => { const entry = actor.spellcasting?.get(step.entryId); const spell = entry?.spells?.get(step.spellId) ?? actor.items.get(step.spellId); return entry && spell ? { entry, spell } : null; };
 const isHeld = actor => ["grabbed", "restrained"].some(c => actor?.hasCondition?.(c));
 /* Allies know where each other are, by default. */
+/* Pack Attack and its kin (0.46.1): a toggleable "pack-attack" damage option, on when the target is within reach of at least two of the
+   attacker's allies (2e.aonprd.com, e.g. the wolf). Allies that are down don't count (a guess: the rule says only "allies"). Set on or off before every damage roll. */
+async function packAttack(tok, target) {
+  const a = tok.actor, rules = [];
+  for (const it of a?.items ?? []) for (const r of it.system?.rules ?? []) if (r.key === "RollOption" && r.toggleable && r.option === "pack-attack" && !(r.suboptions?.length)) rules.push({ it, r });
+  if (!rules.length) return null; if (!target?.object) { await packOff(tok, false, rules); return null; }
+  const near = alliesOf(tok.parent, tok).filter(t => t.object && t.id !== target.id && !isDown(t.actor) && t.actor.canAttack !== false).filter(t => {
+    const reach = Number(t.actor.getReach?.({ action: "attack" })); const r = Number.isFinite(reach) ? reach : 5;
+    return t.object.distanceTo(target.object, { reach: r }) <= r; }).length;
+  const on = near >= 2;
+  await packOff(tok, on, rules);
+  return on;
+}
+/* review 2: set (or, after the damage roll, put back off) only where it differs, so no later roll by another path keeps a stale "on" */
+async function packOff(tok, on = false, rules = null) {
+  const a = tok.actor; rules ??= (a?.items ?? []).flatMap(it => (it.system?.rules ?? []).filter(r => r.key === "RollOption" && r.toggleable && r.option === "pack-attack" && !(r.suboptions?.length)).map(r => ({ it, r })));
+  for (const { it, r } of rules) { const domain = r.domain ?? "all";   /* review 1: PF2e's own default domain */
+    if (!!a.rollOptions?.[domain]?.[r.option] !== on) await watched(() => a.toggleRollOption(domain, r.option, it.id, on)); }
+}
 function alliesOf(scene, tok) { return scene.tokens.contents.filter(t => t.id !== tok.id && t.actor?.isOfType?.("creature") && t.actor.isAllyOf?.(tok.actor)); }
 /** The allies a thinker is told of: those the GM hasn't hidden, and a burrowed one (hidden only because it is below ground) unless the GM had hidden it
     before it went down (0.16.0 review). The packet and a Delay use the same list. */
@@ -1192,7 +1211,7 @@ async function judgeNow(combat, requestId) {
   return { state: "ready", steps: c.steps };
 }
 /* unused actions (0.39.11): the ask to the thinker, and the line on the card when they stay unused */
-const spareAsk = (n, of) => `The plan uses ${(of ?? 3) - n} of ${of ?? 3} actions. Use the ${n === 1 ? "last one" : `last ${n}`} (a reload, a Step to a better square, Take Cover, a Seek, Raise a Shield, another Strike, anything that helps), or, if keeping ${n === 1 ? "it" : "them"} is really better, add "unused" to the plan: a few words saying why.`;
+const spareAsk = (n, of) => `The plan uses ${(of ?? 3) - n} of ${of ?? 3} actions. Use the ${n === 1 ? "last one" : `last ${n}`} (a reload, a Step to a better square, Take Cover, a Seek, another Strike, anything that helps), or, if keeping ${n === 1 ? "it" : "them"} is really better, add "unused" to the plan: a few words saying why.`;
 const FLANK_ASK = `"flank.squares" offered a square to flank from and the plan ends on none of them. Take the flank, or, if not flanking really is better, add "noFlank" to the plan: a few words saying why.`;
 const spareNote = (n, why) => `${n === 1 ? "1 action is" : `${n} actions are`} left unused: ${why || "Angel gave no reason"}.`;
 /** Asked once to use its spare actions (0.39.11): like a refusal, but no try is used up, so a plan is never handed to the GM for it. */
@@ -1518,8 +1537,9 @@ async function runStrike(combat, id, i, step, tok, target) {
         let hr; try { hr = await hitGate(combat, id, i, step, tok, target, { melee: !strike.item?.isRanged, damageTypes: damageTypesOf(strike) }, get); } catch (e) { console.error(`${ID} | reactions`, e); hr = null; await addNote(combat, id, `I couldn't ask the reactions to ${step.itemName}'s hit (${e.message}); damage went ahead.`); }   /* Shield Block, Reactive Shield (0.20.0) */
         if (hr === "manual") return "next"; if (hr === "held" || hr === "gone" || hr === "ask" || hr === "stopped") return hr; if (hr === "missed") continue;
         const degree = get().attack.degree; aimAt(target); await record({ damageStarted: true });
+        await packAttack(tok, target).catch(e => console.warn(`${ID} | pack attack`, e));   /* 0.46.1: Pack Attack's toggle set by the map before the damage roll */
         const message = await watched(async () => { const card = waitFor("damage-roll"); await strike[degree === 3 ? "critical" : "damage"]({ event: clickWith("showDamageDialogs"), target: target.object, mapIncreases: step.variant }); return card; });
-        await record({ damage: { message: message.id } });
+        await record({ damage: { message: message.id } }); await packOff(tok).catch(e => console.warn(`${ID} | pack attack`, e));
         if (applySetting()) await markApplied(message);
         else { const hb = await harmByHand(combat, id, i, tok, [{ target, hit: Math.floor(message.rolls?.[0]?.total ?? 0), block: !!get().shieldBlock, types: typesOf(message.rolls?.[0]), ...strikeFacts(strike) }]); if (hb === "manual") return "next"; if (hb === "held" || hb === "gone" || hb === "stopped") return hb; }
       } else if (now === "apply") {
@@ -2027,12 +2047,24 @@ async function runAbility(combat, id, i, step, tok, target) {
         if (!made) { const src = await fromUuid(step.effect); if (!src) { await addNote(combat, id, `I couldn't find ${step.effectName}: apply it from ${step.itemName}'s card.`); await record({ effected: true }); return "gm"; }
           const data = src.toObject(); delete data._id; data._stats = { ...(data._stats ?? {}), compendiumSource: step.effect };
           /* live test: an effect that asks a choice (Thermal Nimbus: cold or fire) opens its dialog on the runner's page, where nobody can answer it */
+          /* 0.46.1 (self-run playtest: Kinetic Aura asks its radius, and without Aura Shaping only 10 feet passes): a choice with only one answer this creature
+             can take is taken; anything that leaves more than one is still the GM's */
+          /* review 4: only on itself (on a friend the choice can rest on the user's feats), never past a predicate about another document or one that throws */
+          if (step.mode === "self") { const opts = new Set(on.getRollOptions?.() ?? []);
+            for (const r of data.system?.rules ?? []) { if (r.key !== "ChoiceSet" || r.selection != null || !Array.isArray(r.choices)) continue;
+              if (r.choices.some(c => /\b(origin|parent|item):/.test(JSON.stringify(c.predicate ?? [])))) continue;
+              let bad = false; const fit = r.choices.filter(c => { try { return !c.predicate || new game.pf2e.Predicate(c.predicate).test(opts); } catch { bad = true; return false; } });
+              if (!bad && fit.length === 1) r.selection = fit[0].value; } }
           if ((data.system?.rules ?? []).some(r => r.key === "ChoiceSet" && r.selection == null)) { await addNote(combat, id, `${step.effectName} asks a choice: apply it to ${on.name} from ${step.itemName}'s card.`); await record({ effected: true }); return "gm"; }
           /* review 8: entering a stance ends the one it was in (PF2e: one stance at a time) */
           { const isStance = it => (it?.system?.traits?.value ?? []).includes("stance"), mine = on.items.find(i => (i.slug ?? game.pf2e.system.sluggify(i.name)) === String(step.item ?? "").replace(/-\d+$/, ""));
             if (step.mode === "self" && isStance(mine)) { const others = new Set(on.items.filter(i => isStance(i) && i.system.selfEffect?.uuid && i.system.selfEffect.uuid !== step.effect).map(i => i.system.selfEffect.uuid));
               const old = on.itemTypes.effect.filter(e => others.has(e._stats?.compendiumSource ?? e.flags?.core?.sourceId ?? e.sourceId) || (/^stance:/i.test(e.name) && e.name !== src.name)).map(e => e.id); if (old.length) await watched(() => on.deleteEmbeddedDocuments("Item", old)); } }
-          await watched(() => on.createEmbeddedDocuments("Item", [data])); made = true; }
+          const [eff] = await watched(() => on.createEmbeddedDocuments("Item", [data])); made = true;
+          /* 0.46.1 (self-run playtest: Channeler's Stance gave no healing bonus): a toggle the effect itself carries ("I'm in this stance") is a box a player
+             ticks on the sheet, and nobody ticks it for a creature the module plays, so it goes on with the effect; a toggle with a choice of answers stays */
+          for (const r of eff?.system?.rules ?? []) if (r.key === "RollOption" && r.toggleable && r.option && !(r.suboptions?.length) && !(r.predicate?.length) && !r.disabledIf && !String(r.option).includes("{"))   /* review 3: a toggle that depends on the situation stays the GM's */
+            await watched(() => on.toggleRollOption(r.domain ?? "all", r.option, eff.id, true)).catch(e => console.warn(`${ID} | toggle`, e)); }
         await record({ effected: true });
       } else if (now === "attack") {
         /* Elemental Blast (0.46.0): PF2e's own blast, as a Strike rolls (the multiple attack penalty, a real target); a 2-action blast is the sheet's own

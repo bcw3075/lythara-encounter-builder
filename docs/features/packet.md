@@ -15,6 +15,7 @@ What a monster perceives: the packet built at the start of its turn, senses, lig
 - **`you.side: "party"` (0.18.0)** for anything on the party's side (PF2e's `alliance`): a party member the GM plays, or an NPC fighting with the party. The prompt (version 20) tells the thinker what it means. Sides themselves (who is an enemy, who an ally) were already PF2e's `isEnemyOf`/`isAllyOf` from the acting creature, so nothing else changes with the side.
 - **Schema 9 (0.33.2):** a Strike in `you.strikes` made with a weapon it carries but doesn't hold (worn or stowed) is marked `"sheathed": true`, and one with a one-plus-hands weapon (a bow) `"bothHands": true`; a `draw` step comes first (`docs/features/interact-delay.md`).
 - **Schema 14 (0.46.0):** `you.sustaining` (the spells it sustains: id, name, the round cast, whether Sustained this round, an area's aim), a spell's `heals` and `missiles` words, an ability's `blast` (elements, damage types, ranges) and `effect` words, and `undead` on an ally (so Heal isn't planned at one). Nothing about a foe's numbers is added: the slot weighing reads only the foe's health word.
+- **Thin walls in the ground (0.46.1, schema 15, prompt 42; the 2026-11-25 playtest).** A wall drawn between two open squares blocks a Stride but showed nowhere in the ground's rows, so on a Foundry map with walls 4 of 6 refusals in one fight were "no way to" a square behind one. `ground.walls` now lists every movement-blocking wall in the ground's window as `[ax, ay, bx, by]` in square-corner units (a one-way wall adds "oneway"; a locked or secret door is just a wall, so a secret one isn't given away), with a line in the key, and only when there are any.
 
 ## How it works
 - **A party member's own profile (0.45.0, schema 13):** a party member Angel plays whose page in the Party section has lines gets `mind` from that page (`profile: "party"`, `pronoun`, then each line it has in the page's order, each through the name gate, a learned line ending "(seen in N fights)") in place of the layered profile (`docs/features/party-minds.md`).
@@ -100,6 +101,7 @@ Record every id below in the release's change record when this feature, or a fea
 - (pk-2) {live} Scan a real packet for PC names, HP, AC, level, saves and slots outside `you`, and for a party member's name inside `mind` (0.24.0: a line a GM or Angel wrote goes through the name gate).
 - (pk-3) {live} A real Hide changes it, through Visioner's Apply All.
 - (pk-4) {live} Flat checks: pass, fail, and stopped by the `.step` hook then resumed, with one flat card.
+- (pk-walls) {live} On a scene with Foundry walls, a monster's packet carries `ground.walls` with the walls near it, and the thinker's plan goes round them.
 
 ## Traps
 - **Visioner answers "observed" when it has no record,** walls or no walls, so a stored Observed means nothing and counts for nothing. Its automatic system is off, and a monster token isn't a vision source: the module works it out from core's sight and sound tests, the light and the senses, with Visioner's other stored states on top.

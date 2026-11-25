@@ -60,7 +60,14 @@ export function buildModel({ cols, rows, walls = [], costs, occupied, entrySquar
   for (const w of walls) { if (!w.door) continue; const mx = (w.ax + w.bx) / 2, my = (w.ay + w.by) / 2, len = Math.hypot(w.bx - w.ax, w.by - w.ay) || 1, nx = -(w.by - w.ay) / len * .5, ny = (w.bx - w.ax) / len * .5, seen = new Set();
     for (const [x, y] of [[mx + nx, my + ny], [mx - nx, my - ny]]) { const i = Math.floor(x), j = Math.floor(y); if (!inMap(i, j)) continue; const r = roomOf[idx(i, j)]; if (r >= 0 && !seen.has(r)) { seen.add(r); rooms[r].doors++; } } }
   const fits = (i, j, size = 1, { swim = false, taken = null } = {}) => { for (let b = 0; b < size; b++) for (let a = 0; a < size; a++) { const x = i + a, y = j + b; if (!inMap(x, y)) return false; const k = idx(x, y); if (blocked[k] || occupied[k] || taken?.has(k) || (costs[k] === 2 && !swim)) return false; } return true; };
-  return { cols, rows, idx, inMap, centre, sees, walkBlocked, costs, occupied, blocked, cover, exposure, approach, fits, roomOf, rooms, anchors: anchorsOf(read), partial: !read, entry: { squares: entrySquares, source: entrySource, edge: entryEdge }, wallCount: walls.length };
+  /* 0.46.1 (F1): the walls a Stride or Step can't cross inside a box of squares, as [ax, ay, bx, by] in square-corner units (a one-way wall adds "oneway"; a locked
+     or secret door is just a wall here, so a secret one isn't given away), so a thinker sees the thin walls between open squares that the ground rows can't show */
+  /* review 5: each cut to the box, so a long wall tells nothing of the map beyond what the ground shows */
+  const clip = (w, X0, Y0, X1, Y1) => { let t0 = 0, t1 = 1; const dx = w.bx - w.ax, dy = w.by - w.ay;
+    for (const [p, q] of [[-dx, w.ax - X0], [dx, X1 - w.ax], [-dy, w.ay - Y0], [dy, Y1 - w.ay]]) { if (p === 0) { if (q < 0) return null; continue; } const r = q / p; if (p < 0) { if (r > t1) return null; if (r > t0) t0 = r; } else { if (r < t0) return null; if (r < t1) t1 = r; } }
+    return [w.ax + t0 * dx, w.ay + t0 * dy, w.ax + t1 * dx, w.ay + t1 * dy]; };
+  const wallsIn = (x0, y0, x1, y1) => walls.filter(w => w.move).map(w => ({ w, c: clip(w, x0, y0, x1 + 1, y1 + 1) })).filter(({ c }) => c && Math.hypot(c[2] - c[0], c[3] - c[1]) > .01).map(({ w, c }) => [...c.map(v => Math.round(v * 100) / 100), ...(w.dir ? ["oneway"] : [])]);
+  return { cols, rows, idx, inMap, centre, sees, walkBlocked, costs, occupied, blocked, cover, exposure, approach, fits, roomOf, rooms, anchors: anchorsOf(read), partial: !read, entry: { squares: entrySquares, source: entrySource, edge: entryEdge }, wallCount: walls.length, wallsIn };
 }
 /* a few squares around where the party starts, so "in view" isn't judged from one point */
 export function entrySamples(squares, cols, rows) {

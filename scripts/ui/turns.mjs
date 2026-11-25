@@ -18,7 +18,7 @@ import { SAY_CAP, whoUnderstands } from "../speech.mjs";
 import { answerCommand, commandList, commandResult, pointCard, sideList } from "../fight.mjs";
 import { ORDER_CAPS, QUICK, orderWords } from "../orders.mjs";
 import { askAngel, cancelChange, changePlan, previewNote, applySetting, partyMember, runnable, brainListening, bringBack, runnerName, escapedList, extendMap, extendProblem, letGo, letBandGo, bandStillFighting, notePress, brainSeenAt, clock, currentRequest, doIt, hold, lastNote, playMyself, rollFor, runnerProblem, answerReaction, continueReactions, otherReactions, doReaction, skipReaction, monsterReactionsLeft, partyReactors, trackLine, setReactionUsed, chooseFor } from "../fight.mjs";
-import { LISTEN_MS, stallWords } from "../brain.mjs";
+import { LISTEN_MS, MAX_TRIES, stallWords } from "../brain.mjs";
 import { apiNoteNow, apiWakeNow, endTurn, endTurnState, fightRoute, isDown, modelOf, ownerOnline, playerChar, setModelPick, setRoute, wakeAngel } from "../fight.mjs";
 import { MODELS, MODEL_WORDS, ROUTES, ROUTE_WORDS, WAKE_MS, listenLine, modelName, whoGets } from "../route.mjs";
 import { pronounOf } from "../library.mjs";
@@ -163,7 +163,8 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
       : on ? (wakeFor ? `${noteBox}<p class="leb-mine">The chat has this turn. Wake Angel to ${r?.handedOff && apiOn ? "ask the API again" : "bring the API back"}.</p>` : "")
       : `${noteBox}${ws === "waking" ? `<p class="leb-mine">Waking Angel…</p>` : ws === "silent" ? `<p class="leb-warn">Nothing answered: the bridge may not be running on the server PC. Play it yourself, or in the chat say go.</p>` : `<p class="leb-warn">${r?.handedOff && apiOn ? "No chat is listening. Wake Angel to ask the API again, play it yourself" : `Angel isn't listening. ${route === "api" ? "Wake Angel, play it yourself" : "Play it yourself"}`}, or in the chat say go.</p>`}`;
     /* 0.46.0 (Rhea at the live test: "make that 'Angel is thinking' line a different color or something"): its own box, with a turning icon */
-    const thinking = waitingPlan && on && r.tokenId ? (() => { const t = sceneOf(c).tokens.get(r.tokenId), m = thinker === "api" && t ? modelOf(t, c) : null; return `<p class="leb-thinking"><i class="fa-solid fa-spinner fa-spin"></i> Angel is thinking${r.why ? " again" : ""}${m ? ` (${esc(modelName(m.model))}${m.why ? `: ${esc(m.why)}` : ""})` : thinker === "chat" ? " (in the chat)" : ""}…</p>`; })() : "";
+    /* 0.46.1 (self-run playtest): no spinner once both tries are refused: nobody is thinking any more, the card says to play it */
+    const thinking = waitingPlan && on && r.tokenId && (r.tries ?? 0) < MAX_TRIES ? (() => { const t = sceneOf(c).tokens.get(r.tokenId), m = thinker === "api" && t ? modelOf(t, c) : null; return `<p class="leb-thinking"><i class="fa-solid fa-spinner fa-spin"></i> Angel is thinking${r.why ? " again" : ""}${m ? ` (${esc(modelName(m.model))}${m.why ? `: ${esc(m.why)}` : ""})` : thinker === "chat" ? " (in the chat)" : ""}…</p>`; })() : "";
     /* text on a request uses labels (the thinker reads the same words); the GM gets names */
     const labels = c.getFlag(ID, "turns")?.labels ?? {}, nameOf = l => { const a = Object.entries(labels).find(([, v]) => v === l); return a ? sceneOf(c).tokens.get(a[0])?.name ?? null : null; };
     const named = t => plainSquares(String(t ?? "").replace(/\b[EM]\d{1,3}\b/g, l => nameOf(l) ?? l));   /* no map squares on the card (0.39.11) */

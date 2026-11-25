@@ -1,7 +1,7 @@
 ---
 feature: strike-damage
 files: []
-functions: [fight.mjs:resistEffect, fight.mjs:strikesWithIds, fight.mjs:strikesOf, fight.mjs:runStrike, fight.mjs:targetHelperOn, fight.mjs:markApplied, fight.mjs:onRenderMessage, fight.mjs:applyFromCard, fight.mjs:aimAt, fight.mjs:stopAiming, turn.mjs:isAttack, turn.mjs:strikeIds, turn.mjs:damageOptions]
+functions: [fight.mjs:resistEffect, fight.mjs:strikesWithIds, fight.mjs:strikesOf, fight.mjs:runStrike, fight.mjs:targetHelperOn, fight.mjs:markApplied, fight.mjs:onRenderMessage, fight.mjs:applyFromCard, fight.mjs:aimAt, fight.mjs:stopAiming, fight.mjs:packAttack, fight.mjs:packOff, turn.mjs:isAttack, turn.mjs:strikeIds, turn.mjs:damageOptions]
 dependsOn: [turn-loop, card-ui, ammunition]
 since: 0.10.0
 ---
@@ -14,6 +14,7 @@ Strikes from a plan, targeting on the runner's account, automatic damage with th
 **Design-era decisions (from the 2026-11-05/06 plan; the lines above are the skill's summary of the same choices):**
   - **Damage:** applied automatically, with an undo card. Protected by the required test D1 in step 2.
 - **D1 now includes Auto.** The first matrix used Do it only and passed; Auto then rolled the first attack twice. So run the matrix with Auto too, plus a three-Strike plan with real dice.
+- **Pack Attack is set by the map (0.46.1, the 2026-11-25 playtest).** A monster with a toggleable `pack-attack` damage option (the wolf's Pack Attack) has it switched on before each Strike's damage when the target is within reach of at least two of its allies, and off otherwise (`packAttack`); allies that are down don't count (Angel's reading: the rule says only "allies"). Before, the toggle stayed off and the extra die never came.
 
 ## How it works
 - **Player reactions (0.20.0):** before the attack (Nimble Dodge, and Reactive Strike for a ranged one), after the roll the degree is read again against AC + 2 for a Nimble Dodge used; on a hit before damage (`hitGate`) Shield Block (applied through `applyFromCard`'s `shieldBlockRequest`) and Reactive Shield (the degree read again against the raised shield; a hit that becomes a miss skips damage). The step's record keeps `reacted`, `shieldBlock`, and on a changed degree the attack's `was` (the first degree) and `against` (the AC it was read against). Details: `docs/features/reactions.md`.
@@ -66,6 +67,7 @@ Record every id below in the release's change record when this feature, or a fea
 - (sd-9) {live,shared:turn-loop,shared:card-ui,shared:spells,shared:areas} Workbench's strike setting is per browser: set the other GM's on its page, and put them all back.
 - (sd-10) {live,shared:turn-loop,shared:card-ui,shared:spells,shared:areas} Reload the Bridge's page afterwards to drop the rig, then allow about 30 s before it answers again.
 - (sd-11) {live,shared:turn-loop,shared:card-ui,shared:spells,shared:areas} Also check no Target Helper row and the `autoApplied` flag on each damage card with automatic damage on, neither with it off.
+- (sd-pack) {live} A wolf with two allies in reach of the target: the damage card carries Pack Attack's extra die; with one ally in reach it doesn't.
 
 ## Traps
 - Undo at 0 HP leaves Wounded, Prone, Off-Guard and the moved initiative; the card says so.

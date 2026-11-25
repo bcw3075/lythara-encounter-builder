@@ -8,6 +8,7 @@ since: 0.10.0
 The brain interface: events with a cursor and a generation, plans handed in from a chat or the API, the thinker's prompt, who is listening.
 
 ## Decisions
+- **Prompt version 42 (0.46.1):** the Stride line points at `ground.walls` (thin walls between squares, packet schema 15), and no longer suggests Raise a Shield, which has no step.
 - **Prompt version 38 (0.44.0, F-10):** a "Flanking" section explains the rule, the packet's `flank` block field by field, that a foe's reaction is never known before it has been seen used, and how each mind weighs a flank against its danger; a plan that ends on none of the listed flank squares says why in a new optional "noFlank" field (a few words, kept by `cleanPlan`, shown on the GM's card, never read by the check). Details: `docs/features/flanking.md`.
 - **Prompt version 36 (0.39.11, the 2026-11-23 live test):** a plan uses every action or says why in a new optional "unused" field (a few words, shown on the GM's card); a plan that leaves actions unused with no reason is sent back once with a `retry` event that uses up no try (`nudge` in fight.mjs: a kobold drew its sling and stopped, its third action unexplained, when loading it was the obvious third). "reason" and "why" carry no squares or coordinates: the GM reads them.
 - Control for now: a Claude chat plus the bridge. Switch to the Claude API once she has access, Sonnet by default, Opus for bosses and casters. One "brain" interface, so nothing gets rebuilt. No API key ever seen or stored by Claude.

@@ -556,7 +556,10 @@ function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here, elev 
       if (range == null) { if (!(c[0] >= here[0] && c[0] <= here[0] + n && c[1] >= here[1] && c[1] <= here[1] + n)) return no(`${sp.name} has no range, so {their} burst starts at a corner of the monster's own space.`); }
       else { const d = Math.min(...[[c[0] - 1, c[1] - 1], [c[0], c[1] - 1], [c[0] - 1, c[1]], [c[0], c[1]]].map(q => distanceTo({ square: q, size: 1 }, null))); if (d > range) return no(`the corner [${c[0]}, ${c[1]}] is ${d} ft away, beyond ${sp.name}'s range (${range} ft).`); }
     }
-    if (r.allies.length && !step.deliberate) return no(`${sp.name} there would also catch ${listWords(r.allies.map(l => l === r.self ? "itself" : l))}. Aim it elsewhere, or add "deliberate": true if {they} {means|mean} to.`);
+    /* 0.46.1 (self-run playtest: Bless and Courageous Anthem were refused for catching the caster's own side): a spell for "you and allies" that does no
+       harm (no damage, no save, no attack) is meant to catch them */
+    const forFriends = /\ball(y|ies)\b/i.test(sp.targetText ?? "") && !/\b(non-?|not |enem)/i.test(sp.targetText ?? "") && !sp.damaging && !sp.save && !sp.attack;   /* review 8: "non-allies", "enemy or ally" aren't for friends */
+    if (r.allies.length && !step.deliberate && !forFriends) return no(`${sp.name} there would also catch ${listWords(r.allies.map(l => l === r.self ? "itself" : l))}. Aim it elsewhere, or add "deliberate": true if {they} {means|mean} to.`);
     area = { type: r.aim.type, size: r.aim.size, aim: r.aim, catches: r.known, hits: r.ids, ...(step.deliberate ? { deliberate: true } : {}) };
   } else if (t && sp.area && sp.range != null) { const d = distanceTo(t, null); if (d > sp.range) return no(`${t.name ?? tLabel} is ${d} ft away, beyond ${sp.name}'s range (${sp.range} ft).`); }
   /* run for real only at one creature it perceives, and never a spell whose range, targets or damage change with its actions (Heal, Harm: PF2e's
@@ -867,9 +870,9 @@ function spellResult(step, rec = {}) {
    is dropped and the thinker is asked again with a fresh packet. The baseline is taken when the packet is, because that's what the plan was made from. */
 export const MAX_REPLANS = 3;
 /** What the rest of a turn rests on. me: { square, hp, actions, conditions }; others: { label: { square, state, down } }, only who it perceived when asked. */
-export function situationOf({ me = {}, others = {} } = {}) {
+export function situationOf({ me = {}, others = {} } = {}) {   /* down stays null when unknown (a hidden one): !!null read as "back up" (0.46.1, F17) */
   return { me: { square: me.square ?? null, hp: me.hp ?? 0, actions: me.actions ?? 0, conditions: [...new Set(me.conditions ?? [])].sort() },
-    others: Object.fromEntries(Object.entries(others).map(([l, o]) => [l, { square: o.square ?? null, state: o.state, down: !!o.down }])) };
+    others: Object.fromEntries(Object.entries(others).map(([l, o]) => [l, { square: o.square ?? null, state: o.state, down: o.down == null ? null : !!o.down }])) };
 }
 /** What changed since the plan was made, as data. Its own Strikes hurting someone don't count; someone going down does. */
 export function changesSince(was, now) {
