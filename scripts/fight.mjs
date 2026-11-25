@@ -241,7 +241,7 @@ function effectsOfAbility(actor, item, slug) {
   const text = String(item.system.description?.value ?? ""), links = [...text.matchAll(/@UUID\[(Compendium\.pf2e\.[\w-]*effects\.Item\.\w+)\]\{(Effect:[^}]*)\}/g)];
   /* 0.47.0 (P-1, Channeled Protection: "You and all adjacent allies gain..."): one effect for itself and its friends nearby; adjacent is within 5 feet */
   const group = String(text).replace(/<[^>]+>/g, " ").match(/\byou and (?:all |your )?(adjacent )?allies(?: within (\d+) feet)?\b/i);
-  if (links.length === 1 && group && (group[1] || group[2]) && !/saving throw|\bbasic\b/i.test(text)) { out.groupEffect = links[0][1]; out.groupEffectName = links[0][2]; out.groupRange = group[2] ? Number(group[2]) : 5; out.groupOn = hasEffect(actor, links[0][1]); return out; }   /* review 13: not one that asks a save; review 10: whether it is on already */
+  if (links.length === 1 && group && (group[1] || group[2]) && !/\bbasic\b|\b(?:attempt|attempts|must make|must succeed at) an? [^.]*sav/i.test(String(text).replace(/<[^>]+>/g, " "))) { out.groupEffect = links[0][1]; out.groupEffectName = links[0][2]; out.groupRange = group[2] ? Number(group[2]) : 5; out.groupOn = hasEffect(actor, links[0][1]); return out; }   /* review 13: not one that asks a save (live test: a bonus "to your Reflex saving throws" is no save asked); review 10: whether it is on already */
   if (links.length === 1 && /\b(?:another|an? ally|allies|ally)\b/i.test(text) && !/saving throw|\bbasic\b|\bReflex\b|\bFortitude\b|\bWill\b/.test(text)) {
     const r = text.match(/within (\d+) feet/i); out.allyEffect = links[0][1]; out.allyEffectName = links[0][2]; out.allyEffectRange = r ? Number(r[1]) : null; if (/\banother\b/i.test(text)) out.allyEffectOthers = true;   /* review 7: "another kobold" isn't itself */
   }
@@ -425,9 +425,10 @@ function vitalOf(base) {
   const read = (sp, overlay) => { const a = spellActions(sp.system.time?.value), r = spellRange(sp.system.range?.value), k = kinds(sp), save = sp.system.defense?.save;
     return { overlay, n: a.min != null && a.min === a.max ? a.min : null, range: r.range, touch: r.touch, area: sp.system.area?.type ? { type: sp.system.area.type, size: sp.system.area.value } : null,
       targets: spellTargets(sp.system.target?.value), heals: k.includes("healing"), harms: k.includes("damage"), save: save?.statistic ? { stat: save.statistic, basic: !!save.basic } : null }; };
-  const overlays = [...(base.overlays?.contents ?? [])], vs = [];
+  /* 0.47.0 live test: the overlay's id is its key in the collection (Lay on Hands' overlays carry no _id of their own) */
+  const overlays = [...(base.overlays?.keys?.() ?? [])], vs = [];
   if (!overlays.length) vs.push(read(base, null));
-  else for (const o of overlays) { let v = null; try { v = base.loadVariant?.({ overlayIds: [o._id] }); } catch (e) { console.warn(`${ID} | vital variant`, e); } if (v) vs.push(read(v, o._id)); }
+  else for (const o of overlays) { let v = null; try { v = base.loadVariant?.({ overlayIds: [o] }); } catch (e) { console.warn(`${ID} | vital variant`, e); } if (v) vs.push(read(v, o)); }
   if (!vs.some(v => v.heals)) return null;
   const mends = traits.includes("void") ? "undead" : "living", hurts = traits.includes("vitality") ? "undead" : traits.includes("void") ? "living" : null;
   const out = { mends, hurts, heal: {}, hurt: {}, area: {} }, aim = v => ({ overlay: v.overlay, range: v.range, touch: v.touch, ...(v.save ? { save: v.save } : {}) });   /* review 1: the save is the variant's (Lay on Hands' base item has none) */
