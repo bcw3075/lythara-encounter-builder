@@ -253,6 +253,7 @@ function effectsOfAbility(actor, item, slug) {
     Bless's aura size read it) and its origin the caster, as PF2e's own drop sets them (an aura such as Bless's is spread only from its caster's copy). */
 async function putEffect(on, step, { self = false, spell = null } = {}) {
   if (hasEffect(on, step.effect)) return "on";
+  if (spell && immuneTo(on, spell.item)) return "immune";   /* 0.47.0 live test: Courageous Anthem (mental) went on mindless skeletons */
   const src = await fromUuid(step.effect); if (!src) return "missing";
   const data = src.toObject(); delete data._id; data._stats = { ...(data._stats ?? {}), compendiumSource: step.effect };
   if (spell) { if (data.system?.level) data.system.level.value = spell.rank ?? data.system.level.value;
@@ -441,6 +442,18 @@ function vitalOf(base) {
   if (!Object.keys(out.heal).length && !Object.keys(out.hurt).length && !Object.keys(out.area).length) return null;
   return out;
 }
+/** Toolbelt's save rows on a variant's cast card (0.47.0 live test: Harm "vs. Living" had none). Toolbelt files the save under "null" when the card is
+    made from the variant, then looks it up under the card's variant id when it draws the card: copy it there so the rows show. */
+async function variantRows(message, overlay) {
+  const sv = message?.flags?.[TOOLBELT]?.targetHelper?.saveVariants; if (!overlay || !sv || sv[overlay] || !sv.null) return;
+  await message.update({ [`flags.${TOOLBELT}.targetHelper.saveVariants.${overlay}`]: sv.null });
+  for (let t = 0; t < 2000 && !ui.chat?.element?.querySelector?.(`[data-message-id="${message.id}"] .pf2e-toolbelt-target-targetRows`); t += 200) await new Promise(r => setTimeout(r, 200));
+}
+/** The immunity a creature has to one of a spell's traits (mental, emotion, ...), or null: a mindless skeleton is immune to a mental anthem. */
+function immuneTo(actor, item) {
+  const traits = new Set(item?.system?.traits?.value ?? []); if (!traits.size) return null;
+  return (actor?.attributes?.immunities ?? []).map(x => x.type).find(t => traits.has(t)) ?? null;
+}
 /** The one spell effect a spell's text links (0.47.0, P-1: Bless, Haste, Shield, Heroism, Courageous Anthem, Lay on Hands): { uuid, name }, or null when
     it links none or more than one. Other links (a condition, a feat, another spell, Shield's immunity effect, which is "Effect:") don't count. */
 function spellEffectOf(base) {
@@ -465,7 +478,8 @@ function spellsOf(book) {
   const cap = (t, n) => t.length > n ? `${t.slice(0, n - 1)}…` : t;
   return book.map(s => ({ id: s.id, name: s.name, ranks: Object.fromEntries(s.ranks.map(r => [r.rank, r.pool == null ? "at will" : r.pool === "focus" ? `${r.left} focus point${r.left === 1 ? "" : "s"} (costs ${r.cost})` : r.left])),
     actions: s.time, ...(s.rangeText ? { range: s.rangeText } : {}), ...(s.targetText ? { targets: s.targetText } : {}), ...(s.area ? { area: `${s.area.size}-foot ${s.area.type}`, aim: aimWords(s.area.type) ?? "the GM places it" } : {}),
-    ...(s.area && s.lasting ? { lasting: "its area stays on the map after the turn" } : {}),
+    ...(s.area && s.lasting && !(s.effect && !s.damaging && !s.save && !s.attack) ? { lasting: "its area stays on the map after the turn" } : {}),   /* 0.47.0 live test: a buff area (Bless) leaves no area on the map */
+    ...(s.area && s.effect && !s.damaging && !s.save && !s.attack && s.area.type === "emanation" ? { aim: "nothing: it spreads from every side of the monster's own space, and the monster itself is included" } : {}),
     ...(s.attack ? { defense: "AC", attackMod: s.attackMod } : s.save ? { defense: `${s.save.basic ? "basic " : ""}${s.save.stat[0].toUpperCase()}${s.save.stat.slice(1)} save`, dc: s.dc } : {}),
     ...(s.damage ? { baseDamage: s.damage } : {}),
     ...(s.vital ? { vital: vitalWords(s) } : s.variants ? { variants: "what it does depends on the actions spent: the GM applies it from its card" } : {}),
@@ -942,7 +956,7 @@ export function beingFlags(actor) {
 /** Its allies the GM hasn't hidden, and itself, by label, for a spell aimed at a friend. */
 function alliesByLabel(combat, tok) {
   const labels = turns(combat).labels ?? {}, scene = sceneOf(combat), out = {};
-  for (const t of [tok, ...alliesOf(scene, tok).filter(a => !a.hidden)]) { const l = labels[t.id]; if (l) out[l] = { name: l, square: squareOf(t, scene), ...placeOf(t, scene), size: sizeOf(t), ...heightOf(t), flat: 0, ally: true, ...(t === tok ? { self: true } : {}), ...beingFlags(t.actor), ...(t.actor && isDeadNow(t.actor) ? { dead: true } : {}) }; }   /* review 6: Heal is for the living, and raises no dead   /* undead (0.46.0): healing would hurt them */
+  for (const t of [tok, ...alliesOf(scene, tok).filter(a => !a.hidden)]) { const l = labels[t.id]; if (l) out[l] = { name: l, square: squareOf(t, scene), ...placeOf(t, scene), size: sizeOf(t), ...heightOf(t), flat: 0, ally: true, ...(t === tok ? { self: true } : {}), ...beingFlags(t.actor), ...(t.actor && isDeadNow(t.actor) ? { dead: true } : {}), ...((t.actor?.attributes?.immunities ?? []).length ? { immune: t.actor.attributes.immunities.map(x => x.type) } : {}) }; }   /* review 6: Heal is for the living, and raises no dead   /* undead (0.46.0): healing would hurt them */
   return out;
 }
 /** For a Delay: for each creature the monster could name (what it perceived when asked, its allies and itself), whether its turn is still to come this
@@ -2562,6 +2576,7 @@ async function runSpell(combat, id, i, step, tok, target) {
         /* 0.47.0 (P-2): Heal or Harm at a foe is cast as its own variant ("vs. Undead", "vs. Living"), so its card shows that version and its save */
         const cast = step.castOverlay && step.overlay ? spell.loadVariant?.({ castRank: step.rank, overlayIds: [step.overlay] }) ?? spell : spell;
         const message = await watched(async () => { const card = waitFor("spell-cast"); await entry.cast(cast, { rank: step.rank, consume: !step.sustain }); return card; });   /* a Sustain spends no slot (0.46.0) */
+        if (cast !== spell) await variantRows(message, step.overlay);
         /* the record and the GM's instruction in one save, so a reload can't keep one without the other */
         await save(combat, id, { log: { [i]: { cast: { message: message.id } } }, ...(step.mode === "card" ? { note: joinNote(combat, id, cardWords(step)) } : {}) });
         await noteSustain(combat, tok, step, spell).catch(e => console.warn(`${ID} | sustain`, e));
@@ -2576,6 +2591,7 @@ async function runSpell(combat, id, i, step, tok, target) {
         const who = target ?? tok, on = who.actor; if (!on) return "ask";
         await record({ effectStarted: true });
         const put = await putEffect(on, step, { self: who === tok, spell: { tok, item: spell, rank: step.rank } });
+        if (put === "immune") { await addNote(combat, id, `${who.name} is immune to ${step.itemName} (${immuneTo(on, spell)}), so it did nothing.`); await record({ effected: true, effectOn: [] }); continue; }
         if (put !== "on") { await addNote(combat, id, put === "missing" ? `I couldn't find ${step.effectName}: put it on ${who.name} from ${step.itemName}'s card.` : `${step.effectName} asks a choice: put it on ${who.name} from ${step.itemName}'s card.`); await record({ effected: true, effectOn: [] }); if (step.mode === "buff") return "gm"; continue; }
         await record({ effected: true, effectOn: [who === tok ? "itself" : step.target ?? who.name] });
       } else if (now === "attack") {
@@ -2606,6 +2622,8 @@ async function runSpell(combat, id, i, step, tok, target) {
         await record({ applying: true }); const was = hpNow(target), dying = !!target.actor?.hasCondition?.("dying");
         await watched(() => target.actor.applyDamage({ damage: -Math.max(0, Math.floor(roll.total)), token: target, item: spell }));
         await record({ applied: true, hp: [was, hpNow(target)], healed: hpNow(target) - was });
+        /* 0.47.0 live test: healing itself isn't news to the look before its next action (it asked again, "They regained HP") */
+        if (target?.id === tok.id && request(combat, id).seen) await saveTurns(combat, { [`requests.${id}.seen.me.hp`]: (tok.actor.hitPoints?.value ?? 0) + (tok.actor.hitPoints?.temp ?? 0) });
         if (dying) await addNote(combat, id, `${target.name} was dying: check Dying and Wounded now that ${target.name} is back above 0 HP.`);
       } else if (now === "apply") {
         const message = game.messages.get(get().damage.message), roll = message?.rolls?.[0]; if (!roll) return "ask";
@@ -2772,6 +2790,7 @@ async function runArea(combat, id, i, step, tok) {
         await record({ castStarted: true, caught: ids, rows, ...(mends.length ? { mends } : {}), ...(rows.length ? {} : { results: "" }) });
         const cast = step.castOverlay && step.overlay ? spell.loadVariant?.({ castRank: step.rank, overlayIds: [step.overlay] }) ?? spell : spell;
         const message = await watched(async () => { const card = waitFor("spell-cast"); await entry.cast(cast, { rank: step.rank, consume: !step.sustain }); return card; });   /* a Sustain spends no slot (0.46.0) */
+        if (cast !== spell) await variantRows(message, step.overlay);
         await noteSustain(combat, tok, step, spell).catch(e => console.warn(`${ID} | sustain`, e));
         const names = list => listWords(list.map(t => scene.tokens.get(t)?.name ?? "someone"));
         const words = [step.mode === "card" ? `Apply ${step.itemName} from its card${rows.length ? ` to ${names(rows)}` : ""}: its area is on the map.` : null,
@@ -2782,10 +2801,11 @@ async function runArea(combat, id, i, step, tok) {
            as an aura (Bless) only on itself, since the aura hands it to the friends inside */
         await record({ effectStarted: true });
         const aura = await spreadsItself(step.effect), caught = (get().caught ?? []).filter(t => t !== tok.id && !scene.tokens.get(t)?.hidden && scene.tokens.get(t)?.actor?.isAllyOf?.(tok.actor) && !isDeadNow(scene.tokens.get(t).actor));   /* review 9: not a GM-hidden one */
-        const who = [tok, ...(aura ? [] : caught.map(t => scene.tokens.get(t)))].filter(x => x?.actor), labels = turns(combat).labels ?? {}, on = [];
+        const who = [tok, ...(aura ? [] : caught.map(t => scene.tokens.get(t)))].filter(x => x?.actor), labels = turns(combat).labels ?? {}, on = [], immune = [];
         for (const x of who) { const put = await putEffect(x.actor, step, { self: x === tok, spell: { tok, item: spell, rank: step.rank } });
-          if (put === "on") on.push(x === tok ? "itself" : labels[x.id] ?? "a friend"); else await addNote(combat, id, put === "missing" ? `I couldn't find ${step.effectName}: put it on ${x.name} from ${step.itemName}'s card.` : `${step.effectName} asks a choice: put it on ${x.name} from ${step.itemName}'s card.`); }
+          if (put === "on") on.push(x === tok ? "itself" : labels[x.id] ?? "a friend"); else if (put === "immune") immune.push(x.name); else await addNote(combat, id, put === "missing" ? `I couldn't find ${step.effectName}: put it on ${x.name} from ${step.itemName}'s card.` : `${step.effectName} asks a choice: put it on ${x.name} from ${step.itemName}'s card.`); }
         await record({ effected: true, effectOn: on });
+        if (immune.length) await addNote(combat, id, `${listWords(immune)} ${immune.length === 1 ? "is" : "are"} immune to ${step.itemName}, so ${step.effectName} isn't on ${immune.length === 1 ? "that one" : "them"}.`);
         if (aura) await addNote(combat, id, `${step.effectName} is on ${tok.name}: its aura gives it to ${pro("{their}", P(tok, combat))} allies inside it.`);
       } else if (now === "place") {
         const made = await watched(() => placeArea(combat, id, i, step, tok, spell, game.messages.get(get().cast.message)));
@@ -2808,7 +2828,7 @@ async function runArea(combat, id, i, step, tok) {
         if (!target?.actor) { await record({ mended: { [t]: true } }); continue; }
         await saveTurns(combat, { [`requests.${id}.log.${i}.mending.${t}`]: true }); const was = hpNow(target), dying = !!target.actor.hasCondition?.("dying");
         await watched(() => target.actor.applyDamage({ damage: -Math.max(0, Math.floor(roll.total)), token: target, item: spell }));
-        await saveTurns(combat, { [`requests.${id}.log.${i}.mended.${t}`]: true, [`requests.${id}.log.${i}.hp.${t}`]: [was, hpNow(target)] });
+        await saveTurns(combat, { [`requests.${id}.log.${i}.mended.${t}`]: true, [`requests.${id}.log.${i}.hp.${t}`]: [was, hpNow(target)], ...(t === tok.id && request(combat, id).seen ? { [`requests.${id}.seen.me.hp`]: (tok.actor.hitPoints?.value ?? 0) + (tok.actor.hitPoints?.temp ?? 0) } : {}) });   /* its own healing isn't news */
         if (dying) await addNote(combat, id, `${target.name} was dying: check Dying and Wounded now that ${target.name} is back above 0 HP.`);
       } else if (now === "apply") {
         const rec = get(), hurt = areaHurt(rec), t = Object.keys(hurt).find(x => !rec.applied?.[x]), target = scene.tokens.get(t);

@@ -599,6 +599,8 @@ function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here, elev 
      every friend its area catches; at a foe, or anything else, it stays the GM's from the card */
   const buff = !!sp.effect && !sp.damaging && !sp.save && !sp.attack && (area ? !!(area && (/\ball(y|ies)\b/i.test(sp.targetText ?? "") || /\b(you|yourself) and (all |your )?all(y|ies)\b/i.test(sp.text ?? ""))) : !sp.area && (!sp.targets ? !t : (sp.targets ?? 0) === 1 && !!t?.ally));
   if (buff && t?.dead) return no(`${t.name ?? tLabel} is dead: ${sp.name} would do nothing.`);
+  { const imm = buff && t?.ally ? (t.immune ?? []).find(x => traits.includes(x)) : null;   /* 0.47.0 live test: a mindless friend is immune to a mental buff */
+    if (imm) return no(`${t.name ?? tLabel} is immune to ${imm} effects, so ${sp.name} would do nothing to them.`); }
   /* a basic save area that deals damage runs for real (Rhea, 2026-11-07): everyone in it saves and takes damage by their own degree */
   const mode = vMode ?? (vArea && area ? (ctx.saveRows || !vital.hurts ? "area" : "card") : one && sp.attack ? "attack" : one && sp.save && ctx.saveRows ? "save" : missiles ? "missiles" : buff ? "buff" : area && !sp.variants && !sp.attack && sp.save?.basic && sp.damaging && ctx.saveRows ? "area" : "card");
   const isAttack = traits.includes("attack");
