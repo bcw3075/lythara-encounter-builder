@@ -1156,7 +1156,10 @@ async function judgeNow(combat, requestId) {
   if (!c.ok) return reject(combat, requestId, c.reason);
   /* actions left unused with no word why (0.39.11, the live test): asked once to use them or say why; that ask uses up no try, so it never hands a turn
      to the GM. A plan that still leaves them, or says why, goes ahead and the card says so. */
-  if (c.spare > 0 && !clean.plan.unused && !r.reaction && !(r.why ?? []).some(w => w?.who === "gm") && !request(combat, requestId).nudged) return nudge(combat, requestId, spareAsk(c.spare, c.actions));
+  /* 0.46.0 (live test finding 23: two plans skipped an open flank with no reason): an open flank not taken and no "noFlank" is part of the same one ask */
+  const flankWhy = r.flank && !r.reaction && !clean.plan.noFlank && /Angel gave no reason/.test(flankNote({ ...r.flank, block: r.packet?.flank ?? null, steps: clean.plan.steps, noFlank: null }) ?? "");
+  const askSpare = c.spare > 0 && !clean.plan.unused && !r.reaction;
+  if ((askSpare || flankWhy) && !(r.why ?? []).some(w => w?.who === "gm") && !request(combat, requestId).nudged) return nudge(combat, requestId, [askSpare ? spareAsk(c.spare, c.actions) : "", flankWhy ? FLANK_ASK : ""].filter(Boolean).join(" "));
   if (c.spare > 0 && !r.reaction) await addNote(combat, requestId, spareNote(c.spare, clean.plan.unused));
   /* a flank was open and the plan doesn't take it (0.44.0, F-10): the card says why, in the thinker's words or by its mind */
   { const fn = r.flank && !r.reaction ? flankNote({ ...r.flank, block: r.packet?.flank ?? null, steps: clean.plan.steps, noFlank: clean.plan.noFlank ?? null }) : null; if (fn) await addNote(combat, requestId, fn); }
@@ -1174,6 +1177,7 @@ async function judgeNow(combat, requestId) {
 }
 /* unused actions (0.39.11): the ask to the thinker, and the line on the card when they stay unused */
 const spareAsk = (n, of) => `The plan uses ${(of ?? 3) - n} of ${of ?? 3} actions. Use the ${n === 1 ? "last one" : `last ${n}`} (a reload, a Step to a better square, Take Cover, a Seek, Raise a Shield, another Strike, anything that helps), or, if keeping ${n === 1 ? "it" : "them"} is really better, add "unused" to the plan: a few words saying why.`;
+const FLANK_ASK = `"flank.squares" offered a square to flank from and the plan ends on none of them. Take the flank, or, if not flanking really is better, add "noFlank" to the plan: a few words saying why.`;
 const spareNote = (n, why) => `${n === 1 ? "1 action is" : `${n} actions are`} left unused: ${why || "Angel gave no reason"}.`;
 /** Asked once to use its spare actions (0.39.11): like a refusal, but no try is used up, so a plan is never handed to the GM for it. */
 async function nudge(combat, requestId, reason) {
