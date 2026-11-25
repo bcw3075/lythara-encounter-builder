@@ -2026,6 +2026,8 @@ async function runAbility(combat, id, i, step, tok, target) {
         let made = hasEffect(on, step.effect);
         if (!made) { const src = await fromUuid(step.effect); if (!src) { await addNote(combat, id, `I couldn't find ${step.effectName}: apply it from ${step.itemName}'s card.`); await record({ effected: true }); return "gm"; }
           const data = src.toObject(); delete data._id; data._stats = { ...(data._stats ?? {}), compendiumSource: step.effect };
+          /* live test: an effect that asks a choice (Thermal Nimbus: cold or fire) opens its dialog on the runner's page, where nobody can answer it */
+          if ((data.system?.rules ?? []).some(r => r.key === "ChoiceSet" && r.selection == null)) { await addNote(combat, id, `${step.effectName} asks a choice: apply it to ${on.name} from ${step.itemName}'s card.`); await record({ effected: true }); return "gm"; }
           /* review 8: entering a stance ends the one it was in (PF2e: one stance at a time) */
           { const isStance = it => (it?.system?.traits?.value ?? []).includes("stance"), mine = on.items.find(i => (i.slug ?? game.pf2e.system.sluggify(i.name)) === String(step.item ?? "").replace(/-\d+$/, ""));
             if (step.mode === "self" && isStance(mine)) { const others = new Set(on.items.filter(i => isStance(i) && i.system.selfEffect?.uuid && i.system.selfEffect.uuid !== step.effect).map(i => i.system.selfEffect.uuid));
