@@ -186,3 +186,5 @@ The gate counts the open ones; above 8 open at a release's start, that release m
 - (u-178) [0.46.1] open: Impulse areas are card-only and their parsed text shows raw @actor.level formulas and drops 'basic' (2026-11-25 playtest F6)
 - (u-179) [0.46.1] open: No Raise a Shield step, so a monster's Shield Block never happens (2026-11-25 playtest F9)
 - (u-180) [0.46.1] open: Minor (2026-11-25 playtest F8): a replan when a creature is newly seen though the plan still fits; the note after a Glimpse repeats its text; Light listed twice in a packet
+- (u-181) [0.46.1] open: A turn event can be missed by fight_wait (2026-11-25 retest, 0.46.1): the animist party member's round 3 turn request existed but a wait with the last cursor came back idle; the stall event a minute later carried its request id
+- (u-182) [0.46.1] open: A dead creature in a party member's perceived list can carry alliesLost: true (2026-11-25 retest: the dead Skeleton Guard in the kineticist party member's packet), which offers a Point Out at a corpse
