@@ -558,7 +558,7 @@ function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here, elev 
     }
     /* 0.46.1 (self-run playtest: Bless and Courageous Anthem were refused for catching the caster's own side): a spell for "you and allies" that does no
        harm (no damage, no save, no attack) is meant to catch them */
-    const forFriends = /\ball(y|ies)\b/i.test(sp.targetText ?? "") && !/\b(non-?|not |enem)/i.test(sp.targetText ?? "") && !sp.damaging && !sp.save && !sp.attack;   /* review 8: "non-allies", "enemy or ally" aren't for friends */
+    const forFriends = ((/\ball(y|ies)\b/i.test(sp.targetText ?? "") && !/\b(non-?|not |enem)/i.test(sp.targetText ?? "")) || (!sp.targetText && /\b(you|yourself) and (all |your )?all(y|ies)\b/i.test(sp.text ?? ""))) && !sp.damaging && !sp.save && !sp.attack;   /* review 8: "non-allies", "enemy or ally" aren't for friends; live retest: Courageous Anthem has no target line, only "You and all allies in the area" in its text */
     if (r.allies.length && !step.deliberate && !forFriends) return no(`${sp.name} there would also catch ${listWords(r.allies.map(l => l === r.self ? "itself" : l))}. Aim it elsewhere, or add "deliberate": true if {they} {means|mean} to.`);
     area = { type: r.aim.type, size: r.aim.size, aim: r.aim, catches: r.known, hits: r.ids, ...(step.deliberate ? { deliberate: true } : {}) };
   } else if (t && sp.area && sp.range != null) { const d = distanceTo(t, null); if (d > sp.range) return no(`${t.name ?? tLabel} is ${d} ft away, beyond ${sp.name}'s range (${sp.range} ft).`); }

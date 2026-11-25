@@ -425,7 +425,7 @@ async function packAttack(tok, target) {
 }
 /* review 2: set (or, after the damage roll, put back off) only where it differs, so no later roll by another path keeps a stale "on" */
 async function packOff(tok, on = false, rules = null) {
-  const a = tok.actor; rules ??= (a?.items ?? []).flatMap(it => (it.system?.rules ?? []).filter(r => r.key === "RollOption" && r.toggleable && r.option === "pack-attack" && !(r.suboptions?.length)).map(r => ({ it, r })));
+  const a = tok.actor; rules ??= (a?.items?.contents ?? []).flatMap(   /* an embedded collection has no flatMap (live retest) */ it => (it.system?.rules ?? []).filter(r => r.key === "RollOption" && r.toggleable && r.option === "pack-attack" && !(r.suboptions?.length)).map(r => ({ it, r })));
   for (const { it, r } of rules) { const domain = r.domain ?? "all";   /* review 1: PF2e's own default domain */
     if (!!a.rollOptions?.[domain]?.[r.option] !== on) await watched(() => a.toggleRollOption(domain, r.option, it.id, on)); }
 }
