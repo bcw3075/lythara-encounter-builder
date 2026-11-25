@@ -8,7 +8,7 @@ import { DEAF_FLAT, cleanCommand, commandWords } from "./command.mjs";
 import { pointResult } from "./pointout.mjs";
 import { IT, pro } from "./pronoun.mjs";
 /** What each step kind costs. An ability's cost is its own (0 for a free action); 1 here is only the fallback. */
-export const COSTS = { strike: 1, stride: 1, fly: 1, swim: 1, climb: 1, burrow: 1, release: 0, draw: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, flee: 1, interact: 1, delay: 0, order: 0, say: 0, "command-animal": 1, "point-out": 1, none: 0 };
+export const COSTS = { strike: 1, stride: 1, fly: 1, swim: 1, climb: 1, burrow: 1, release: 0, draw: 1, step: 1, crawl: 1, stand: 1, "drop-prone": 1, "take-cover": 1, ability: 1, spell: 1, hide: 1, sneak: 1, seek: 1, flee: 1, interact: 1, delay: 0, order: 0, say: 0, "command-animal": 1, "point-out": 1, sustain: 1, none: 0 };
 /* Interact and Delay (0.12.0). Interact (https://2e.aonprd.com/Actions.aspx?ID=2296): 1 action, manipulate; the module can't know what a monster does
    with its hands, so it posts a card saying what, and the GM applies it, as for any ability the module can't run. Restrained bars manipulate actions;
    Grabbed asks a DC 5 flat check for them, lost on a failure. Delay (ID 2294): a free action when its turn begins, so it must be the plan's only step and
@@ -129,6 +129,7 @@ function checkPlanIt(plan, ctx) {
   if (ctx.yielded) return { ok: false, reason: "{They} {has|have} yielded and {stands|stand} down: {they} {takes|take} no actions until the GM answers {their} yield." };   /* 0.29.0, design review 3 */
   let left = ctx.actions, attacks = ctx.attacksBefore ?? 0, here = ctx.me?.square ?? null, herePos = ctx.me?.pos ?? here, hereElev = Number(ctx.me?.elev) || 0, prone = !!ctx.prone, took = !!ctx.tookCover, tookProne = false, moved = false, sought = false, surfaced = false, fled = false, ordered = false, said = false, gaveUp = false, last = ctx.last ?? null; const steps = [], routes = [], uses = {}, pools = {}, shots = {};
   const commanded = new Set(), pointed = new Set();   /* 0.30.0: one command an animal and one Point Out a creature in a plan */
+  const gives = new Set(), sustainedNow = new Set();   /* 0.46.0: the self-effects its earlier steps put on (by uuid); the spells it Sustains in this plan */
   /* up a tree it climbed (it holds on there: no Stride, Step and the like until it climbs down), and what it holds in its hands */
   let tree = hereElev > 0 && ctx.onTree ? ctx.onTree : null, below = !!ctx.below; if (below) hereElev = 0;   /* its token sits below 0; once up it stands at 0 */ const holding = new Map((ctx.holding ?? []).map(h => [h.id, h.name])), released = new Set(), drawn = new Set(), drawnItem = new Map(), handsOf = new Map((ctx.holding ?? []).map(h => [h.id, Number(h.hands) || 1]));
   let freeHands = Math.max(0, (ctx.hands ?? 2) - [...handsOf.values()].reduce((s, n) => s + n, 0));   /* draw (0.33.2): hands free now, by what it holds */
@@ -144,6 +145,21 @@ function checkPlanIt(plan, ctx) {
     if (gaveUp) return { ok: false, reason: `${at}: a yield has to be the plan's last step: {they} {stands|stand} down, and nothing after it would happen.` };
     /* burrowed (0.16.0): earth stands between it and everything (no line of effect, Rules ID 2382), so it can only Burrow (on, or up), Delay or do nothing */
     if (below && !["burrow", "delay", "none"].includes(step.do)) return { ok: false, reason: `${at}: {they} {is|are} burrowed under the ground, where {they} can't reach, see or affect anything above. A Burrow with "up": true brings {them} to the surface first (1 action).` };
+    /* Sustain (0.46.0): 1 action, once a round for each spell it is sustaining; an area spell whose Sustain repeats it is aimed again, with no slot spent */
+    if (step.do === "sustain") {
+      if (ctx.cantAct) return { ok: false, reason: `${at}: ${ctx.cantAct}` };
+      const su = (ctx.sustaining ?? []).find(x => x.id === step.item);
+      if (!su) return { ok: false, reason: `${at}: {they} {isn't|aren't} sustaining "${step.item}"${(ctx.sustaining ?? []).length ? ` ({they} {is|are} sustaining ${listWords(ctx.sustaining.map(x => x.id))})` : ""}.` };
+      if (su.sustained || sustainedNow.has(su.id)) return { ok: false, reason: `${at}: ${su.name} is already sustained this round (or was cast this round): Sustain it again on a later turn.` };
+      if (left < 1) return { ok: false, reason: `${at}: no actions left.` };
+      const again = su.spell.area && placeable(su.spell.area) && su.spell.save?.basic && su.spell.damaging;
+      if (again) {
+        const r = checkSpell({ do: "spell", item: su.id, ...(step.target ? { target: step.target } : {}), ...(step.at ? { at: step.at } : {}), ...(step.toward ? { toward: step.toward } : {}), ...(step.deliberate ? { deliberate: true } : {}) }, { ...su.spell, minActions: 1, maxActions: 1 }, { ctx, at, attacks, distanceTo, pools: {}, here, elev: hereElev });
+        if (!r.ok) return r;
+        steps.push({ ...r.step, actions: 1, sustain: true, key: su.key });
+      } else steps.push({ do: "sustain", item: su.id, itemName: su.name, key: su.key, actions: 1 });
+      left -= 1; sustainedNow.add(su.id); last = { do: "sustain" }; continue;
+    }
     if (step.do === "spell") {
       if (ctx.cantAct) return { ok: false, reason: `${at}: ${ctx.cantAct}` };
       const sp = (ctx.spells ?? []).find(s => s.id === step.item);
@@ -166,10 +182,11 @@ function checkPlanIt(plan, ctx) {
     }
     if (ab) {
       if (ctx.cantAct) return { ok: false, reason: `${at}: ${ctx.cantAct}` };
-      const r = checkAbility(step, { ...ab, usesLeft: ab.id in uses ? uses[ab.id] : ab.usesLeft }, { ctx, last, at, attacks, distanceTo });
+      const r = checkAbility(step, { ...ab, usesLeft: ab.id in uses ? uses[ab.id] : ab.usesLeft }, { ctx, last, at, attacks, distanceTo, channeled: gives });
       if (!r.ok) return r;
-      /* Grab's hold takes an action even for Improved Grab (Monster Core: it still needs an action to extend the duration) */
-      const cost = r.step.mode === "hold" ? 1 : abilityCost(ab);
+      if (r.gives) gives.add(r.gives);   /* 0.46.0: an effect it puts on itself earlier in the plan (Channel Elements before a blast, a stance once) */
+      /* Grab's hold takes an action even for Improved Grab (Monster Core: it still needs an action to extend the duration); a blast its 1 or 2 */
+      const cost = r.step.mode === "hold" ? 1 : r.cost ?? abilityCost(ab);
       if (cost > left) return { ok: false, reason: `${at}: no actions left${cost > 1 ? ` (${ab.name} takes ${cost})` : ""}.` };
       left -= cost; if (ab.usesLeft != null) uses[ab.id] = (ab.id in uses ? uses[ab.id] : ab.usesLeft) - 1;
       steps.push({ ...r.step, actions: cost });
@@ -459,6 +476,12 @@ function checkPlanIt(plan, ctx) {
         sides = ctx.edgeAt(step.to, ctx.me?.size ?? 1);
         if (!sides.length) return { ok: false, reason: `${at}: a flee has to end on the outermost ring of squares, at the map's edge; [${step.to[0]}, ${step.to[1]}] isn't on it. Stride toward the edge instead and flee once {they} {is|are} within reach.` };
       }
+      /* a 5-foot Stride is a Step when a Step can go there (0.46.0, Rhea at the live test: "Technically that was a Step, not a Stride"): the same action,
+         and it doesn't set off reactions to moving. Not into difficult terrain, and not with a Speed under 10 feet: the Step's own rules. */
+      if (step.do === "stride" && way.cost === STEP_FT && ctx.speed >= 2 * STEP_FT) {
+        const st = ctx.route(here, step.to, routes, { step: true, kind: "step" });
+        if (st.ok && st.cost <= STEP_FT) { steps.push({ do: "step", from: [...here], to: [...step.to], route: st.route, cost: st.cost, fromStride: true }); routes.push(st.route); here = [...step.to]; herePos = here; moved = true; took = tookProne = false; last = { do: "step" }; continue; }
+      }
       steps.push({ do: step.do, from: [...here], to: [...step.to], route: way.route, cost: way.cost, ...(sides ? { sides } : {}) }); routes.push(way.route);
       if (step.do === "flee") fled = true;
       here = [...step.to]; herePos = here; moved = true; took = tookProne = false; last = { do: step.do }; continue;
@@ -511,6 +534,13 @@ function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here, elev 
     t = ctx.targets?.[step.target] ?? ctx.allies?.[step.target] ?? null; if (!t) return no(`{they} {doesn't|don't} know of "${step.target}".`);
     tLabel = step.target;
   } else if (sp.targets && !sp.area) return no(`${sp.name} needs a target: give "target", a label.`);
+  /* a healing spell at one friend (0.46.0, the live test: Heal on a dying ally was card only): the range is the one its actions give (Heal: 1 action
+     touch, 2 actions 30 feet); the module casts it, rolls the healing at the rank and applies it */
+  const healAt = sp.heal?.[actions] ?? null;
+  if (healAt && !healAt.area && t?.ally && !t.undead && (healAt.range != null || healAt.touch)) {
+    const reach = healAt.touch ? Math.max(5, ctx.reach ?? 5) : healAt.range, d = distanceTo(t, healAt.touch ? reach : null);
+    if (d > reach) return no(`${t.name ?? tLabel} is ${d} ft away, out of ${healAt.touch ? "reach for" : "range of"} ${sp.name} with ${actions} action${actions === 1 ? "" : "s"} (${healAt.touch ? "touch" : `${reach} ft`}).`);
+  }
   if (t && (sp.range != null || sp.touch) && !sp.area && !sp.variants) {
     const reach = sp.touch ? Math.max(5, ctx.reach ?? 5) : sp.range, d = distanceTo(t, sp.touch ? reach : null);
     if (d > reach) return no(`${t.name ?? tLabel} is ${d} ft away, out of ${sp.touch ? "reach for" : "range of"} ${sp.name} (${reach} ft).`);
@@ -532,13 +562,27 @@ function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here, elev 
   /* run for real only at one creature it perceives, and never a spell whose range, targets or damage change with its actions (Heal, Harm: PF2e's
      variants, whose base item reads as a basic save at touch), nor at an ally: those are the GM's from the card */
   const one = !sp.area && !sp.variants && (sp.targets ?? 0) === 1 && !!t && !t.ally;
+  /* 0.46.0 (the live test, Rhea: "the damage should be applied automatically"): missiles that always hit (Force Barrage, the old Magic Missile) at one
+     creature it fights, all of them at that creature, rolled together as the rules say; a healing spell at one friend, at the actions that keep it to one */
+  const missiles = MISSILES[sp.slug ?? sp.id?.replace(/-\d+$/, "")] && !sp.area && !!t && !t.ally && sp.damaging && !sp.attack && !sp.save ? missileCount(actions, at_.rank) : 0;
+  const heals = !!healAt && !healAt.area && !!t?.ally && !t.undead;
   /* a basic save area that deals damage runs for real (Rhea, 2026-11-07): everyone in it saves and takes damage by their own degree */
-  const mode = one && sp.attack ? "attack" : one && sp.save && ctx.saveRows ? "save" : area && !sp.variants && !sp.attack && sp.save?.basic && sp.damaging && ctx.saveRows ? "area" : "card";
+  const mode = one && sp.attack ? "attack" : one && sp.save && ctx.saveRows ? "save" : missiles ? "missiles" : heals ? "heal" : area && !sp.variants && !sp.attack && sp.save?.basic && sp.damaging && ctx.saveRows ? "area" : "card";
   const isAttack = traits.includes("attack");
   const out = { do: "spell", item: sp.id, itemName: sp.name, ...(sp.entryId ? { entryId: sp.entryId, spellId: sp.spellId } : {}), rank: at_.rank, actions, mode, ...(t ? { target: tLabel, targetName: t.name ?? tLabel, flat: sp.area ? 0 : t.flat ?? 0 } : {}),
     ...(isAttack ? { attack: true, mapCounts: true, variant: Math.min(attacks, 2) } : {}), ...(area ? { area, ...(sp.lasting ? { lasting: true } : {}) } : sp.area ? { area: { ...sp.area } } : {}),
-    ...(mode === "save" || mode === "area" ? { save: sp.save.stat, basic: !!sp.save.basic } : {}), damaging: !!sp.damaging, ...(sp.critText ? { critText: true } : {}) };
+    ...(mode === "save" || mode === "area" ? { save: sp.save.stat, basic: !!sp.save.basic } : {}), damaging: !!sp.damaging, ...(sp.critText ? { critText: true } : {}),
+    ...(missiles ? { missiles } : {}), ...(heals && healAt.overlay ? { overlay: healAt.overlay } : {}) };
   return { ok: true, step: out, pool: at_.pool, poolLeft: at_.left, poolCost: at_.cost ?? 1 };
+}
+/** Spells whose missiles always hit (0.46.0): Force Barrage and the legacy Magic Missile, the same spell in PF2e's data. Each action fires one missile,
+    and every 2 ranks above 1st add one more for each action (Heightened (+2)); missiles at one target are rolled together, as the rules say. */
+export const MISSILES = { "force-barrage": true, "magic-missile": true };
+export const missileCount = (actions, rank = 1) => Math.max(1, actions) * (1 + Math.floor((Math.max(1, rank) - 1) / 2));
+/** One missile's formula times n ("1d4+1" three times is "3d4+3"); null when the formula isn't one die and a number. */
+export function missileFormula(formula, n) {
+  const m = String(formula ?? "").replace(/\s+/g, "").match(/^(\d*)d(\d+)(?:\+(\d+))?$/); if (!m || !(n >= 1)) return null;
+  const dice = (Number(m[1]) || 1) * n, plus = (Number(m[3]) || 0) * n; return `${dice}d${m[2]}${plus ? `+${plus}` : ""}`;
 }
 /** What to do next with a spell step, from its record. Never repeated: when the record can't tell whether a stage finished, "ask". The spell is cast first
     (its slot or use is spent and its card posted), then a flat check for a concealed or hidden target, then by mode: "attack" rolls the spell attack and,
@@ -550,7 +594,8 @@ export function nextSpell(rec = {}, { mode = "card", flat = 0, apply = false, da
   if (rec.noRows) return "gm";
   if (flat) { if (!rec.flatStarted) return "flat"; if (!rec.flat) return "ask"; if (!rec.flat.ok) return "next"; }   /* a concealed or hidden target, card mode too: a failure means it isn't affected */
   if (mode === "card") return "gm";
-  if (mode === "attack") {
+  if (mode === "missiles" || mode === "heal") { /* nothing to roll before the damage or healing: missiles always hit */ }
+  else if (mode === "attack") {
     if (!rec.started) return "attack";
     if (!rec.attack) return "ask";
     if (rec.attack.degree < 2) return "next";
@@ -601,7 +646,7 @@ function aimTextIt(area) {
   return a.toward ? ` toward square ${a.toward[0]}, ${a.toward[1]}` : "";
 }
 /** The damage multiplier a spell step applies: double on a spell attack's critical hit; by degree for a basic save. */
-export const spellMultiplier = (step, rec = {}) => (step.mode === "attack" ? (rec.attack?.degree === 3 ? 2 : 1) : SAVE_MULT[rec.save?.degree] ?? 1) * (rec.siphon ? 0.5 : 1);   /* Shadow Siphon (0.36.0): half */
+export const spellMultiplier = (step, rec = {}) => step.mode === "missiles" || step.mode === "heal" ? (step.mode === "missiles" && rec.siphon ? 0.5 : 1) : (step.mode === "attack" ? (rec.attack?.degree === 3 ? 2 : 1) : SAVE_MULT[rec.save?.degree] ?? 1) * (rec.siphon ? 0.5 : 1);   /* Shadow Siphon (0.36.0): half */
 /** A spell's actions from PF2e's "time": "2", "1 to 3", "1 or 2", "free"; null for a reaction or anything longer than a turn. */
 export function spellActions(time = "") {
   const t = String(time).trim().toLowerCase();
@@ -628,7 +673,22 @@ const sizeRank = c => SIZES.indexOf(c);
 /** One ability step, checked. A follow-up (Grab, Knockdown, Push, Pull) runs for real; Grab can also keep hold of a creature it has grabbed or restrained
     ("hold", no check); any other ability is "card": its card goes to chat and the GM applies it. Requirements written in an ability's text can't be read,
     so the GM sees those on the card. */
-function checkAbility(step, ab, { ctx, last, at, attacks, distanceTo }) {
+/** Elemental Blast (0.46.0), checked: at one creature it fights, 1 action or 2 (the 2-action blast adds its Constitution modifier to the damage as a status
+    bonus), melee (within reach) or ranged (within the blast's range), of an element it has. It needs its kinetic aura up: Channel Elements earlier in the
+    plan, or already on. Kineticist rules: https://2e.aonprd.com/Actions.aspx?ID=2989 (Elemental Blast), https://2e.aonprd.com/Actions.aspx?ID=2988 */
+function checkBlast(step, ab, t, { ctx, at, attacks, distanceTo, channeled }) {
+  const no = reason => ({ ok: false, reason: `${at}: ${reason}` }), b = ab.blast;
+  if (!t || t.ally) return no(`${ab.name} needs "target": a creature {they} {fights|fight}.`);
+  if (!b.gate && !channeled?.has?.(b.gateEffect)) return no(`${ab.name} needs {their} kinetic aura up: put a Channel Elements step before it.`);
+  const actions = step.actions ?? 1; if (actions !== 1 && actions !== 2) return no(`${ab.name} takes 1 or 2 actions ("actions": 1 or 2), not ${step.actions}.`);
+  const cfg = (b.configs ?? []).find(c => !step.element || c.element === step.element); if (!cfg) return no(`{they} {has|have} no ${step.element} blast (${listWords((b.configs ?? []).map(c => c.element))}).`);
+  const type = step.damageType && cfg.damageTypes.includes(step.damageType) ? step.damageType : cfg.damageTypes[0];
+  const reach = b.reach ?? 5, d = distanceTo(t, reach), melee = step.melee ?? d <= reach;
+  if (melee && d > reach) return no(`${t.name ?? step.target} is ${d} ft away, out of reach of a melee ${ab.name} (${reach} ft).`);
+  if (!melee && cfg.range && distanceTo(t, null) > cfg.range) return no(`${t.name ?? step.target} is ${distanceTo(t, null)} ft away, beyond {their} ${cfg.element} blast's ${cfg.range} feet.`);
+  return { ok: true, cost: actions, step: { do: "ability", item: ab.id, itemName: ab.name, mode: "blast", element: cfg.element, damageType: type, melee: !!melee, blastActions: actions, target: step.target, targetName: t.name ?? step.target, flat: t.flat ?? 0, attack: true, mapCounts: true, variant: Math.min(attacks, 2) } };
+}
+function checkAbility(step, ab, { ctx, last, at, attacks, distanceTo, channeled = null }) {
   const no = reason => ({ ok: false, reason: `${at}: ${reason}` });
   if (ab.usesLeft === 0) return no(`${ab.name} has no uses left.`);
   const traits = ab.traits ?? [];
@@ -642,6 +702,18 @@ function checkAbility(step, ab, { ctx, last, at, attacks, distanceTo }) {
     let t = null; if (step.target) { t = ctx.targets[step.target] ?? null;
       if (!t) { const mine = ctx.allies?.[step.target] ?? null; if (!mine) return no(`{they} {doesn't|don't} know of "${step.target}".`);
         if (isAttack) return no(`"${step.target}" is on {their} side: ${ab.name} is an attack, and needs a creature {they} {fights|fight}.`); t = mine; } }
+    /* 0.46.0 (the live test: Elemental Blast, Channel Elements and Channeler's Stance were card only): a kineticist's Elemental Blast rolls like a Strike;
+       an action with a self-effect (a stance, Channel Elements) puts its effect on, and one already on is refused (Aurora re-entered Channeler's Stance);
+       an action whose text gives one effect to a friend (Inspiring Display) puts that effect on the friend */
+    if (ab.blast) return checkBlast(step, ab, t, { ctx, at, attacks, distanceTo, channeled });
+    if (ab.selfEffect) {
+      if (ab.selfOn || channeled?.has?.(ab.selfEffect)) return no(`${ab.name}'s effect (${ab.selfEffectName ?? ab.name}) is already on {them}${traits.includes("stance") ? ": {they} {is|are} in that stance" : ""}, so using it again would waste the action.`);
+      return { ok: true, step: { do: "ability", item: ab.id, itemName: ab.name, mode: "self", effect: ab.selfEffect, effectName: ab.selfEffectName ?? ab.name, ...(isAttack ? { attack: true, mapCounts: true, variant: Math.min(attacks, 2) } : {}) }, gives: ab.selfEffect };
+    }
+    if (ab.allyEffect && t?.ally && !isAttack) {
+      if (ab.allyEffectRange != null) { const d = distanceTo(t, null); if (d > ab.allyEffectRange) return no(`${t.name ?? step.target} is ${d} ft away, beyond ${ab.name}'s ${ab.allyEffectRange} feet.`); }
+      return { ok: true, step: { do: "ability", item: ab.id, itemName: ab.name, mode: "effect", effect: ab.allyEffect, effectName: ab.allyEffectName ?? ab.name, target: step.target, targetName: t.name ?? step.target } };
+    }
     return { ok: true, step: { do: "ability", item: ab.id, itemName: ab.name, mode: "card", ...(t ? { target: step.target, targetName: t.name ?? step.target, flat: t.flat ?? 0 } : {}), ...(isAttack ? { attack: true, mapCounts: true, variant: Math.min(attacks, 2) } : {}) } };
   }
   if (ctx.cantAttack) return no(ctx.cantAttack);
@@ -770,8 +842,9 @@ function doneStepIt(step, rec = {}) {
   if (step.do === "point-out") return { do: "point-out", target: step.target, result: rec.flat && !rec.flat.ok ? "flat check failed" : pointResult(rec) };
   if (step.do === "interact") return { do: "interact", what: step.what, result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.posted ? "card posted for the GM to apply" : "unknown" };
   if (step.do === "delay") return { do: "delay", after: step.after, result: rec.moved ? "delayed: {their} turn comes back after that creature's" : rec.ended ? "turn ended; {their} place in the order may not have moved" : "unknown" };
-  if (step.do === "ability") return { do: "ability", item: step.item, ...(step.target ? { target: step.target } : {}), result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.check ? CHECK_OUTCOMES[rec.check.degree] ?? "unknown" : rec.posted ? (step.mode === "hold" ? "kept hold" : "card posted for the GM to apply") : "unknown" };
-  if (step.do === "spell") return { do: "spell", item: step.item, rank: step.rank, ...(step.target ? { target: step.target } : {}), result: spellResult(step, rec) };
+  if (step.do === "ability") return { do: "ability", item: step.item, ...(step.target ? { target: step.target } : {}), result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.check ? CHECK_OUTCOMES[rec.check.degree] ?? "unknown" : step.mode === "blast" ? (rec.attack ? OUTCOMES[rec.attack.degree] ?? "unknown" : "unknown") : step.mode === "self" || step.mode === "effect" ? (rec.effected ? `${step.effectName ?? "its effect"} is on${step.mode === "effect" ? ` ${step.target}` : ""}` : "unknown") : rec.posted ? (step.mode === "hold" ? "kept hold" : "card posted for the GM to apply") : "unknown" };
+  if (step.do === "sustain") return { do: "sustain", item: step.item, result: rec.posted ? "sustained" : "unknown" };
+  if (step.do === "spell") return { do: "spell", item: step.item, rank: step.rank, ...(step.sustain ? { sustain: true } : {}), ...(step.target ? { target: step.target } : {}), result: spellResult(step, rec) };
   if (step.do !== "strike") return { do: step.do };
   return { do: "strike", item: step.item, target: step.target, result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.attack ? OUTCOMES[rec.attack.degree] ?? "unknown" : "unknown" };
 }
@@ -783,6 +856,8 @@ function spellResult(step, rec = {}) {
   if (step.mode === "card" || rec.noRows) return "card posted for the GM to apply";
   if (step.mode === "area") return rec.results != null || (rec.rows && !rec.rows.length) ? (rec.results ? `saves: ${rec.results}` : "cast; no one {they} {knows|know} of was in the area") : "waiting for saves";
   if (step.mode === "attack") return rec.attack ? OUTCOMES[rec.attack.degree] ?? "unknown" : "unknown";
+  if (step.mode === "missiles") return rec.applied ? `${step.missiles} missile${step.missiles === 1 ? "" : "s"} hit` : rec.damage ? `${step.missiles} missile${step.missiles === 1 ? "" : "s"} rolled` : "cast";
+  if (step.mode === "heal") return rec.applied ? `healed ${rec.healed ?? "some"} HP` : rec.damage ? "healing rolled" : "cast";
   return rec.save ? `target's save: ${CHECK_OUTCOMES[rec.save.degree] ?? "unknown"}` : "waiting for the save";
 }
 
@@ -979,11 +1054,16 @@ function describeStepIt(s) {
     const flat = s.flat ? `, after a DC ${s.flat} flat check` : "";
     if (s.mode === "check") return `${s.itemName} at ${s.targetName}: a ${CHECK_WORD[s.check]} check, no attack penalty${flat}${s.actions ? "" : " (free action)"}.`;
     if (s.mode === "hold") return `${s.itemName}: keeps hold of ${s.targetName}.`;
+    if (s.mode === "blast") return `${s.itemName} (${s.element}, ${s.blastActions ?? 1} action${(s.blastActions ?? 1) === 1 ? "" : "s"}, ${s.melee ? "melee" : "ranged"}) at ${s.targetName}${s.variant ? `, attack ${s.variant + 1}` : ""}${flat}.`;
+    if (s.mode === "self") return `${s.itemName}: puts ${s.effectName ?? "its effect"} on {themself}.`;
+    if (s.mode === "effect") return `${s.itemName}: puts ${s.effectName ?? "its effect"} on ${s.targetName}.`;
     return `${s.itemName}${s.targetName ? ` at ${s.targetName}` : ""}${s.variant ? `, attack ${s.variant + 1}` : ""}: its card goes to chat for you to apply${s.flat ? ` (a DC ${s.flat} flat check if it targets)` : ""}.`;
   }
   if (s.do === "spell") {
-    const head = `Casts ${s.itemName} (rank ${s.rank}${s.actions !== 2 ? `, ${s.actions} action${s.actions === 1 ? "" : "s"}` : ""})`, flat = s.flat ? `, after a DC ${s.flat} flat check` : "";
+    const head = s.sustain ? `Sustains ${s.itemName} (1 action)` : `Casts ${s.itemName} (rank ${s.rank}${s.actions !== 2 ? `, ${s.actions} action${s.actions === 1 ? "" : "s"}` : ""})`, flat = s.flat ? `, after a DC ${s.flat} flat check` : "";
     if (s.mode === "attack") return `${head} at ${s.targetName}: a spell attack${s.variant ? `, attack ${s.variant + 1}` : ""}${flat}.`;
+    if (s.mode === "missiles") return `${head} at ${s.targetName}: ${s.missiles} missile${s.missiles === 1 ? "" : "s"}, which always hit${flat}.`;
+    if (s.mode === "heal") return `${head} on ${s.targetName}: the healing is rolled and applied.`;
     if (s.area?.aim) {
       const what = `a ${s.area.size}-foot ${s.area.type}${aimTextIt(s.area)}${s.area.catches?.length ? `, catching ${listWords(s.area.catches)}` : ""}${s.area.deliberate ? " ({their} allies on purpose)" : ""}`;
       if (s.mode === "area") return `${head}: ${what}. Each rolls a basic ${s.save[0].toUpperCase() + s.save.slice(1)} save and takes damage by degree.`;
@@ -992,6 +1072,7 @@ function describeStepIt(s) {
     if (s.mode === "save") return `${head} at ${s.targetName}: a ${s.basic ? "basic " : ""}${s.save[0].toUpperCase() + s.save.slice(1)} save${flat}${s.damaging && s.basic ? "" : ", then you apply its effects"}.`;
     return `${head}${s.targetName ? `${s.area ? " aimed at" : " at"} ${s.targetName}` : ""}${flat}: its card goes to chat for you to apply${s.area ? ` (place its ${s.area.size}-foot ${s.area.type})` : ""}${s.attack ? `, as attack ${(s.variant ?? 0) + 1}` : ""}.`;
   }
+  if (s.do === "sustain") return `Sustains ${s.itemName}.`;
   if (s.do === "take-cover") return s.why === "prone" ? "Takes Cover while prone." : s.why === "near" ? "Takes Cover by the wall or trunk next to {them}." : `Takes Cover behind {their} cover from ${s.from}.`;
   if (s.do === "climb") return climbWords(s);
   if (s.do === "draw") return `Draws {their} ${s.itemName ?? s.item}${s.flat ? ` (a DC ${s.flat} flat check first, as {they} {is|are} grabbed)` : ""}.`;
@@ -1082,6 +1163,14 @@ export function nextPoint(rec = {}, { flat = 0 } = {}) {
     follow-up: flat check if any, the check, its effects, then a Trip's critical damage), "hold" or "card" (its card posted). "gm" means done, with something
     left for the GM to apply. Applying a condition again changes nothing, so the effects stage may run again after a reload. */
 export function nextAbility(rec = {}, { mode = "check", flat = 0, apply = false } = {}) {
+  /* 0.46.0: "self" and "effect" post the card, then put the effect on (itself, or the friend); "blast" rolls like a Strike: flat check, attack, damage */
+  if (mode === "self" || mode === "effect") { if (!rec.started) return "post"; if (!rec.posted) return "ask"; if (!rec.effectStarted) return "effect"; return rec.effected ? "next" : "ask"; }
+  if (mode === "blast") {
+    if (flat) { if (!rec.flatStarted) return "flat"; if (!rec.flat) return "ask"; if (!rec.flat.ok) return "next"; }
+    if (!rec.started) return "attack"; if (!rec.attack) return "ask"; if (rec.attack.degree < 2) return "next";
+    if (!rec.damageStarted) return "damage"; if (!rec.damage) return "ask";
+    if (!apply && !rec.applying) return "next"; if (!rec.applying) return "apply"; return rec.applied ? "next" : "ask";
+  }
   if (mode !== "check") { if (!rec.started) return "post"; return rec.posted ? (mode === "card" ? "gm" : "next") : "ask"; }
   if (flat) { if (!rec.flatStarted) return "flat"; if (!rec.flat) return "ask"; if (!rec.flat.ok) return "next"; }
   if (!rec.started) return "check";

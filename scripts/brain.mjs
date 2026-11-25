@@ -8,7 +8,7 @@ import { PROMPT_VERSION, promptText } from "./prompt.mjs";
 
 export const PLAN_SCHEMA = 1;
 /** Every kind a plan may name. The module carries out only those in turn.mjs's COSTS so far; checkPlan turns down the rest by name. */
-export const STEP_KINDS = ["stride", "step", "crawl", "fly", "swim", "climb", "burrow", "release", "draw", "strike", "ability", "spell", "stand", "drop-prone", "seek", "hide", "sneak", "take-cover", "flee", "interact", "delay", "order", "say", "command-animal", "point-out", "none"];
+export const STEP_KINDS = ["stride", "step", "crawl", "fly", "swim", "climb", "burrow", "release", "draw", "strike", "ability", "spell", "stand", "drop-prone", "seek", "hide", "sneak", "take-cover", "flee", "interact", "delay", "order", "say", "command-animal", "point-out", "sustain", "none"];
 export const MAX_STEPS = 8, MAX_TRIES = 2, LISTEN_MS = 120000, MAX_WAIT_S = 100;   /* run_script stops at 120 s */
 const LABEL = /^[EM]\d{1,3}$/, SLAB = /^B\d{1,3}$/, ITEM = /^[\w-]{1,80}$/, BY = ["chat", "api", "gm"];
 
@@ -42,6 +42,9 @@ export function cleanPlan(raw) {
     if (s.actions != null) { if (!Number.isInteger(s.actions) || s.actions < 0 || s.actions > 3) return bad(`${at}: "actions" is 0 to 3.`); out.actions = s.actions; }
     /* an area spell's aim: a burst's grid corner ("at"), a cone's or line's square ("toward"); "deliberate" when it means to catch its allies */
     for (const k of ["at", "toward"]) if (s[k] != null) { if (!Array.isArray(s[k]) || s[k].length !== 2 || !s[k].every(v => Number.isInteger(v) && v >= 0 && v < 1000)) return bad(`${at}: "${k}" is [x, y].`); out[k] = [...s[k]]; }
+    /* an Elemental Blast's choice (0.46.0): melee or ranged, which element, which damage type */
+    if (s.melee != null) { if (typeof s.melee !== "boolean") return bad(`${at}: "melee" is true or false.`); out.melee = s.melee; }
+    for (const k of ["element", "damageType"]) if (s[k] != null) { if (typeof s[k] !== "string" || !/^[a-z-]{2,20}$/.test(s[k])) return bad(`${at}: "${k}" is a word like "fire".`); out[k] = s[k]; }
     if (s.deliberate != null) { if (typeof s.deliberate !== "boolean") return bad(`${at}: "deliberate" is true or false.`); if (s.deliberate) out.deliberate = true; }
     /* an Interact's words for the GM's card, and the creature a Delay waits for (0.12.0) */
     if (s.what != null) { if (typeof s.what !== "string") return bad(`${at}: "what" is a few words of text.`); const w = text(s.what, 120); if (w) out.what = w; }

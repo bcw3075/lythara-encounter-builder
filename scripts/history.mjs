@@ -62,7 +62,10 @@ export function stepResult(step, rec = {}, look = {}, n = namer(), done = false,
   else if (step.do === "ability") {
     tag(rec.posted?.message); if (rec.check) tag(rec.check.message);
     const c = card(rec.check?.message), eff = rec.effects ? join([rec.effects.target?.length ? `${target ?? "target"}: ${rec.effects.target.join(", ")}` : "", rec.effects.self?.length ? `{themself}: ${rec.effects.self.join(", ")}` : "", rec.effects.gm ? "the rest is yours" : ""]) : "";
-    text = join([flat, rec.check ? `${vs(c, "DC")}${c?.total != null ? ": " : ""}${CHECK_OUTCOMES[rec.check.degree] ?? "unknown"}` : "", eff, damage(), rec.posted ? (step.mode === "hold" ? "kept hold" : "its card posted for you to apply") : ""]);
+    if (rec.attack) tag(rec.attack.message);
+    const a = card(rec.attack?.message), blast = step.mode === "blast" && rec.attack ? `${vs(a)}${a?.total != null ? ": " : ""}${OUTCOMES[rec.attack.degree] ?? "unknown"}` : "";   /* Elemental Blast (0.46.0) */
+    const put = (step.mode === "self" || step.mode === "effect") && rec.effected ? `${step.effectName ?? "its effect"} put on ${step.mode === "effect" ? target ?? "the target" : "{themself}"}` : "";
+    text = join([flat, rec.check ? `${vs(c, "DC")}${c?.total != null ? ": " : ""}${CHECK_OUTCOMES[rec.check.degree] ?? "unknown"}` : "", blast, eff, damage(), put, rec.posted && step.mode !== "self" && step.mode !== "effect" ? (step.mode === "hold" ? "kept hold" : "its card posted for you to apply") : ""]);
   } else if (step.do === "spell") {
     tag(rec.cast?.message);
     const parts = [rec.cast ? "cast" : rec.castStarted ? "casting started" : "", flat];
@@ -72,7 +75,7 @@ export function stepResult(step, rec = {}, look = {}, n = namer(), done = false,
     else if (rec.waiting?.length) parts.push(`waiting for ${rec.waiting.map(t => look.name?.(t) ?? "someone").join(", ")}`);
     if (rec.damage) { tag(rec.damage.message); const c = card(rec.damage.message);
       const hp = rec.hp && !Array.isArray(rec.hp) ? Object.entries(rec.hp).map(([t, h]) => hpWords(look.name?.(t) ?? "someone", h)).join(", ") : Array.isArray(rec.hp) ? hpWords(target ?? "target", rec.hp) : "";
-      parts.push(`damage ${c?.total ?? "?"}${c?.label ? ` ${c.label}` : ""}${hp ? `, applied: ${hp}` : rec.applied ? ", applied" : ""}`); }
+      parts.push(`${step.mode === "heal" ? "healing" : step.mode === "missiles" ? `${step.missiles} missile${step.missiles === 1 ? "" : "s"}, damage` : "damage"} ${c?.total ?? "?"}${c?.label ? ` ${c.label}` : ""}${hp ? `, applied: ${hp}` : rec.applied ? ", applied" : ""}`); }
     if (step.mode === "card" || rec.noRows) parts.push("the rest is yours from its card");
     text = join(parts);
   }

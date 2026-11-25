@@ -2,7 +2,7 @@
    fight scene open; any other GM's browser only asks it to, through the Combat's flag. Everything is kept on that flag, so a reload or a
    summarised chat loses nothing. It runs Strikes, Strides, Steps, Crawls, Fly, Swim, Climb, Release, Stand, Drop Prone, Take Cover, abilities, spells, Hide, Sneak, Seek, Interact, Delay and fleeing off the map; what is still to come is in the repo's docs/features and the project's plan doc. */
 import { handedOn, withoutAsks, couldSetOff, untouched, settleFrom, settleWait, CHANGEABLE, changeProblem, describeStep, nameWords, noteForThinker, planPrint } from "./turn.mjs";
-import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, idlePlan, OUTCOMES, SAVE_MULT, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, shouldSink, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, finishedOf, damageOptions, describeChanges, doneStep, nextCommand, nextPoint, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract, nextClimb, tookTurn } from "./turn.mjs";
+import { CHECK_OUTCOMES, CHECK_WORD, FOLLOW_UPS, MAX_REPLANS, idlePlan, OUTCOMES, SAVE_MULT, POSTURES, SIDES, WORD, absorbOwn, movedOn, shouldFall, shouldSink, edgeSides, areaHurt, forThinker, listWords, nextArea, nextSpell, MISSILES, missileFormula, spellActions, spellMultiplier, spellRange, spellTargets, followUpOutcome, lastAction, nextAbility, changesSince, checkPlan, coverAfterTaking, currentOf, finishedOf, damageOptions, describeChanges, doneStep, nextCommand, nextPoint, endsCover, isMove, latestNote, nextAction, nextCover, nextMove, nextPosture, nextStealth, requestBusy, revealsAfter, revealsBefore, situationOf, spentBy, strikeIds, nextInteract, nextClimb, tookTurn } from "./turn.mjs";
 import { BURROW_DEPTH, FT, distanceBetween, burrowWorld, crossesWalls, cutShort, diagonalsIn, featureNear, findRoute, findStep, flyWaypoints, flyWorld, footprintAt, heightWhenCut, rockSquares, routeWordsIt, swimWorld, glideWorld, treeTop, treesBeside, wallSquares, waterKinds, waterUnder } from "./move.mjs";
 import { actionsFor, assignLabels, canTarget, flatDC, groundAround, healthEntries, healthWord, labelsOf, lightAt, packetOf, perceiveOne, plainText, remember, sensesOf, strikeMods, visibleConditions } from "./perceive.mjs";
 import { giveOwn, kindFacts, mindLayers, mindOf, partyPeople, pronounOf, setLines } from "./library.mjs";
@@ -209,7 +209,7 @@ function abilityList(actor) {
     const slug = i.slug ?? game.pf2e.system.sluggify(i.name), n = (seen.get(slug) ?? 0) + 1; seen.set(slug, n);
     const kind = i.system.actionType?.value ?? "passive", f = i.system.frequency;
     return { item: i, id: n === 1 ? slug : `${slug}-${n}`, name: i.name, kind, cost: kind === "action" ? (i.actionCost?.value ?? i.system.actions?.value ?? 1) : kind === "free" ? 0 : null,
-      traits: [...(i.system.traits?.value ?? [])], usesLeft: f ? (f.value ?? f.max ?? null) : null, followUp: FOLLOW_UPS[slug] ?? null, effect: FOLLOW_UPS[slug] ? slug : null };
+      traits: [...(i.system.traits?.value ?? [])], usesLeft: f ? (f.value ?? f.max ?? null) : null, followUp: FOLLOW_UPS[slug] ?? null, effect: FOLLOW_UPS[slug] ? slug : null, ...effectsOfAbility(actor, i, slug) };
   });
   /* A Strike can list Grab or Knockdown with no matching item on the creature (PF2e's attack effects don't need one): it can still use it, as the rules say */
   /* a Strike whose weapon lies on the ground lends none (u-141, 0.39.9; Rhea, 2026-11-18): the follow-up goes with the Strike that is gone */
@@ -220,10 +220,43 @@ function abilityList(actor) {
   }
   return list;
 }
+/** What the module can do itself with an ability (0.46.0, the live test): a self-effect PF2e names on the action (a stance, Channel Elements), whether
+    it is on already (by the effect's source); otherwise one effect its text links that goes to a friend within a range its text gives (Inspiring
+    Display: "another kobold within 30 feet"); and a kineticist's Elemental Blast (PF2e's own ElementalBlast: its elements, ranges and whether the
+    kinetic aura is up). Nothing for anything else. */
+const hasEffect = (actor, uuid) => !!uuid && (actor.itemTypes?.effect ?? []).some(e => (e._stats?.compendiumSource ?? e.flags?.core?.sourceId ?? e.sourceId) === uuid);
+function effectsOfAbility(actor, item, slug) {
+  const out = {};
+  if (slug === "elemental-blast" && actor.isOfType?.("character") && game.pf2e?.ElementalBlast) {
+    try { const eb = new game.pf2e.ElementalBlast(actor), gate = "Compendium.pf2e.feat-effects.Item.pLurcSPQb2gjAzoP";
+      out.blast = { configs: (eb.configs ?? []).map(c => ({ element: c.element, damageTypes: [...(c.damageTypes ?? []).map(d => d.value ?? d)], range: c.range?.max ?? c.range?.increment ?? null, die: `d${c.dieFaces}` })),
+        gate: !!actor.rollOptions?.all?.["self:effect:kinetic-aura"], gateEffect: gate, reach: actor.getReach?.({ action: "attack" }) ?? 5 }; } catch (e) { console.warn(`${ID} | blast`, e); }
+    return out;
+  }
+  const self = item.system.selfEffect;
+  if (self?.uuid) return { selfEffect: self.uuid, selfEffectName: self.name ?? null, selfOn: hasEffect(actor, self.uuid) };
+  const text = String(item.system.description?.value ?? ""), links = [...text.matchAll(/@UUID\[(Compendium\.pf2e\.[\w-]*effects\.Item\.\w+)\]\{(Effect:[^}]*)\}/g)];
+  if (links.length === 1 && /\b(?:another|an? ally|allies|ally|kobold|creature)\b/i.test(text) && !/saving throw|\bbasic\b|\bReflex\b|\bFortitude\b|\bWill\b/.test(text)) {
+    const r = text.match(/within (\d+) feet/i); out.allyEffect = links[0][1]; out.allyEffectName = links[0][2]; out.allyEffectRange = r ? Number(r[1]) : null;
+  }
+  return out;
+}
+/** Run PF2e's Elemental Blast with the plan's action cost (0.46.0): the sheet's own choice (`flags.pf2e.rulesSelections.actionCost` on the action) is set for
+    the roll and put back after, so the sheet stays as the player left it. */
+async function blastDo(actor, step, work) {
+  const item = actor.itemTypes?.action?.find(i => i.slug === "elemental-blast"); if (!item) throw new Error(`${actor.name} has no Elemental Blast now.`);
+  const path = "flags.pf2e.rulesSelections.actionCost", was = foundry.utils.getProperty(item, path) ?? 1, want = step.blastActions ?? 1;
+  if (was !== want) await item.update({ [path]: want });
+  try { return await work(new game.pf2e.ElementalBlast(actor)); } finally { if (was !== want) await item.update({ [path]: was }).catch(e => console.warn(`${ID} | blast cost`, e)); }
+}
 /** For the packet: what each ability is, in plain words, with what the module does with a follow-up. */
 function abilitiesOf(actor) {
   return abilityList(actor).map(a => ({ id: a.id, name: a.name, kind: a.kind, cost: a.cost, ...(a.traits.length ? { traits: a.traits } : {}), ...(a.usesLeft != null ? { usesLeft: a.usesLeft } : {}),
-    ...(a.followUp ? { followUp: `${CHECK_WORD[a.followUp]} check, right after a Strike that lists ${a.effect} and hits` } : {}), text: a.item ? plainText(a.item.system.description?.value, localize) : "" }));
+    ...(a.followUp ? { followUp: `${CHECK_WORD[a.followUp]} check, right after a Strike that lists ${a.effect} and hits` } : {}),
+    ...(a.blast ? { blast: { elements: a.blast.configs.map(c => `${c.element} (${listWords(c.damageTypes)}, ${c.die}, ranged up to ${c.range} feet)`), reach: a.blast.reach, auraUp: a.blast.gate, how: "1 or 2 actions (\"actions\"), melee or ranged (\"melee\": true or false); the module rolls the attack and damage" } } : {}),
+    ...(a.selfEffect ? { effect: `puts ${a.selfEffectName ?? "its effect"} on whoever uses it${a.selfOn ? ": already on, so using it again wastes the action" : ""}` } : {}),
+    ...(a.allyEffect ? { effect: `puts ${a.allyEffectName} on the friend it targets${a.allyEffectRange ? ` (within ${a.allyEffectRange} feet)` : ""}` } : {}),
+    text: a.item ? plainText(a.item.system.description?.value, localize) : "" }));
 }
 /* ---------- spells ---------- */
 /* What it can cast now, from PF2e's own spellcasting sheet data (the list a sheet shows: prepared slots not yet expended, a spontaneous caster's known and
@@ -254,12 +287,7 @@ async function spellBook(actor) {
         const key = `${e.id}:${base.id}`;
         if (!book.has(key)) {
           const slug = slugOf(base), n = Math.max(1, (owners.get(slug) ?? [e.id]).indexOf(e.id) + 1);
-          const act = spellActions(base.system.time?.value), rng = spellRange(base.system.range?.value), save = base.system.defense?.save, text = plainText(base.system.description?.value, localize);
-          book.set(key, { id: n === 1 ? slug : `${slug}-${n}`, name: base.name, entryId: e.id, spellId: base.id, ranks: [], minActions: act.min, maxActions: act.max, time: base.system.time?.value ?? "",
-            range: rng.range, touch: rng.touch, rangeText: base.system.range?.value ?? "", targets: spellTargets(base.system.target?.value), targetText: base.system.target?.value ?? "",
-            area: base.system.area?.type ? { type: base.system.area.type, size: base.system.area.value } : null, attack: !!base.isAttack, save: save?.statistic ? { stat: save.statistic, basic: !!save.basic } : null,
-            damaging: Object.keys(base.system.damage ?? {}).length > 0, damage: Object.values(base.system.damage ?? {}).map(d => `${d.formula} ${d.type ?? ""}`.trim()).join(" + "),
-            variants: !!base.hasVariants && act.min !== act.max, lasting: !!String(base.system.duration?.value ?? "").trim() || !!base.system.duration?.sustained, traits: [...(base.system.traits?.value ?? [])], critText: /critical success/i.test(text), dc: e.statistic.dc?.value ?? null, attackMod: e.statistic.check?.mod ?? null, text });
+          book.set(key, spellData(e, base, n === 1 ? slug : `${slug}-${n}`, slug));
         }
         const s = book.get(key), had = s.ranks.find(r => r.rank === rank);
         if (had) { if (pool?.startsWith("prep:")) had.left = left; } else s.ranks.push({ rank, pool, left, cost });
@@ -268,6 +296,87 @@ async function spellBook(actor) {
   }
   return [...book.values()].map(s => ({ ...s, ranks: s.ranks.sort((a, b) => a.rank - b.rank) }));
 }
+/** One spell as the plans see it (its ranks are added by the caller): actions, range, targets, area, attack or save, damage, variants, healing. */
+function spellData(e, base, id, slug) {
+  const act = spellActions(base.system.time?.value), rng = spellRange(base.system.range?.value), save = base.system.defense?.save, text = plainText(base.system.description?.value, localize);
+  return { id, slug, heal: healVariants(base), name: base.name, entryId: e.id, spellId: base.id, ranks: [], minActions: act.min, maxActions: act.max, time: base.system.time?.value ?? "",
+    range: rng.range, touch: rng.touch, rangeText: base.system.range?.value ?? "", targets: spellTargets(base.system.target?.value), targetText: base.system.target?.value ?? "",
+    area: base.system.area?.type ? { type: base.system.area.type, size: base.system.area.value } : null, attack: !!base.isAttack, save: save?.statistic ? { stat: save.statistic, basic: !!save.basic } : null,
+    damaging: Object.keys(base.system.damage ?? {}).length > 0, damage: Object.values(base.system.damage ?? {}).map(d => `${d.formula} ${d.type ?? ""}`.trim()).join(" + "),
+    variants: !!base.hasVariants && act.min !== act.max, lasting: !!String(base.system.duration?.value ?? "").trim() || !!base.system.duration?.sustained, sustained: !!base.system.duration?.sustained,
+    traits: [...(base.system.traits?.value ?? [])], critText: /critical success/i.test(text), dc: e.statistic.dc?.value ?? null, attackMod: e.statistic.check?.mod ?? null, text };
+}
+/* ---------- sustained spells (0.46.0; Rhea at the live test: "any spell or ability that requires a sustain needs to be factored in") ----------
+   A sustained spell the module casts is written down for its caster (`sustain.<token>.<spell id>`: its entry, item, rank, the round it was cast and last
+   sustained, its areas). Each later turn its plan may Sustain it (1 action, once a round): an area spell whose Sustain repeats its effect (Earth's Bile,
+   Flaming Sphere) is aimed and run again like a fresh cast, with no slot spent; any other just goes on. One not Sustained by the end of its caster's turn
+   ends: its areas leave the map and the chat says so. Rules: Sustain, https://2e.aonprd.com/Actions.aspx?ID=2304; Durations (sustained). */
+const sustainOf = (combat, tok) => turns(combat).sustain?.[tok.id] ?? {};
+/** What it is sustaining now, for the packet and the plan check: { id, name, rank, round, sustained (this round), spell } (spell as spellData gives). */
+function sustainingOf(combat, tok) {
+  const out = [];
+  for (const [key, su] of Object.entries(sustainOf(combat, tok))) {
+    if (!su) continue;
+    const found = spellFor(tok.actor, su); if (!found) continue;
+    out.push({ key, id: su.item, name: su.name, rank: su.rank, round: su.round, sustained: su.sustainedRound === combat.round || su.round === combat.round, spell: { ...spellData(found.entry, found.spell.original ?? found.spell, su.item, su.slug), ranks: [{ rank: su.rank, pool: null, left: null }] } });
+  }
+  return out;
+}
+/** After a cast: a sustained spell starts (a fresh cast) or goes on (a Sustain step's cast, whose old areas leave first). */
+async function noteSustain(combat, tok, step, spell) {
+  if (!spell.system.duration?.sustained) return;
+  const key = spell.id, was = sustainOf(combat, tok)[key];
+  if (step.sustain && was) { await dropSustainAreas(combat, was); return saveTurns(combat, { [`sustain.${tok.id}.${key}`]: { ...was, sustainedRound: combat.round, regions: [] } }); }
+  return saveTurns(combat, { [`sustain.${tok.id}.${key}`]: { item: step.item, slug: spell.slug ?? null, name: step.itemName, entryId: step.entryId, spellId: step.spellId, rank: step.rank, round: combat.round, sustainedRound: combat.round, regions: [] } });
+}
+async function sustainArea(combat, tok, step, regionId) {
+  const key = step.spellId, was = sustainOf(combat, tok)[key]; if (!was || !regionId) return;
+  await saveTurns(combat, { [`sustain.${tok.id}.${key}.regions`]: [...(was.regions ?? []), regionId] });
+}
+async function dropSustainAreas(combat, su) {
+  const scene = sceneOf(combat), ids = (su.regions ?? []).filter(r => scene?.regions?.get(r)); if (ids.length) await scene.deleteEmbeddedDocuments("Region", ids);
+}
+/** The end of a turn: each spell its creature cast in an earlier round and didn't Sustain this round ends. prev: Combat#previous. */
+async function endUnsustained(combat, prev) {
+  if (!prev?.combatantId || prev.round == null) return;
+  const tok = combat.combatants.get(prev.combatantId)?.token; if (!tok) return;
+  for (const [key, su] of Object.entries(sustainOf(combat, tok))) {
+    if (!su || su.round >= prev.round || su.sustainedRound === prev.round) continue;
+    await dropSustainAreas(combat, su).catch(e => console.warn(`${ID} | sustain`, e));
+    await saveTurns(combat, { [`sustain.${tok.id}.-=${key}`]: null });
+    await ChatMessage.implementation.create({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), content: `<p>${esc(`${su.name} ends: ${tok.name} didn't Sustain it this turn.`)}</p>` });
+  }
+}
+/** A Sustain step for a spell that only goes on: its card, and the round written down. */
+async function runSustain(combat, id, i, step, tok) {
+  const rec = request(combat, id).log?.[i] ?? {}; if (rec.posted) return "next"; if (rec.started) return "ask";
+  if (!stepGate("post", id)) return "stopped";
+  await save(combat, id, { log: { [i]: { started: true } } });
+  const su = sustainOf(combat, tok)[step.key]; if (!su) { await addNote(combat, id, `${step.itemName} had already ended, so there was nothing to Sustain.`); await save(combat, id, { log: { [i]: { posted: true } } }); return "next"; }
+  const message = await watched(() => ChatMessage.implementation.create({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), content: `<p>${esc(`${tok.name} Sustains ${step.itemName}.`)}</p>` }));
+  await saveTurns(combat, { [`sustain.${tok.id}.${step.key}.sustainedRound`]: combat.round, [`requests.${id}.log.${i}.posted`]: { message: message?.id ?? null } });
+  return "next";
+}
+/** A healing spell's single-target casts by actions (0.46.0): { 1: { overlay, range, touch }, 2: ... } from PF2e's own variants (Heal: 1 action touch,
+    2 actions 30 feet with the "vs. Living" overlay; its 3-action emanation is left to the card), or the spell itself for one with no variants (Soothe).
+    Null for a spell that doesn't heal. */
+function healVariants(base) {
+  const traits = base.system.traits?.value ?? [];
+  if (!traits.includes("healing") || !Object.keys(base.system.damage ?? {}).length) return null;
+  const kinds = sp => Object.values(sp?.system?.damage ?? {}).flatMap(d => [...(d?.kinds ?? [])]);
+  const one = (sp, overlay) => { const r = spellRange(sp.system.range?.value), area = sp.system.area?.type ?? null, n = spellTargets(sp.system.target?.value);
+    return area || n !== 1 || /undead/i.test(sp.system.target?.value ?? "") && !/living|willing/i.test(sp.system.target?.value ?? "") ? null : { overlay, range: r.range, touch: r.touch }; };
+  const out = {}, overlays = [...(base.overlays?.contents ?? [])];
+  if (!overlays.length) { const a = spellActions(base.system.time?.value); if (a.min != null && a.min === a.max) { const v = one(base, null); if (v) out[a.min] = v; } return Object.keys(out).length ? out : null; }
+  for (const n of [1, 2, 3]) {
+    const fits = overlays.filter(o => String(o.system?.time?.value ?? "") === String(n) && !/undead/i.test(o.name ?? ""));
+    const pick = fits.find(o => kinds({ system: o.system }).includes("healing")) ?? fits[0]; if (!pick) continue;
+    let v = null; try { v = base.loadVariant?.({ overlayIds: [pick._id] }); } catch (e) { console.warn(`${ID} | heal variant`, e); }
+    if (!v || !kinds(v).includes("healing")) continue;
+    const got = one(v, pick._id); if (got) out[n] = got;
+  }
+  return Object.keys(out).length ? out : null;
+}
 /** For the packet: each spell in plain words, with the ranks it can be cast at and what each has left. */
 function spellsOf(book) {
   const cap = (t, n) => t.length > n ? `${t.slice(0, n - 1)}…` : t;
@@ -275,7 +384,11 @@ function spellsOf(book) {
     actions: s.time, ...(s.rangeText ? { range: s.rangeText } : {}), ...(s.targetText ? { targets: s.targetText } : {}), ...(s.area ? { area: `${s.area.size}-foot ${s.area.type}`, aim: aimWords(s.area.type) ?? "the GM places it" } : {}),
     ...(s.area && s.lasting ? { lasting: "its area stays on the map after the turn" } : {}),
     ...(s.attack ? { defense: "AC", attackMod: s.attackMod } : s.save ? { defense: `${s.save.basic ? "basic " : ""}${s.save.stat[0].toUpperCase()}${s.save.stat.slice(1)} save`, dc: s.dc } : {}),
-    ...(s.damage ? { baseDamage: s.damage } : {}), ...(s.variants ? { variants: "what it does depends on the actions spent: the GM applies it from its card" } : {}), traits: s.traits, text: cap(s.text, 900) }));
+    ...(s.damage ? { baseDamage: s.damage } : {}),
+    ...(s.heal ? { heals: `${Object.entries(s.heal).map(([n, v]) => `${n} action${n === "1" ? "" : "s"}: one friend ${v.touch ? "by touch" : `within ${v.range} feet`}`).join("; ")}: the module rolls the healing at the rank and applies it${s.variants ? "; any other number of actions the GM applies from its card" : ""}` }
+      : s.variants ? { variants: "what it does depends on the actions spent: the GM applies it from its card" } : {}),
+    ...(MISSILES[s.slug] ? { missiles: "always hits: 1 missile per action (and 1 more per action for every 2 ranks above 1st), all at the one target; the module rolls them together and applies the damage" } : {}),
+    traits: s.traits, text: cap(s.text, 900) }));
 }
 /** The spell a step casts, found again by its entry and item. */
 const spellFor = (actor, step) => { const entry = actor.spellcasting?.get(step.entryId); const spell = entry?.spells?.get(step.spellId) ?? actor.items.get(step.spellId); return entry && spell ? { entry, spell } : null; };
@@ -301,6 +414,8 @@ async function buildPacket(combat, tok, turn = {}) {
   const speeds = a.system.movement?.speeds ?? {}, extra = Object.fromEntries(["fly", "swim", "climb", "burrow"].filter(k => speeds[k]?.value).map(k => [k, speeds[k].value]));
   const you = { label: labels[tok.id], name: nameFor(tok), ...(onParty(a) ? { side: "party" } : {}), square, size: a.size, nextDiagonal: nextDiagonalFt(tok, scene), actionsLeft: Math.max(0, actionsOf(a, combat) - (turn.spent ?? 0)), attacksMade: turn.attacks ?? 0, hp: `${h.value}/${h.max}`, speed: speeds.land?.value ?? 0, ...(Object.keys(extra).length ? { speeds: extra } : {}), ...(heightUp(tok) ? { height: heightUp(tok) } : {}), ...(swimming ? { swimming } : {}), conditions: (a.conditions?.active ?? []).map(c => c.value ? `${c.slug} ${c.value}` : c.slug), strikes: await strikesOf(a, combat, tok), abilities: abilitiesOf(a) };
   const book = await spellBook(a); if (book.length) you.spells = spellsOf(book);
+  { const su = sustainingOf(combat, tok); if (su.length) you.sustaining = su.map(x => ({ id: x.id, name: x.name, rank: x.rank, castInRound: x.round, ...(x.sustained ? { sustainedThisRound: true } : {}),
+      ...(x.spell.area ? { area: `${x.spell.area.size}-foot ${x.spell.area.type}`, aim: aimWords(x.spell.area.type) ?? "the GM places it" } : {}), ...(x.spell.damage ? { baseDamage: x.spell.damage } : {}), text: x.spell.text.length > 600 ? `${x.spell.text.slice(0, 599)}…` : x.spell.text })); }   /* 0.46.0 */
   /* Climb and Release (0.15.0): what it holds (a Climb needs both hands free), weapons it let go of, and the trees near it, tallest guess included */
   const held = heldItems(a); if (held.length) you.holding = held.map(({ id, name }) => ({ id, name }));
   const gone = [...new Set(strikesWithIds(a).filter(({ strike }) => droppedWeapon(a, strike)).map(({ strike }) => strike.label))]; if (gone.length) you.dropped = gone;
@@ -531,7 +646,7 @@ export function onCombatUpdate(combat, change) {
   if ("turn" in change || "round" in change) leaveWaiting(combat).catch(e => console.warn(`${ID} | waiting`, e)).then(() => dropInstantAreas(combat, currentRequest(combat) ? { id: currentRequest(combat).id, pos: 0 } : null)).catch(e => console.warn(`${ID} | areas`, e));
   if ("turn" in change || "round" in change) { const prev = { ...(combat.previous ?? {}) };   /* the turn that just ended, read before anything awaits */
     finishBack(combat, prev).catch(e => console.warn(`${ID} | back`, e));   /* a player came back during that turn (0.40.0, F-2) */
-    fallIfAloft(combat, prev).catch(e => console.warn(`${ID} | fall`, e)).then(() => sinkNote(combat, prev)).catch(e => console.warn(`${ID} | sink`, e)).then(() => settleClimbers(combat)).catch(e => console.warn(`${ID} | climbing`, e)).then(() => settleBurrowers(combat)).catch(e => console.warn(`${ID} | burrowing`, e)).then(() => noteWhatTheySense(combat)).catch(e => console.warn(`${ID} | memory`, e)).then(() => checkSides(combat)).catch(e => console.warn(`${ID} | sides`, e)).then(() => settleBands(combat)).catch(e => console.warn(`${ID} | bands`, e)).then(() => onTurnChange(combat)).catch(e => console.error(`${ID} | turn`, e));
+    fallIfAloft(combat, prev).catch(e => console.warn(`${ID} | fall`, e)).then(() => endUnsustained(combat, prev)).catch(e => console.warn(`${ID} | sustain`, e)).then(() => sinkNote(combat, prev)).catch(e => console.warn(`${ID} | sink`, e)).then(() => settleClimbers(combat)).catch(e => console.warn(`${ID} | climbing`, e)).then(() => settleBurrowers(combat)).catch(e => console.warn(`${ID} | burrowing`, e)).then(() => noteWhatTheySense(combat)).catch(e => console.warn(`${ID} | memory`, e)).then(() => checkSides(combat)).catch(e => console.warn(`${ID} | sides`, e)).then(() => settleBands(combat)).catch(e => console.warn(`${ID} | bands`, e)).then(() => onTurnChange(combat)).catch(e => console.error(`${ID} | turn`, e));
     lookLater(combat); lookCheck(combat).catch(e => console.warn(`${ID} | look`, e)); }   /* the fight-start look (0.33.0): started at the fight's start, dropped once round 1 is over */
   if (combat.started && !turns(combat).hidStart) hiddenAtStart(combat).catch(e => console.warn(`${ID} | hidden at the start`, e));   /* B-7 (0.33.2) */
   if (combat.started && !turns(combat).starts && !startsDone.has(combat.id)) startsDone.set(combat.id, startsAtStart(combat).catch(e => console.warn(`${ID} | starts`, e)));   /* F-3 (0.41.0); a turn waits for it (review 10) */
@@ -711,12 +826,13 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
     speech: speechCtx(combat, tok), yielded: !!yieldOf(tok),   /* 0.29.0: whether it may speak to the party and yield; a yielded monster's plan is refused */
     abilities: abilityList(actor).map(({ item, ...a }) => a), last: lastAction({ ...(before ?? { done: req.done?.at(-1) ?? null }), strikes }),
     /* spells: what it can cast now, and for a spell at a friend its allies (not hidden by the GM) and itself, by their labels */
+    sustaining: sustainingOf(combat, tok),   /* 0.46.0: the spells it is sustaining */
     ...(spells ? { spells: await spellBook(actor), saveRows: targetHelperOn(), reach: actor.getReach?.({ action: "interact" }) ?? 5, areaOf: areaCheck(combat, tok, req, now) } : {}) };   /* touch: the creature's own reach, not a weapon's */
 }
 /** Its allies the GM hasn't hidden, and itself, by label, for a spell aimed at a friend. */
 function alliesByLabel(combat, tok) {
   const labels = turns(combat).labels ?? {}, scene = sceneOf(combat), out = {};
-  for (const t of [tok, ...alliesOf(scene, tok).filter(a => !a.hidden)]) { const l = labels[t.id]; if (l) out[l] = { name: l, square: squareOf(t, scene), ...placeOf(t, scene), size: sizeOf(t), ...heightOf(t), flat: 0, ally: true }; }
+  for (const t of [tok, ...alliesOf(scene, tok).filter(a => !a.hidden)]) { const l = labels[t.id]; if (l) out[l] = { name: l, square: squareOf(t, scene), ...placeOf(t, scene), size: sizeOf(t), ...heightOf(t), flat: 0, ally: true, ...(t.actor?.traits?.has?.("undead") ? { undead: true } : {}) }; }   /* undead (0.46.0): healing would hurt them */
   return out;
 }
 /** For a Delay: for each creature the monster could name (what it perceived when asked, its allies and itself), whether its turn is still to come this
@@ -742,7 +858,7 @@ const heightUp = tok => Math.max(0, Math.round(Number(tok?.elevation) || 0));
 const spanOf = (tok, at = null) => { const elev = at != null ? Number(at) || 0 : Number(tok.elevation) || 0; return { elev, top: elev + (Number(tok.depth) || sizeOf(tok)) * 5 }; };
 const heightOf = tok => ({ elev: Number(tok.elevation) || 0, depth: Number(tok.depth) || sizeOf(tok) });
 const hasMove = steps => (steps ?? []).some(s => isMove(s) || s?.do === "climb");   /* a Burrow is a move (0.16.0), so it gets the routes and the soil */   /* a Climb needs the map's trees, which come with the routes */
-const hasSpell = steps => (steps ?? []).some(s => s?.do === "spell");
+const hasSpell = steps => (steps ?? []).some(s => s?.do === "spell" || s?.do === "sustain");   /* a Sustain may run an area again (0.46.0) */
 /** The creatures a monster knows are there: allies (not hidden by the GM), and those it perceives well enough to know their square. Only these shape
     the routes it's told about, so a refusal never gives away a creature it can't perceive. others: what `sense` gave. */
 function knownTo(combat, tok, others) {
@@ -1882,7 +1998,45 @@ async function runAbility(combat, id, i, step, tok, target) {
         /* PF2e's own use: its card, a frequency use, a self-effect button. A Grab with no item of its own (a Strike's attack effect) gets a plain card. */
         const message = await watched(() => ab.item ? game.pf2e.rollItemMacro(ab.item.uuid, null) : ChatMessage.implementation.create({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), content: `<p><strong>${esc(ab.name)}</strong>: keeps hold of ${esc(target?.name ?? "the creature held")}.</p>` }));   /* names escaped (0.33.1, review) */
         /* the record and the GM's instruction in one save, so a reload can't keep one without the other */
-        await save(combat, id, { log: { [i]: { posted: { message: message?.id ?? null } } }, ...(step.mode === "card" ? { note: joinNote(combat, id, `Apply ${step.itemName}${step.target ? ` at ${step.target}` : ""} from its card.`) } : {}) });
+        await save(combat, id, { log: { [i]: { posted: { message: message?.id ?? null } } }, ...(step.mode === "card" ? { note: joinNote(combat, id, `Apply ${step.itemName}${step.target ? ` to ${step.targetName ?? step.target}` : ""} from its card${step.target ? selectFirst(step.targetName ?? step.target) : ""}.`) } : {}) });
+      } else if (now === "effect") {
+        /* 0.46.0: the effect goes on (itself for a self-effect, the friend for one its text gives), once: PF2e's own card may already have put it on */
+        const on = step.mode === "effect" ? target?.actor : actor; if (!on) return "ask";
+        await record({ effectStarted: true });
+        let made = hasEffect(on, step.effect);
+        if (!made) { const src = await fromUuid(step.effect); if (!src) { await addNote(combat, id, `I couldn't find ${step.effectName}: apply it from ${step.itemName}'s card.`); await record({ effected: true }); return "gm"; }
+          const data = src.toObject(); delete data._id; data._stats = { ...(data._stats ?? {}), compendiumSource: step.effect };
+          await watched(() => on.createEmbeddedDocuments("Item", [data])); made = true; }
+        await record({ effected: true });
+      } else if (now === "attack") {
+        /* Elemental Blast (0.46.0): PF2e's own blast, as a Strike rolls (the multiple attack penalty, a real target); a 2-action blast is the sheet's own
+           action cost, set for the roll and put back after */
+        aimAt(target); await record({ started: true });
+        const { message, roll } = await watched(async () => { const card = waitFor("attack-roll"), roll = await blastDo(actor, step, eb => eb.attack({ element: step.element, damageType: step.damageType, melee: step.melee, mapIncreases: step.variant ?? 0, event: clickWith("showCheckDialogs") })); return { message: await card, roll }; });
+        const degree = roll?.degreeOfSuccess ?? message?.rolls?.[0]?.degreeOfSuccess ?? null;
+        if (degree == null) { await addNote(combat, id, `${step.itemName}'s attack card has no result (did it have a target?).`); return "ask"; }
+        await record({ attack: { message: message?.id ?? null, degree } });
+      } else if (now === "damage" && step.mode === "blast") {
+        const deg = get().attack.degree;
+        let hr; try { hr = await hitGate(combat, id, i, step, tok, target, { melee: !!step.melee, strike: false, damageTypes: [step.damageType], kind: step.itemName }, get); } catch (e) { console.error(`${ID} | reactions`, e); hr = null; await addNote(combat, id, `I couldn't ask the reactions to ${step.itemName}'s hit (${e.message}); damage went ahead.`); }
+        if (hr === "manual") return "next"; if (hr === "held" || hr === "gone" || hr === "ask" || hr === "stopped") return hr; if (hr === "missed") continue;
+        aimAt(target); await record({ damageStarted: true });
+        const message = await watched(async () => { const card = waitFor("damage-roll"); await blastDo(actor, step, eb => eb.damage({ element: step.element, damageType: step.damageType, melee: step.melee, actionCost: step.blastActions ?? 1, outcome: deg === 3 ? "criticalSuccess" : "success", event: clickWith("showDamageDialogs") })); return card; });
+        await record({ damage: { message: message.id } });
+        if (applySetting()) await markApplied(message);
+        else { const hb = await harmByHand(combat, id, i, tok, [{ target, hit: Math.floor(message.rolls?.[0]?.total ?? 0), block: !!get().shieldBlock, types: typesOf(message.rolls?.[0]), attack: true, strike: false }]); if (hb === "manual") return "next"; if (hb === "held" || hb === "gone" || hb === "stopped") return hb; }
+      } else if (now === "apply" && step.mode === "blast") {
+        const message = game.messages.get(get().damage.message), roll = message?.rolls?.[0]; if (!roll) return "ask";
+        const hit = Math.floor(roll.total), hg = await harmGate(combat, id, i, tok, [{ target, hit, types: typesOf(roll), attack: true, strike: false }]);
+        if (hg === "manual") return "next"; if (hg === "held" || hg === "gone" || hg === "stopped") return hg;
+        const hm = harmFor(combat, id, i, target, hit);
+        await record({ applying: true }); const was = hpNow(target);
+        const guard = await armGuard(dropGuard(combat, id, i, target));
+        const dealt = hm.repent ? null : await dealing(target, () => watched(() => applyFromCard(message, roll, target, 1, !!get().shieldBlock, hm)), guard);
+        if (guard) await afterDrop(combat, id, i, tok, target, guard, { was, dealt });
+        await record({ applied: true, hp: [was, hpNow(target)], dealt });
+        await afterHarm(combat, id, i, tok, target, { hit, was, dealt, block: !!get().shieldBlock });
+        if (target.actor?.isOfType?.("character") && target.actor.hitPoints?.value === 0) await addNote(combat, id, `${target.name} is at 0 HP. If you undo this, PF2e restores the HP but you still need to remove Wounded and Prone and put their initiative back.`);
       } else if (now === "flat") {
         await record({ flatStarted: true });
         const roll = await watched(async () => { const r = await new Roll("1d20").evaluate(); await r.toMessage({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), flavor: `Flat check, DC ${step.flat}` }); return r; });
@@ -2256,7 +2410,20 @@ async function awaitSave(combat, id, i, step, tok, target) {
   await saveTurns(combat, { [`requests.${id}.log.${i}.save`]: { degree }, [`requests.${id}.log.${i}.waiting`]: null, [`requests.${id}.rollFor.${target.id}`]: null, ...(gm ? { [`requests.${id}.note`]: joinNote(combat, id, gm) } : {}) });
   return stopAfter ? "stopped" : "saved";
 }
-const cardWords = (step) => `Apply ${step.itemName}${step.area ? `: place its ${step.area.size}-foot ${step.area.type}${step.target ? ` aimed at ${step.target}` : ""} from its card and resolve it` : `${step.target ? ` at ${step.target}` : ""} from its card`}.`;
+/** The spell as it is rolled (0.46.0): at the rank it was cast at; missiles with one missile's formula times their count; a healing spell's variant by
+    its overlay. Null when the missiles' formula can't be multiplied. */
+function spellToRoll(spell, step) {
+  if (step.mode === "missiles") {
+    const k = Object.keys(spell.system.damage ?? {})[0], f = missileFormula(spell.system.damage?.[k]?.formula, step.missiles); if (!f) return null;
+    return spell.clone({ [`system.damage.${k}.formula`]: f, "system.location.heightenedLevel": step.rank });
+  }
+  if (step.mode === "heal" && step.overlay) return spell.loadVariant?.({ castRank: step.rank, overlayIds: [step.overlay] }) ?? null;
+  return (step.rank !== spell.rank ? spell.loadVariant?.({ castRank: step.rank }) : null) ?? spell;
+}
+/* what the GM still applies by hand (0.46.0, the live test: PF2e's Apply buttons act on the selected tokens, and all six monsters took the party's damage
+   twice): the target by name, and to select only that token first */
+const selectFirst = name => ` (select only ${name}'s token first: PF2e's buttons act on the selected tokens)`;
+const cardWords = (step) => `Apply ${step.itemName}${step.area ? `: place its ${step.area.size}-foot ${step.area.type}${step.target ? ` aimed at ${step.targetName ?? step.target}` : ""} from its card and resolve it` : `${step.target ? ` to ${step.targetName ?? step.target}` : ""} from its card${step.target ? selectFirst(step.targetName ?? step.target) : ""}`}.`;
 async function runSpell(combat, id, i, step, tok, target) {
   const record = change => save(combat, id, { log: { [i]: change } }), get = () => request(combat, id).log?.[i] ?? {};
   const found = spellFor(tok.actor, step); if (!found) throw new Error(`${tok.name} has no ${step.itemName} now.`);
@@ -2273,9 +2440,10 @@ async function runSpell(combat, id, i, step, tok, target) {
       if (now === "cast") {
         if (target) aimAt(target); else stopAiming();   /* Toolbelt puts a row on the card for each of the runner's targets */
         await record({ castStarted: true });
-        const message = await watched(async () => { const card = waitFor("spell-cast"); await entry.cast(spell, { rank: step.rank, consume: true }); return card; });
+        const message = await watched(async () => { const card = waitFor("spell-cast"); await entry.cast(spell, { rank: step.rank, consume: !step.sustain }); return card; });   /* a Sustain spends no slot (0.46.0) */
         /* the record and the GM's instruction in one save, so a reload can't keep one without the other */
         await save(combat, id, { log: { [i]: { cast: { message: message.id } } }, ...(step.mode === "card" ? { note: joinNote(combat, id, cardWords(step)) } : {}) });
+        await noteSustain(combat, tok, step, spell).catch(e => console.warn(`${ID} | sustain`, e));
       } else if (now === "flat") {
         await record({ flatStarted: true });
         const roll = await watched(async () => { const r = await new Roll("1d20").evaluate(); await r.toMessage({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), flavor: `Flat check, DC ${step.flat}` }); return r; });
@@ -2298,10 +2466,18 @@ async function runSpell(combat, id, i, step, tok, target) {
           if (hr === "manual") return "next"; if (hr === "held" || hr === "gone" || hr === "ask" || hr === "stopped") return hr; if (hr === "missed") continue; }   /* review 1 (0.37.0): Whisper of Warning can make it a miss */
         aimAt(target); await record({ damageStarted: true });
         /* the damage at the rank it was cast at (PF2e reads that from the card's button, which a script has none of) */
-        const message = await watched(async () => { const card = waitFor("damage-roll"); const v = (step.rank !== spell.rank ? spell.loadVariant?.({ castRank: step.rank }) : null) ?? spell; await v.rollDamage(clickWith("showDamageDialogs"), step.mode === "attack" ? step.variant ?? 0 : undefined); return card; });
+        const message = await watched(async () => { const card = waitFor("damage-roll"); const v = spellToRoll(spell, step); if (!v) throw new Error(`I couldn't work out ${step.itemName}'s ${step.mode === "heal" ? "healing" : "damage"} for ${step.missiles ?? 0} missiles.`); await v.rollDamage(clickWith("showDamageDialogs"), step.mode === "attack" ? step.variant ?? 0 : undefined); return card; });
         await record({ damage: { message: message.id } });
-        if (applySetting()) await markApplied(message);
+        if (step.mode === "heal" && !applySetting()) await addNote(combat, id, `Apply ${step.itemName}'s healing to ${target.name} from its card (select only ${target.name}'s token first: PF2e's buttons act on the selected tokens).`);
+        else if (applySetting()) await markApplied(message);
         else { const hb = await harmByHand(combat, id, i, tok, [{ target, hit: Math.floor((message.rolls?.[0]?.total ?? 0) * spellMultiplier(step, get())), block: !!get().shieldBlock, types: typesOf(message.rolls?.[0]), attack: step.mode === "attack", strike: false }]); if (hb === "manual") return "next"; if (hb === "held" || hb === "gone" || hb === "stopped") return hb; }
+      } else if (now === "apply" && step.mode === "heal") {
+        /* healing (0.46.0): a negative amount, which PF2e's applyDamage takes as healing received (its healing bonuses apply) */
+        const message = game.messages.get(get().damage.message), roll = message?.rolls?.[0]; if (!roll) return "ask";
+        await record({ applying: true }); const was = hpNow(target), dying = !!target.actor?.hasCondition?.("dying");
+        await watched(() => target.actor.applyDamage({ damage: -Math.max(0, Math.floor(roll.total)), token: target, item: spell }));
+        await record({ applied: true, hp: [was, hpNow(target)], healed: hpNow(target) - was });
+        if (dying) await addNote(combat, id, `${target.name} was dying: check Dying and Wounded now that ${target.name} is back above 0 HP.`);
       } else if (now === "apply") {
         const message = game.messages.get(get().damage.message), roll = message?.rolls?.[0]; if (!roll) return "ask";
         const mult = spellMultiplier(step, get()), hit = Math.floor(roll.total * mult), hg = await harmGate(combat, id, i, tok, [{ target, hit, types: typesOf(roll), attack: step.mode === "attack", strike: false }]);   /* Glimpse of Redemption (0.27.0) */
@@ -2456,7 +2632,8 @@ async function runArea(combat, id, i, step, tok) {
         const spared = get().spared ?? [], rows = ids.filter(t => !scene.tokens.get(t)?.hidden && !spared.includes(t)), hidden = ids.filter(t => scene.tokens.get(t)?.hidden);   /* Skeptic's Defense (0.38.0): no row, no save, no damage */
         aimAll(rows.map(t => scene.tokens.get(t)));
         await record({ castStarted: true, caught: ids, rows, ...(rows.length ? {} : { results: "" }) });
-        const message = await watched(async () => { const card = waitFor("spell-cast"); await entry.cast(spell, { rank: step.rank, consume: true }); return card; });
+        const message = await watched(async () => { const card = waitFor("spell-cast"); await entry.cast(spell, { rank: step.rank, consume: !step.sustain }); return card; });   /* a Sustain spends no slot (0.46.0) */
+        await noteSustain(combat, tok, step, spell).catch(e => console.warn(`${ID} | sustain`, e));
         const names = list => listWords(list.map(t => scene.tokens.get(t)?.name ?? "someone"));
         const words = [step.mode === "card" ? `Apply ${step.itemName} from its card${rows.length ? ` to ${names(rows)}` : ""}: its area is on the map.` : null,
           hidden.length ? `It also caught ${names(hidden)}, hidden from the players, so they have no row: ${spell.system.defense?.save?.statistic ? `roll ${hidden.length === 1 ? "that save" : "those saves"} and apply` : "apply"} ${step.itemName} to ${hidden.length === 1 ? "them" : "those"} yourself.` : null].filter(Boolean).join(" ");
@@ -2464,6 +2641,7 @@ async function runArea(combat, id, i, step, tok) {
       } else if (now === "place") {
         const made = await watched(() => placeArea(combat, id, i, step, tok, spell, game.messages.get(get().cast.message)));
         await record({ placed: { region: made.id } });
+        if (spell.system.duration?.sustained) await sustainArea(combat, tok, step, made.id).catch(e => console.warn(`${ID} | sustain`, e));   /* it leaves when the spell ends (0.46.0) */
       } else if (now === "damage") {
         const hurt = areaHurt(get()); aimAll(Object.keys(hurt).map(t => scene.tokens.get(t)));
         await record({ damageStarted: true });
@@ -2682,6 +2860,7 @@ async function runTurn(combat, requestId) {
     else if (step.do === "release") work = () => runRelease(combat, requestId, i, step, tok);
     else if (step.do === "draw") work = () => runDraw(combat, requestId, i, step, tok);
     else if (step.do === "delay") work = () => runDelay(combat, requestId, i, step, tok);
+    else if (step.do === "sustain") work = () => runSustain(combat, requestId, i, step, tok);
     else if (step.do === "ability") {
       const target = step.target ? sceneOf(combat).tokens.get(tokenIdOf(combat, r, step.target)) : null; if (step.target && !target) return save(combat, requestId, { state: "stopped", note: `${step.targetName} is gone.` });   /* 0.30.0 (B-5): an ally's label too */
       if (target && wrongBelief(combat, tok, target)) return save(combat, requestId, { state: "stopped", note: joinNote(combat, requestId, `${tok.name} believes ${target.name} is at a square an ally pointed out, and that square is wrong: ${step.itemName} goes at nothing there. Its action is yours to rule on: play the rest yourself.`) });
