@@ -703,7 +703,7 @@ function checkAbility(step, ab, { ctx, last, at, attacks, distanceTo, channeled 
       if (!t) { const mine = ctx.allies?.[step.target] ?? null; if (!mine) return no(`{they} {doesn't|don't} know of "${step.target}".`);
         if (isAttack) return no(`"${step.target}" is on {their} side: ${ab.name} is an attack, and needs a creature {they} {fights|fight}.`); t = mine; } }
     /* 0.46.0 (the live test: Elemental Blast, Channel Elements and Channeler's Stance were card only): a kineticist's Elemental Blast rolls like a Strike;
-       an action with a self-effect (a stance, Channel Elements) puts its effect on, and one already on is refused (Aurora re-entered Channeler's Stance);
+       an action with a self-effect (a stance, Channel Elements) puts its effect on, and one already on is refused (the kineticist re-entered Channeler's Stance);
        an action whose text gives one effect to a friend (Inspiring Display) puts that effect on the friend */
     if (ab.blast) return checkBlast(step, ab, t, { ctx, at, attacks, distanceTo, channeled });
     if (ab.selfEffect) {
