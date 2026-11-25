@@ -1277,7 +1277,7 @@ export function modelOf(tok, combat = null) {
   const band = scene ? bandOf(scene, tok) : null, leads = !!band && leaderOf(scene, band, combat)?.tok?.id === tok.id;
   const casts = (actor.spellcasting?.regular ?? []).some(e => !e.isRitual && CASTERS.includes(e.category) && (e.spells?.size ?? 0) > 0);
   /* the party's level: the brief's, else the sheets' most common; unknown (no party found) means the rule can't call anyone 2+ above (review 12) */
-  const pl = scene?.getFlag(ID, "brief")?.partyLevel, partyLevel = Number.isFinite(pl) ? pl : partyLevels().length ? suggestedLevel() : null;
+  const br = scene?.getFlag(ID, "brief"), partyLevel = br?.partyLevelSet && Number.isFinite(br.partyLevel) ? br.partyLevel : partyLevels().length ? suggestedLevel() : null;   /* 0.46.0: a level the GM set, else the sheets */
   const pick = tok.getFlag(ID, "modelPick");
   const m = modelFor({ pick: MODELS.includes(pick) ? pick : null, leads, casts, level: Number.isFinite(actor.level) ? actor.level : null, partyLevel });
   return m.why ? { ...m, why: pro(m.why, P(tok, combat)) } : m;   /* "leads {their} band": its own pronoun (0.32.0, 0.31.0's known gap) */

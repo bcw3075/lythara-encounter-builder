@@ -22,7 +22,8 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
   takeAnswer() {
     const a = this.scene.getFlag(ID, "askAngel"), b = a?.answer?.brief;
     if (!b || a.answer.applied || a.user !== game.user.id || this.previewing) return false;   /* not under a running Preview: taken when it ends (review 6) */
-    const level = this.brief.partyLevel, next = cleanBrief(mergeBrief(this.brief, b, { by: "angel" }).brief); next.partyLevel ??= level;
+    const level = this.brief.partyLevel, set = this.brief.partyLevelSet, next = cleanBrief(mergeBrief(this.brief, b, { by: "angel" }).brief);
+    if (next.partyLevel === null) { next.partyLevel = level; next.partyLevelSet = set; } else next.partyLevelSet = true;   /* Angel names a level only when the GM asked for one (0.46.0) */
     this.brief = next; this.formStale = true; this.openNotes?.clear(); this.message = "Angel filled this in: check it, then Preview."; markApplied(this.scene, next).catch(e => console.warn(`${ID} | ask`, e)); return true;
   }
   _onFirstRender(context, options) { super._onFirstRender?.(context, options);
@@ -48,7 +49,7 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
   }
   loadBrief() {
     const stored = this.scene.getFlag(ID, "brief");
-    this.brief = cleanBrief(stored ?? { mood: "ambush" }); this.brief.partyLevel ??= suggestedLevel(); this.fromChat = !!stored;
+    this.brief = cleanBrief(stored ?? { mood: "ambush" }); if (!this.brief.partyLevelSet) this.brief.partyLevel = suggestedLevel(); this.fromChat = !!stored;   /* 0.46.0: the sheets' level unless a GM set one */
     this.rowInfo = new Map();
   }
   /* the minds as the scene now has them, for rows that are still the same creature at the same place (the notes box shows them) */
@@ -76,6 +77,7 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
       <fieldset><legend>The party</legend>
         <p>Sheets: ${partyLevels().map(p => `${esc(p.name)} ${p.level}`).join(", ") || "no party found"}. ${partySize()} PCs for balance.</p>
         <div class="form-group"><label>Party level for this fight</label><input type="number" name="partyLevel" min="-1" max="25" value="${lv}"></div>
+        ${b.partyLevelSet && lv !== suggestedLevel() ? `<p class="leb-warn">Set by hand for this fight: the sheets say level ${suggestedLevel()}. Type ${suggestedLevel()} to follow the sheets again.</p>` : ""}
         ${sizeNote ? `<p class="leb-warn">${esc(sizeNote)}</p>` : ""}</fieldset>
       <fieldset class="leb-creatures"><legend>Creatures</legend>${rows || "<p>None yet. Search below, or ask Angel.</p>"}
         <div class="leb-add"><input type="text" name="search" placeholder="Add a creature: type a name" autocomplete="off"><span>or drag one in</span></div><div class="leb-results">${this.results.map((r, k) => `<button type="button" data-action="addResult" data-k="${k}">${esc(r.name)}, level ${r.level}, ${esc(r.size)}: ${esc(r.pack)}</button>`).join("")}</div>
@@ -107,7 +109,7 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
     const n = el.name, row = el.closest("[data-row]")?.dataset.row ?? el.dataset.row, c = row === undefined ? null : this.brief.creatures[+row];
     if (c) { if (n === "count") c.count = Math.max(1, Math.min(30, +el.value || 1)); else if (n === "run") c.run = el.checked; else if (["adjust", "role", "state"].includes(n)) c[n] = el.value;
       else if (n === "notes") { c.mind ??= {}; if (el.value.trim()) c.mind.notes = { text: el.value, by: "gm" }; else delete c.mind.notes; } return; }
-    if (n === "partyLevel") this.brief.partyLevel = Math.round(+el.value || 0); else if (n === "claimedXP") this.brief.claimedXP = el.value === "" ? null : +el.value; else if (["name", "mood", "why", "want", "doing", "retreat", "treasureMode"].includes(n)) this.brief[n] = el.value;
+    if (n === "partyLevel") { this.brief.partyLevel = Math.round(+el.value || 0); this.brief.partyLevelSet = this.brief.partyLevel !== suggestedLevel(); }   /* typing the sheets' own level back un-sets it (0.46.0) */ else if (n === "claimedXP") this.brief.claimedXP = el.value === "" ? null : +el.value; else if (["name", "mood", "why", "want", "doing", "retreat", "treasureMode"].includes(n)) this.brief[n] = el.value;
   }
   _onRender() {
     const root = this.element; this.formStale = false;   /* the window shows its brief again */

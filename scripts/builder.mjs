@@ -94,6 +94,8 @@ async function resolveCreatures(brief) {
 export const partySize = () => game.settings.get(ID, "partySize");
 export const partyLevels = () => (game.actors.party?.members ?? []).filter(a => a.type === "character").map(a => ({ name: a.name, level: a.level }));
 /** The level the sheets suggest: the most common, the lowest on a tie. Never taken silently: the dialog shows it and asks. */
+/** The party level a brief is worked out for (0.46.0): the level a GM set for this fight, otherwise the party's sheets now (suggestedLevel). */
+export const fightLevel = b => b?.partyLevelSet && Number.isFinite(b.partyLevel) ? b.partyLevel : suggestedLevel();
 export function suggestedLevel() { const n = new Map(); for (const { level } of partyLevels()) n.set(level, (n.get(level) ?? 0) + 1); return [...n].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]?.[0] ?? 1; }
 export function threatOf(levels, level, claimed = null) {
   const size = partySize(), r = game.pf2e.gm.calculateXP(level, size, levels, [], {});
@@ -134,7 +136,7 @@ export async function prepare(scene, rawBrief, { seed = null, except = null, roo
   const old = scene.getFlag(ID, "build"); except ??= new Set(old ? scene.tokens.filter(t => t.getFlag(ID, "built") === old.id).map(t => t.id) : []);
   const brief = cleanBrief(rawBrief); if (!brief.creatures.length) throw new Error("The brief has no creatures.");
   const info = await resolveCreatures(brief), { read, why, model, px, ox, oy } = await readMap(scene, { except });
-  const level = brief.partyLevel ?? suggestedLevel(); brief.partyLevel = level;
+  const level = fightLevel(brief); brief.partyLevel = level;
   const threat = threatOf(levelsOf(brief, info), level, brief.claimedXP);
   const s = seed ?? (Math.floor(Math.random() * 1e6) + 1), list = expandCreatures(brief, c => info.get(c.uuid));
   const rooms = roomList(model), roomAuto = suggestRoom(rooms, list, brief.mood), early = [];

@@ -34,6 +34,9 @@ export function cleanBrief(b = {}) {
   return {
     minds: MIND_SCHEMA, name: text(b.name, 120), beat: text(b.beat, 500), why: text(b.why), want: text(b.want), doing: text(b.doing), retreat: text(b.retreat),
     mood: pick(b.mood, MOODS, "ambush"), partyLevel: b.partyLevel === undefined || b.partyLevel === null || b.partyLevel === "" ? null : whole(b.partyLevel, -1, 25, null),
+    /* 0.46.0 (Rhea at the live test: "that should default to the real party level"): true only when a GM typed a level, or Ask Angel set one the GM
+       asked for. Without it the level follows the party's sheets every time (fightLevel in builder.mjs), so an old fight's level doesn't stick. */
+    partyLevelSet: !!b.partyLevelSet && b.partyLevel !== undefined && b.partyLevel !== null && b.partyLevel !== "",
     claimedXP: Number.isFinite(claimed) && b.claimedXP !== null && b.claimedXP !== "" ? claimed : null,
     creatures, bands, treasure, treasureMode: pick(b.treasureMode, ["list", "table", "none"], treasure.length ? "list" : "table"), notes,
     journal: { truth: text(b.journal?.truth), locals: text(b.journal?.locals), learn: text(b.journal?.learn) }

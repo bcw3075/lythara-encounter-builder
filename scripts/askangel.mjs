@@ -2,7 +2,7 @@
    API worker, on the runner's page, reads the oldest unanswered ask with `api.ask.pending()` (the map, the party, the window's brief, the map's journal
    notes and the conversation, put together here on the runner's page so no journal text is written into a flag), answers the tools it asks for with
    `api.ask.tool()`, and hands in its reply and brief with `api.ask.answer()`. The GM's window fills itself from the answer; nothing is placed. */
-import { ID, findCreatures, partyLevels, partySize, readMap, suggestedLevel, threatOf } from "./builder.mjs";
+import { ID, fightLevel, findCreatures, partyLevels, partySize, readMap, suggestedLevel, threatOf } from "./builder.mjs";
 import { cleanBrief } from "./brief.mjs";
 import { stampBrief } from "./minds.mjs";
 import { adjustedLevel } from "./budget.mjs";
@@ -48,7 +48,7 @@ export async function askPending(skip = []) {
   let map;
   try { const { read, why, model: m } = await readMap(s); map = { ...summarise(m, read), why, rooms: roomList(m).map(r => ({ room: r.n, squares: r.size, walkFt: r.near, seenByParty: r.seen, things: r.things, partyStartsHere: r.party })) }; }
   catch (e) { map = { unreadable: e.message }; }
-  const party = { level: brief.partyLevel ?? suggestedLevel(), size: partySize(), sheetLevels: partyLevels().map(p => p.level) };
+  const party = { level: fightLevel(brief), size: partySize(), sheetLevels: partyLevels().map(p => p.level) };
   return { kind: "build", sceneId: s.id, scene: s.name, seq: a.seq, model: a.model ?? "sonnet", system: ASK_PROMPT, tools: ASK_TOOLS,
     text: askText({ scene: s.name, map, party, brief, notes: mapNotes(s), messages: a.messages }) };
 }
@@ -73,7 +73,7 @@ export async function askTool(sceneId, name, input = {}) {
       return { items: hits.map(i => ({ name: i.name, level: i.level, gp: gpOf(i.price), type: i.type })) };
     }
     if (name === "check_threat") {
-      const scene = game.scenes.get(sceneId), brief = cleanBrief(scene?.getFlag(ID, "askAngel")?.brief ?? {}), level = Number.isFinite(input.partyLevel) ? input.partyLevel : brief.partyLevel ?? suggestedLevel();
+      const scene = game.scenes.get(sceneId), brief = cleanBrief(scene?.getFlag(ID, "askAngel")?.brief ?? {}), level = Number.isFinite(input.partyLevel) ? input.partyLevel : fightLevel(brief);
       const levels = [], unknown = [];
       for (const c of (Array.isArray(input.creatures) ? input.creatures : []).slice(0, 30)) { const a = await fromUuid(String(c?.uuid ?? "")).catch(() => null);
         if (!(a instanceof Actor) || a.type !== "npc") { unknown.push(String(c?.uuid ?? "?")); continue; }
