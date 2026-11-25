@@ -527,19 +527,38 @@ function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here, elev 
   const at_ = step.rank != null ? ranks.find(r => r.rank === step.rank) : open[0] ?? ranks[0];
   if (step.rank != null && !at_) return no(`{they} can't cast ${sp.name} at rank ${step.rank} ({they} can at ${list || "no rank"}).`);
   if (!at_ || !enough(at_)) return no(`${sp.name} has no ${step.rank != null ? `rank ${step.rank} ` : ""}uses or slots left${at_?.pool === "focus" ? ` (it costs ${at_.cost} focus point${at_.cost === 1 ? "" : "s"})` : ""}.`);
+  /* Heal, Harm and their kin with 3 actions (0.47.0, P-2): their 30-foot emanation, from PF2e's own variant, is the spell's area for this cast */
+  const vital = sp.vital ?? null, vArea = vital?.area?.[actions] ?? null, spA = vArea ? { ...sp, area: vArea.area, targetText: "", targets: 0 } : sp;
   /* the target: a creature it perceives, or one of its allies or itself */
   let t = null, tLabel = null;
   if (step.target) {
     if (!sp.targets && !sp.area) return no(`${sp.name} doesn't target a creature, so leave "target" out.`);
     t = ctx.targets?.[step.target] ?? ctx.allies?.[step.target] ?? null; if (!t) return no(`{they} {doesn't|don't} know of "${step.target}".`);
     tLabel = step.target;
-  } else if (sp.targets && !sp.area) return no(`${sp.name} needs a target: give "target", a label.`);
-  /* a healing spell at one friend (0.46.0, the live test: Heal on a dying ally was card only): the range is the one its actions give (Heal: 1 action
-     touch, 2 actions 30 feet); the module casts it, rolls the healing at the rank and applies it */
-  const healAt = sp.heal?.[actions] ?? null;
-  if (healAt && !healAt.area && t?.ally && !t.undead && !t.notLiving && !t.dead && (healAt.range != null || healAt.touch)) {
-    const reach = healAt.touch ? Math.max(5, ctx.reach ?? 5) : healAt.range, d = distanceTo(t, healAt.touch ? reach : null);
-    if (d > reach) return no(`${t.name ?? tLabel} is ${d} ft away, out of ${healAt.touch ? "reach for" : "range of"} ${sp.name} with ${actions} action${actions === 1 ? "" : "s"} (${healAt.touch ? "touch" : `${reach} ft`}).`);
+  } else if (sp.targets && !sp.area && !vArea) return no(`${sp.name} needs a target: give "target", a label.`);
+  /* Heal, Harm and their kin at one creature (0.46.0 at a friend, the live test: Heal on a dying ally was card only; 0.47.0, P-2, Rhea: "She should be
+     able to do those actions yes, but that needs to be a real thought call"): the variant for its actions, by whom it is aimed at. A friend its healing is
+     for is healed; a foe its damage is for takes it with a basic save (the module waits for the save, as for any save spell); anything else is refused
+     with the reason, since the spell would do nothing or the opposite (Heal hurts an undead friend; a living foe is unwilling, so Heal does nothing to it).
+     What a creature is comes from what the monster sees (`undead`, `notLiving`), a hidden one too (it saw them); a destroyed one is refused. */
+  const kindOf = x => x?.undead ? "undead" : x?.notLiving ? "construct" : "living";
+  let vPick = null, vMode = null;
+  if (vital && t && !vArea) {
+    const mend = vital.heal?.[actions] ?? null, hurt = vital.hurt?.[actions] ?? null, k = kindOf(t), who = t.name ?? tLabel;
+    const inReach = x => { const reach = x.touch ? Math.max(5, ctx.reach ?? 5) : x.range, d = distanceTo(t, x.touch ? reach : null);
+      return d > reach ? no(`${who} is ${d} ft away, out of ${x.touch ? "reach for" : "range of"} ${sp.name} with ${actions} action${actions === 1 ? "" : "s"} (${x.touch ? "touch" : `${reach} ft`}).`) : null; };
+    if (t.ally && (mend || hurt)) {
+      if (t.dead) return no(`${who} is dead, and ${sp.name} raises no one.`);
+      if (k !== vital.mends) return no(k === vital.hurts ? `${sp.name} would hurt ${who} (${k}), not heal them.` : `${sp.name} does nothing to ${who} (${k === "construct" ? "a construct, neither living nor undead" : k}).`);
+      if (!mend) return no(`${sp.name} heals only with ${Object.keys(vital.heal).join(" or ")} action${Object.keys(vital.heal).join("") === "1" ? "" : "s"}.`);
+      const far = inReach(mend); if (far) return far; vPick = mend; vMode = "heal";
+    } else if (!t.ally && (mend || hurt)) {
+      if (t.dead) return no(`${who} is already destroyed: ${sp.name} would do nothing.`);   /* review 5 */
+      if (k !== vital.hurts) return no(k === vital.mends ? `${sp.name} would only heal ${who}, and a foe is unwilling, so it does nothing to them.` : `${sp.name} does nothing to ${who} (${k === "construct" ? "a construct, neither living nor undead" : k}).`);
+      if (!hurt) return no(`${sp.name} deals its damage only with ${Object.keys(vital.hurt).join(" or ")} actions.`);
+      const far = inReach(hurt); if (far) return far;
+      if (ctx.saveRows) { vPick = hurt; vMode = "save"; }   /* without the GM's save tools it stays the GM's, as any save spell does */
+    }
   }
   if (t && (sp.range != null || sp.touch) && !sp.area && !sp.variants) {
     const reach = sp.touch ? Math.max(5, ctx.reach ?? 5) : sp.range, d = distanceTo(t, sp.touch ? reach : null);
@@ -548,8 +567,8 @@ function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here, elev 
   /* an area the module places (Rhea, 2026-11-07): aimed by "at" (a burst's corner) or "toward" (a cone's or line's square), or at the named creature; it may
      not catch an ally or the monster itself unless the plan says "deliberate" */
   let area = null;
-  if (sp.area && placeable(sp.area) && ctx.areaOf && here) {
-    const r = ctx.areaOf(sp, { at: step.at, toward: step.toward }, { square: here, size: ctx.me?.size ?? 1, elev }, t ? { square: t.square, size: t.size ?? 1 } : null);
+  if (spA.area && placeable(spA.area) && ctx.areaOf && here) {
+    const r = ctx.areaOf(spA, { at: step.at, toward: step.toward }, { square: here, size: ctx.me?.size ?? 1, elev }, t ? { square: t.square, size: t.size ?? 1 } : null);
     if (!r.ok) return no(`${sp.name}: ${r.reason}`);
     if (r.aim.type === "burst") {   /* a corner of a square within range: the nearest of the four squares round it; touch by its reach; no range: a corner of its own space */
       const c = r.aim.corner, n = ctx.me?.size ?? 1, range = sp.touch ? Math.max(5, ctx.reach ?? 5) : sp.range;
@@ -559,7 +578,14 @@ function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here, elev 
     /* 0.46.1 (self-run playtest: Bless and Courageous Anthem were refused for catching the caster's own side): a spell for "you and allies" that does no
        harm (no damage, no save, no attack) is meant to catch them */
     const forFriends = ((/\ball(y|ies)\b/i.test(sp.targetText ?? "") && !/\b(non-?|not |enem)/i.test(sp.targetText ?? "")) || (!sp.targetText && /\b(you|yourself) and (all |your )?all(y|ies)\b/i.test(sp.text ?? ""))) && !sp.damaging && !sp.save && !sp.attack;   /* review 8: "non-allies", "enemy or ally" aren't for friends; live retest: Courageous Anthem has no target line, only "You and all allies in the area" in its text */
-    if (r.allies.length && !step.deliberate && !forFriends) return no(`${sp.name} there would also catch ${listWords(r.allies.map(l => l === r.self ? "itself" : l))}. Aim it elsewhere, or add "deliberate": true if {they} {means|mean} to.`);
+    /* Heal or Harm with 3 actions (0.47.0, P-2): it heals its friends of the kind it heals (itself too) and hurts every creature of the other kind,
+       friend or foe, so only a friend it would hurt is refused */
+    if (vArea) { const bad = r.allies.filter(l => l !== r.self && kindOf(ctx.allies?.[l]) === vital.hurts);
+      if (bad.length && !step.deliberate) return no(`${sp.name} with 3 actions would also hurt ${listWords(bad)} (${vital.hurts}). Cast it another way, move first, or add "deliberate": true if {they} {means|mean} to.`);
+      /* review 3: the 3-action version heals every creature of its kind in it, foes too (no willing clause) */
+      const healsFoes = (r.known ?? []).filter(l => !ctx.targets?.[l]?.dead && kindOf(ctx.targets?.[l]) === vital.mends);
+      if (healsFoes.length && !step.deliberate) return no(`${sp.name} with 3 actions would also heal ${listWords(healsFoes)}, ${healsFoes.length === 1 ? "a foe" : "foes"} (it heals every ${vital.mends} creature in it). Cast it another way, move first, or add "deliberate": true if {they} {means|mean} to.`); }
+    else if (r.allies.length && !step.deliberate && !forFriends) return no(`${sp.name} there would also catch ${listWords(r.allies.map(l => l === r.self ? "itself" : l))}. Aim it elsewhere, or add "deliberate": true if {they} {means|mean} to.`);
     area = { type: r.aim.type, size: r.aim.size, aim: r.aim, catches: r.known, hits: r.ids, ...(step.deliberate ? { deliberate: true } : {}) };
   } else if (t && sp.area && sp.range != null) { const d = distanceTo(t, null); if (d > sp.range) return no(`${t.name ?? tLabel} is ${d} ft away, beyond ${sp.name}'s range (${sp.range} ft).`); }
   /* run for real only at one creature it perceives, and never a spell whose range, targets or damage change with its actions (Heal, Harm: PF2e's
@@ -568,14 +594,23 @@ function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here, elev 
   /* 0.46.0 (the live test, Rhea: "the damage should be applied automatically"): missiles that always hit (Force Barrage, the old Magic Missile) at one
      creature it fights, all of them at that creature, rolled together as the rules say; a healing spell at one friend, at the actions that keep it to one */
   const missiles = MISSILES[sp.slug ?? sp.id?.replace(/-\d+$/, "")] && !sp.area && !!t && !t.ally && sp.damaging && !sp.attack && !sp.save ? missileCount(actions, at_.rank) : 0;
-  const heals = !!healAt && !healAt.area && !!t?.ally && !t.undead && !t.notLiving && !t.dead;
+  /* a buff (0.47.0, P-1, Rhea: "Apply them automatically"): a spell with no damage, save or attack whose text links one spell effect (Haste, Bless, Shield,
+     Heroism, Courageous Anthem) has the effect put on by the module: on itself for a spell with no target or area, on the friend it targets, or on itself and
+     every friend its area catches; at a foe, or anything else, it stays the GM's from the card */
+  const buff = !!sp.effect && !sp.damaging && !sp.save && !sp.attack && (area ? !!(area && (/\ball(y|ies)\b/i.test(sp.targetText ?? "") || /\b(you|yourself) and (all |your )?all(y|ies)\b/i.test(sp.text ?? ""))) : !sp.area && (!sp.targets ? !t : (sp.targets ?? 0) === 1 && !!t?.ally));
+  if (buff && t?.dead) return no(`${t.name ?? tLabel} is dead: ${sp.name} would do nothing.`);
   /* a basic save area that deals damage runs for real (Rhea, 2026-11-07): everyone in it saves and takes damage by their own degree */
-  const mode = one && sp.attack ? "attack" : one && sp.save && ctx.saveRows ? "save" : missiles ? "missiles" : heals ? "heal" : area && !sp.variants && !sp.attack && sp.save?.basic && sp.damaging && ctx.saveRows ? "area" : "card";
+  const mode = vMode ?? (vArea && area ? (ctx.saveRows || !vital.hurts ? "area" : "card") : one && sp.attack ? "attack" : one && sp.save && ctx.saveRows ? "save" : missiles ? "missiles" : buff ? "buff" : area && !sp.variants && !sp.attack && sp.save?.basic && sp.damaging && ctx.saveRows ? "area" : "card");
   const isAttack = traits.includes("attack");
+  const vSave = (vMode === "save" ? vPick?.save : vArea && mode === "area" ? vArea.save : null) ?? sp.save ?? null;   /* review 1: the variant's save (Lay on Hands' base item has none) */
   const out = { do: "spell", item: sp.id, itemName: sp.name, ...(sp.entryId ? { entryId: sp.entryId, spellId: sp.spellId } : {}), rank: at_.rank, actions, mode, ...(t ? { target: tLabel, targetName: t.name ?? tLabel, flat: sp.area ? 0 : t.flat ?? 0 } : {}),
-    ...(isAttack ? { attack: true, mapCounts: true, variant: Math.min(attacks, 2) } : {}), ...(area ? { area, ...(sp.lasting ? { lasting: true } : {}) } : sp.area ? { area: { ...sp.area } } : {}),
-    ...(mode === "save" || mode === "area" ? { save: sp.save.stat, basic: !!sp.save.basic } : {}), damaging: !!sp.damaging, ...(sp.critText ? { critText: true } : {}),
-    ...(missiles ? { missiles } : {}), ...(heals && healAt.overlay ? { overlay: healAt.overlay } : {}) };
+    ...(isAttack ? { attack: true, mapCounts: true, variant: Math.min(attacks, 2) } : {}), ...(area ? { area, ...(sp.lasting && !vArea && mode !== "buff" ? { lasting: true } : {}) } : sp.area ? { area: { ...sp.area } } : {}),
+    ...((mode === "save" || mode === "area") && vSave ? { save: vSave.stat, basic: !!vSave.basic } : {}), damaging: !!sp.damaging || (!!vital && (vMode === "save" || (!!vArea && mode === "area"))), ...(sp.critText ? { critText: true } : {}),
+    ...(missiles ? { missiles } : {}), ...(vPick?.overlay ? { overlay: vPick.overlay } : {}),
+    /* 0.47.0: a hurting variant is cast as itself (its card has its save); the 3-action area knows whom it heals and whom it hurts */
+    ...(vMode === "save" ? { castOverlay: true, vital: { mends: vital.mends, hurts: vital.hurts } } : {}), ...(vArea && mode === "area" ? { overlay: vArea.overlay, castOverlay: true, vital: { mends: vital.mends, hurts: vital.hurts } } : {}),
+    /* the effect a buff puts on; a healing spell that also links one (Lay on Hands: +2 AC to another) puts it on its friend, and on a foe it hurts that fails its save */
+    ...(sp.effect && (mode === "buff" || (mode === "heal" && !(t?.self && /other than yourself/i.test(sp.text ?? ""))) || (vMode === "save" && /on a failure/i.test(sp.text ?? ""))) ? { effect: sp.effect.uuid, effectName: sp.effect.name, ...(vMode === "save" ? { effectOnFail: true } : {}) } : {}) };
   return { ok: true, step: out, pool: at_.pool, poolLeft: at_.left, poolCost: at_.cost ?? 1 };
 }
 /** Spells whose missiles always hit (0.46.0): Force Barrage and the legacy Magic Missile, the same spell in PF2e's data. Each action fires one missile,
@@ -591,9 +626,13 @@ export function missileFormula(formula, n) {
     (its slot or use is spent and its card posted), then a flat check for a concealed or hidden target, then by mode: "attack" rolls the spell attack and,
     for a damaging spell that hits, its damage; "save" waits for the target's save ("wait") and, for a basic save, rolls the damage and applies it by
     degree; "card" (after a flat check at a creature it can't see clearly), and anything a non-damaging or non-basic spell does, is the GM's ("gm"). */
-export function nextSpell(rec = {}, { mode = "card", flat = 0, apply = false, damaging = false, basic = false } = {}) {
+export function nextSpell(rec = {}, { mode = "card", flat = 0, apply = false, damaging = false, basic = false, effect = false, effectOnFail = false } = {}) {
   if (!rec.castStarted) return "cast";
   if (!rec.cast) return "ask";
+  /* a buff (0.47.0, P-1): its effect goes on, once; a healing spell's own effect (Lay on Hands) goes on before the healing is rolled */
+  const putOn = () => rec.effected ? null : rec.effectStarted ? "ask" : "effect";
+  if (mode === "buff") return putOn() ?? "next";
+  if (mode === "heal" && effect && putOn()) return putOn();
   if (rec.noRows) return "gm";
   if (flat) { if (!rec.flatStarted) return "flat"; if (!rec.flat) return "ask"; if (!rec.flat.ok) return "next"; }   /* a concealed or hidden target, card mode too: a failure means it isn't affected */
   if (mode === "card") return "gm";
@@ -606,6 +645,8 @@ export function nextSpell(rec = {}, { mode = "card", flat = 0, apply = false, da
   } else {
     if (!rec.save) return "save";
     if (!damaging || !basic) return "gm";
+    /* Lay on Hands at an undead foe (0.47.0): its effect (the AC penalty) goes on when the save fails, before the damage */
+    if (effectOnFail && rec.save.degree != null && rec.save.degree <= 1 && putOn()) return putOn();
     if (SAVE_MULT[rec.save.degree] === 0) return "next";
   }
   if (!rec.damageStarted) return "damage";
@@ -622,15 +663,18 @@ export function nextSpell(rec = {}, { mode = "card", flat = 0, apply = false, da
 export function nextArea(rec = {}, { mode = "area", apply = false, lasting = false } = {}) {
   if (!rec.castStarted) return "cast";
   if (!rec.cast) return "ask";
+  /* an area buff (0.47.0, P-1: Bless, Courageous Anthem): its effect goes on the friends it caught, with no area left on the map */
+  if (mode === "buff") return rec.effected ? "next" : rec.effectStarted ? "ask" : "effect";
   if (!rec.placed) return "place";
   if (mode !== "area" || rec.noRows) return "gm";
-  const ids = rec.rows ?? [];
+  const ids = rec.rows ?? [], mends = rec.mends ?? [];   /* mends (0.47.0, P-2): the friends Heal or Harm with 3 actions heals, with no save */
   if (ids.some(id => rec.saves?.[id] == null)) return "save";
   const hurt = ids.filter(id => SAVE_MULT[rec.saves[id]] > 0);
-  if (hurt.length) {
+  if (hurt.length || mends.length) {
     if (!rec.damageStarted) return "damage";
     if (!rec.damage) return "ask";
     if (apply || rec.applying) for (const id of hurt) if (!rec.applied?.[id]) return rec.applying?.[id] ? "ask" : "apply";
+    if (apply || rec.mending) for (const id of mends) if (!rec.mended?.[id]) return rec.mending?.[id] ? "ask" : "mend";
   }
   if (!lasting && !rec.removed) return "remove";
   return "next";
@@ -713,6 +757,9 @@ function checkAbility(step, ab, { ctx, last, at, attacks, distanceTo, channeled 
       if (ab.selfOn || channeled?.has?.(ab.selfEffect)) return no(`${ab.name}'s effect (${ab.selfEffectName ?? ab.name}) is already on {them}${traits.includes("stance") ? ": {they} {is|are} in that stance" : ""}, so using it again would waste the action.`);
       return { ok: true, step: { do: "ability", item: ab.id, itemName: ab.name, mode: "self", effect: ab.selfEffect, effectName: ab.selfEffectName ?? ab.name, ...(isAttack ? { attack: true, mapCounts: true, variant: Math.min(attacks, 2) } : {}) }, gives: ab.selfEffect };
     }
+    /* 0.47.0 (P-1): an action whose effect goes on itself and its friends nearby (Channeled Protection: "You and all adjacent allies") */
+    if (ab.groupEffect && !isAttack && (ab.groupOn || channeled?.has?.(ab.groupEffect))) return no(`${ab.name}'s effect (${ab.groupEffectName ?? ab.name}) is already on {them}, so using it again would waste the action.`);   /* review 10 */
+    if (ab.groupEffect && !isAttack) return { ok: true, step: { do: "ability", item: ab.id, itemName: ab.name, mode: "group", effect: ab.groupEffect, effectName: ab.groupEffectName ?? ab.name, range: ab.groupRange ?? 5 } };
     if (ab.allyEffect && t?.ally && !isAttack) {
       if (ab.allyEffectOthers && t.self) return no(`${ab.name} is for another creature, not the one using it.`);
       if (ab.allyEffectRange != null) { const d = distanceTo(t, null); if (d > ab.allyEffectRange) return no(`${t.name ?? step.target} is ${d} ft away, beyond ${ab.name}'s ${ab.allyEffectRange} feet.`); }
@@ -846,7 +893,7 @@ function doneStepIt(step, rec = {}) {
   if (step.do === "point-out") return { do: "point-out", target: step.target, result: rec.flat && !rec.flat.ok ? "flat check failed" : pointResult(rec) };
   if (step.do === "interact") return { do: "interact", what: step.what, result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.posted ? "card posted for the GM to apply" : "unknown" };
   if (step.do === "delay") return { do: "delay", after: step.after, result: rec.moved ? "delayed: {their} turn comes back after that creature's" : rec.ended ? "turn ended; {their} place in the order may not have moved" : "unknown" };
-  if (step.do === "ability") return { do: "ability", item: step.item, ...(step.target ? { target: step.target } : {}), result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.check ? CHECK_OUTCOMES[rec.check.degree] ?? "unknown" : step.mode === "blast" ? (rec.attack ? OUTCOMES[rec.attack.degree] ?? "unknown" : "unknown") : step.mode === "self" || step.mode === "effect" ? (rec.effected ? `${step.effectName ?? "its effect"} is on${step.mode === "effect" ? ` ${step.target}` : ""}` : "unknown") : rec.posted ? (step.mode === "hold" ? "kept hold" : "card posted for the GM to apply") : "unknown" };
+  if (step.do === "ability") return { do: "ability", item: step.item, ...(step.target ? { target: step.target } : {}), result: rec.flat && !rec.flat.ok ? "flat check failed" : rec.check ? CHECK_OUTCOMES[rec.check.degree] ?? "unknown" : step.mode === "blast" ? (rec.attack ? OUTCOMES[rec.attack.degree] ?? "unknown" : "unknown") : step.mode === "group" ? (rec.effected ? `${step.effectName ?? "its effect"} is on ${(rec.effectOn ?? []).join(", ") || "nobody"}` : "unknown") : step.mode === "self" || step.mode === "effect" ? (rec.effected ? `${step.effectName ?? "its effect"} is on${step.mode === "effect" ? ` ${step.target}` : ""}` : "unknown") : rec.posted ? (step.mode === "hold" ? "kept hold" : "card posted for the GM to apply") : "unknown" };
   if (step.do === "sustain") return { do: "sustain", item: step.item, result: rec.posted ? "sustained" : "unknown" };
   if (step.do === "spell") return { do: "spell", item: step.item, rank: step.rank, ...(step.sustain ? { sustain: true } : {}), ...(step.target ? { target: step.target } : {}), result: spellResult(step, rec) };
   if (step.do !== "strike") return { do: step.do };
@@ -858,10 +905,12 @@ function spellResult(step, rec = {}) {
   if (!rec.cast) return "unknown";
   if (rec.flat && !rec.flat.ok) return "flat check failed";
   if (step.mode === "card" || rec.noRows) return "card posted for the GM to apply";
+  if (step.mode === "area" && rec.mends?.length && rec.results === "") return rec.mended && Object.keys(rec.mended).length ? "cast; it healed those of its kind there" : "cast; the healing is yours to apply from its card";
   if (step.mode === "area") return rec.results != null || (rec.rows && !rec.rows.length) ? (rec.results ? `saves: ${rec.results}` : "cast; no one {they} {knows|know} of was in the area") : "waiting for saves";
   if (step.mode === "attack") return rec.attack ? OUTCOMES[rec.attack.degree] ?? "unknown" : "unknown";
   if (step.mode === "missiles") return rec.applied ? `${step.missiles} missile${step.missiles === 1 ? "" : "s"} hit` : rec.damage ? `${step.missiles} missile${step.missiles === 1 ? "" : "s"} rolled` : "cast";
   if (step.mode === "heal") return rec.applied ? `healed ${rec.healed ?? "some"} HP` : rec.damage ? "healing rolled" : "cast";
+  if (step.mode === "buff") return rec.effected ? (rec.effectOn?.length ? `${step.effectName ?? "its effect"} is on ${rec.effectOn.join(", ")}` : `${step.effectName ?? "its effect"}: nobody to put it on`) : "cast";
   return rec.save ? `target's save: ${CHECK_OUTCOMES[rec.save.degree] ?? "unknown"}` : "waiting for the save";
 }
 
@@ -1061,14 +1110,18 @@ function describeStepIt(s) {
     if (s.mode === "blast") return `${s.itemName} (${s.element}, ${s.blastActions ?? 1} action${(s.blastActions ?? 1) === 1 ? "" : "s"}, ${s.melee ? "melee" : "ranged"}) at ${s.targetName}${s.variant ? `, attack ${s.variant + 1}` : ""}${flat}.`;
     if (s.mode === "self") return `${s.itemName}: puts ${s.effectName ?? "its effect"} on {themself}.`;
     if (s.mode === "effect") return `${s.itemName}: puts ${s.effectName ?? "its effect"} on ${s.targetName}.`;
+    if (s.mode === "group") return `${s.itemName}: puts ${s.effectName ?? "its effect"} on {themself} and every friend within ${s.range ?? 5} feet.`;
     return `${s.itemName}${s.targetName ? ` at ${s.targetName}` : ""}${s.variant ? `, attack ${s.variant + 1}` : ""}: its card goes to chat for you to apply${s.flat ? ` (a DC ${s.flat} flat check if it targets)` : ""}.`;
   }
   if (s.do === "spell") {
     const head = s.sustain ? `Sustains ${s.itemName} (1 action)` : `Casts ${s.itemName} (rank ${s.rank}${s.actions !== 2 ? `, ${s.actions} action${s.actions === 1 ? "" : "s"}` : ""})`, flat = s.flat ? `, after a DC ${s.flat} flat check` : "";
     if (s.mode === "attack") return `${head} at ${s.targetName}: a spell attack${s.variant ? `, attack ${s.variant + 1}` : ""}${flat}.`;
     if (s.mode === "missiles") return `${head} at ${s.targetName}: ${s.missiles} missile${s.missiles === 1 ? "" : "s"}, which always hit${s.missiles === 1 ? "s" : ""}${flat}.`;
-    if (s.mode === "heal") return `${head} on ${s.targetName}: the healing is rolled and applied.`;
+    if (s.mode === "heal") return `${head} on ${s.targetName}: the healing is rolled and applied${s.effect ? `, and ${s.effectName ?? "its effect"} goes on` : ""}.`;
+    if (s.mode === "buff" && !s.area?.aim) return `${head}${s.targetName ? ` on ${s.targetName}` : ""}: ${s.effectName ?? "its effect"} goes on ${s.targetName ?? "{themself}"}.`;
     if (s.area?.aim) {
+      if (s.mode === "buff") return `${head}: a ${s.area.size}-foot ${s.area.type}${aimTextIt(s.area)}: ${s.effectName ?? "its effect"} goes on {them} and every friend in it.`;
+      if (s.mode === "area" && s.vital) return `${head}: a ${s.area.size}-foot ${s.area.type}${aimTextIt(s.area)}${s.area.catches?.length ? `, catching ${listWords(s.area.catches)}` : ""}${s.area.deliberate ? " ({their} allies on purpose)" : ""}. It heals every ${s.vital.mends} creature in it, friend or foe${s.vital.hurts ? ` and every ${s.vital.hurts} creature rolls a basic ${(s.save ?? "fortitude")[0].toUpperCase() + (s.save ?? "fortitude").slice(1)} save and takes damage by degree` : ""}.`;
       const what = `a ${s.area.size}-foot ${s.area.type}${aimTextIt(s.area)}${s.area.catches?.length ? `, catching ${listWords(s.area.catches)}` : ""}${s.area.deliberate ? " ({their} allies on purpose)" : ""}`;
       if (s.mode === "area") return `${head}: ${what}. Each rolls a basic ${s.save[0].toUpperCase() + s.save.slice(1)} save and takes damage by degree.`;
       return `${head}: ${what}. The area is placed; its card goes to chat for you to apply.`;
@@ -1168,7 +1221,7 @@ export function nextPoint(rec = {}, { flat = 0 } = {}) {
     left for the GM to apply. Applying a condition again changes nothing, so the effects stage may run again after a reload. */
 export function nextAbility(rec = {}, { mode = "check", flat = 0, apply = false } = {}) {
   /* 0.46.0: "self" and "effect" post the card, then put the effect on (itself, or the friend); "blast" rolls like a Strike: flat check, attack, damage */
-  if (mode === "self" || mode === "effect") { if (!rec.started) return "post"; if (!rec.posted) return "ask"; if (!rec.effectStarted) return "effect"; return rec.effected ? "next" : "ask"; }
+  if (mode === "self" || mode === "effect" || mode === "group") { if (!rec.started) return "post"; if (!rec.posted) return "ask"; if (!rec.effectStarted) return "effect"; return rec.effected ? "next" : "ask"; }
   if (mode === "blast") {
     if (flat) { if (!rec.flatStarted) return "flat"; if (!rec.flat) return "ask"; if (!rec.flat.ok) return "next"; }
     if (!rec.started) return "attack"; if (!rec.attack) return "ask"; if (rec.attack.degree < 2) return "next";

@@ -1,7 +1,7 @@
 ---
 feature: packet
 files: [scripts/perceive.mjs]
-functions: [fight.mjs:runnable, fight.mjs:onParty, fight.mjs:kindOf, fight.mjs:nameFor, fight.mjs:hpNow, fight.mjs:tokenOf, fight.mjs:lightOn, fight.mjs:enemiesOf, fight.mjs:sense, fight.mjs:healthWords, fight.mjs:isDeadNow, fight.mjs:wordsFor, fight.mjs:gearOf, fight.mjs:actionsOf, fight.mjs:localize, fight.mjs:alliesOf, fight.mjs:buildPacket, fight.mjs:noteWhatTheySense, fight.mjs:perceived, fight.mjs:cantOpen, fight.mjs:packetExtras, fight.mjs:isDown, fight.mjs:conditionWords, fight.mjs:conditionsOn]
+functions: [fight.mjs:beingFlags, fight.mjs:beingWord, fight.mjs:runnable, fight.mjs:onParty, fight.mjs:kindOf, fight.mjs:nameFor, fight.mjs:hpNow, fight.mjs:tokenOf, fight.mjs:lightOn, fight.mjs:enemiesOf, fight.mjs:sense, fight.mjs:healthWords, fight.mjs:isDeadNow, fight.mjs:wordsFor, fight.mjs:gearOf, fight.mjs:actionsOf, fight.mjs:localize, fight.mjs:alliesOf, fight.mjs:buildPacket, fight.mjs:noteWhatTheySense, fight.mjs:perceived, fight.mjs:cantOpen, fight.mjs:packetExtras, fight.mjs:isDown, fight.mjs:conditionWords, fight.mjs:conditionsOn]
 dependsOn: [distances]
 since: 0.10.0
 ---
@@ -16,6 +16,7 @@ What a monster perceives: the packet built at the start of its turn, senses, lig
 - **Schema 9 (0.33.2):** a Strike in `you.strikes` made with a weapon it carries but doesn't hold (worn or stowed) is marked `"sheathed": true`, and one with a one-plus-hands weapon (a bow) `"bothHands": true`; a `draw` step comes first (`docs/features/interact-delay.md`).
 - **Schema 14 (0.46.0):** `you.sustaining` (the spells it sustains: id, name, the round cast, whether Sustained this round, an area's aim), a spell's `heals` and `missiles` words, an ability's `blast` (elements, damage types, ranges) and `effect` words, and `undead` on an ally (so Heal isn't planned at one). Nothing about a foe's numbers is added: the slot weighing reads only the foe's health word.
 - **Thin walls in the ground (0.46.1, schema 15, prompt 42; the 2026-11-25 playtest).** A wall drawn between two open squares blocks a Stride but showed nowhere in the ground's rows, so on a Foundry map with walls 4 of 6 refusals in one fight were "no way to" a square behind one. `ground.walls` now lists every movement-blocking wall in the ground's window as `[ax, ay, bx, by]` in square-corner units (a one-way wall adds "oneway"; a locked or secret door is just a wall, so a secret one isn't given away), with a line in the key, and only when there are any.
+- **What a creature is, when it can be seen (0.47.0, packet schema 16).** An ally's or a perceived creature's entry carries `being`: "undead" or "construct" (none: living), from PF2e's `modeOfBeing`. It is plain to see, and it decides what Heal and Harm do to them (P-2). A hidden creature shows only its square, as before, and counts as living in the plan check. A dead creature is no longer marked `alliesLost` (u-182, the 2026-11-25 retest: a Point Out at a corpse was offered).
 
 ## How it works
 - **A party member's own profile (0.45.0, schema 13):** a party member Angel plays whose page in the Party section has lines gets `mind` from that page (`profile: "party"`, `pronoun`, then each line it has in the page's order, each through the name gate, a learned line ending "(seen in N fights)") in place of the layered profile (`docs/features/party-minds.md`).

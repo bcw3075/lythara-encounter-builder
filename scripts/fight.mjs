@@ -16,7 +16,7 @@ import {NEVER_GIVES_UP, applyHeard, canOrder, cleanOrder, fallBackWords, fallOut
 import { namer } from "./history.mjs";
 import { RUNGS, STORE_MAX, GM_LINE_MAX, evict, forPacket, gmLine, lineKey, render, rethinkFor, rungOf, severity, sideWords, spellWords, witnessLines } from "./memory.mjs";
 import { readMap, partyLevels, partySize, suggestedLevel } from "./builder.mjs";
-import { aimArea, aimWords, alliesCaught, burstReachable, caughtBy, shapeOf, squaresNear } from "./area.mjs";
+import { aimArea, aimWords, placeable, alliesCaught, burstReachable, caughtBy, shapeOf, squaresNear } from "./area.mjs";
 import { AC_ROWS, TRADITION_SKILL, harmGroup, castDetail, castWords, counterCopy, counterLine, counteracts, recognizeDc, recognizeDegree, recognizeWords, CHOICES, GUILT, KNOWN, MONSTER_REACTIONS, answerWords, barrierStats, barrierEdge, barrierLabel, barrierCardWords, slabHit, slabWords, READY_WAIT_MS, cleanTrigger, acAdds, canReact, castRank, coverInDc, choiceWords, earthLess, glimpseResistance, guiltLines, guiltWords, harmWords, fullDamage, missWords, notAskedWords, shieldGrantsBlock, spentRows, untilNextTurnEnds, readCard, cardTrigger, degreeAgainst, equipTrigger, finished, fits, gateWords, moveTrigger, proneOffTrigger, stepsAnswerWords, reactionStrike, reactionsOf, routeGates, squaresAlong, untilFor , resistFor, rerollLower, sacrificeLess, reboundBack, blazingBack, bloodDice, bloodBy, calcifyBy, curseBy, curseWords, flatOf, rxDetail, rxWords, cantripRank, volcanicDice, pyrefowlDice, dropsFrom, diesFrom, martyrShare, breathDice, prophetBy, prophetRight, counteringElements, skepticRank, knowOneself, schadenBy, rx4Detail, rx4Words, TRACK, trackWords, zoneGates, rx5Words, comfortPlan } from "./react.mjs";
 import { MAX_TRIES, choiceOut, cleanChoice, cleanMeta, cleanPlan, eventOut, hello, isChoice, listening, live, nextSeq, pickEvent, stale, stallOf, text, waitSeconds } from "./brain.mjs";
 import { esc } from "./journal.mjs";
@@ -239,11 +239,48 @@ function effectsOfAbility(actor, item, slug) {
   const self = item.system.selfEffect;
   if (self?.uuid) return { selfEffect: self.uuid, selfEffectName: self.name ?? null, selfOn: hasEffect(actor, self.uuid) };
   const text = String(item.system.description?.value ?? ""), links = [...text.matchAll(/@UUID\[(Compendium\.pf2e\.[\w-]*effects\.Item\.\w+)\]\{(Effect:[^}]*)\}/g)];
+  /* 0.47.0 (P-1, Channeled Protection: "You and all adjacent allies gain..."): one effect for itself and its friends nearby; adjacent is within 5 feet */
+  const group = String(text).replace(/<[^>]+>/g, " ").match(/\byou and (?:all |your )?(adjacent )?allies(?: within (\d+) feet)?\b/i);
+  if (links.length === 1 && group && (group[1] || group[2]) && !/saving throw|\bbasic\b/i.test(text)) { out.groupEffect = links[0][1]; out.groupEffectName = links[0][2]; out.groupRange = group[2] ? Number(group[2]) : 5; out.groupOn = hasEffect(actor, links[0][1]); return out; }   /* review 13: not one that asks a save; review 10: whether it is on already */
   if (links.length === 1 && /\b(?:another|an? ally|allies|ally)\b/i.test(text) && !/saving throw|\bbasic\b|\bReflex\b|\bFortitude\b|\bWill\b/.test(text)) {
     const r = text.match(/within (\d+) feet/i); out.allyEffect = links[0][1]; out.allyEffectName = links[0][2]; out.allyEffectRange = r ? Number(r[1]) : null; if (/\banother\b/i.test(text)) out.allyEffectOthers = true;   /* review 7: "another kobold" isn't itself */
   }
   return out;
 }
+/** Put an effect on a creature, once (0.46.0 for an ability's own effect; shared with spells in 0.47.0): "on" (put on, or already there from PF2e's own
+    card), "missing" (its source can't be found) or "choice" (it asks a choice nobody here can answer). self: the creature uses it on itself, so a
+    ChoiceSet with one answer it can take is taken. spell: { tok, item, rank } for an effect from a spell: its level is the cast rank (Heroism's bonus,
+    Bless's aura size read it) and its origin the caster, as PF2e's own drop sets them (an aura such as Bless's is spread only from its caster's copy). */
+async function putEffect(on, step, { self = false, spell = null } = {}) {
+  if (hasEffect(on, step.effect)) return "on";
+  const src = await fromUuid(step.effect); if (!src) return "missing";
+  const data = src.toObject(); delete data._id; data._stats = { ...(data._stats ?? {}), compendiumSource: step.effect };
+  if (spell) { if (data.system?.level) data.system.level.value = spell.rank ?? data.system.level.value;
+    data.system.context = { origin: { actor: spell.tok.actor.uuid, token: spell.tok.uuid, item: spell.item?.uuid ?? null, spellcasting: null, rollOptions: [] }, target: { actor: on.uuid, token: on.getActiveTokens?.(false, true)?.[0]?.uuid ?? null }, roll: null }; }
+  /* live test: an effect that asks a choice (Thermal Nimbus: cold or fire) opens its dialog on the runner's page, where nobody can answer it */
+  /* 0.46.1 (self-run playtest: Kinetic Aura asks its radius, and without Aura Shaping only 10 feet passes): a choice with only one answer this creature
+     can take is taken; anything that leaves more than one is still the GM's */
+  /* review 4: only on itself (on a friend the choice can rest on the user's feats), never past a predicate about another document or one that throws */
+  if (self) { const opts = new Set(on.getRollOptions?.() ?? []);
+    for (const r of data.system?.rules ?? []) { if (r.key !== "ChoiceSet" || r.selection != null || !Array.isArray(r.choices)) continue;
+      if (r.choices.some(c => /\b(origin|parent|item):/.test(JSON.stringify(c.predicate ?? [])))) continue;
+      let bad = false; const fit = r.choices.filter(c => { try { return !c.predicate || new game.pf2e.Predicate(c.predicate).test(opts); } catch { bad = true; return false; } });
+      if (!bad && fit.length === 1) r.selection = fit[0].value; } }
+  if ((data.system?.rules ?? []).some(r => r.key === "ChoiceSet" && r.selection == null)) return "choice";
+  /* review 8: entering a stance ends the one it was in (PF2e: one stance at a time) */
+  { const isStance = it => (it?.system?.traits?.value ?? []).includes("stance"), mine = on.items.find(i => (i.slug ?? game.pf2e.system.sluggify(i.name)) === String(step.item ?? "").replace(/-\d+$/, ""));
+    if (self && !spell && isStance(mine)) { const others = new Set(on.items.filter(i => isStance(i) && i.system.selfEffect?.uuid && i.system.selfEffect.uuid !== step.effect).map(i => i.system.selfEffect.uuid));
+      const old = on.itemTypes.effect.filter(e => others.has(e._stats?.compendiumSource ?? e.flags?.core?.sourceId ?? e.sourceId) || (/^stance:/i.test(e.name) && e.name !== src.name)).map(e => e.id); if (old.length) await watched(() => on.deleteEmbeddedDocuments("Item", old)); } }
+  const [eff] = await watched(() => on.createEmbeddedDocuments("Item", [data]));
+  /* 0.46.1 (self-run playtest: Channeler's Stance gave no healing bonus): a toggle the effect itself carries ("I'm in this stance") is a box a player
+     ticks on the sheet, and nobody ticks it for a creature the module plays, so it goes on with the effect; a toggle with a choice of answers stays */
+  for (const r of eff?.system?.rules ?? []) if (r.key === "RollOption" && r.toggleable && r.option && !(r.suboptions?.length) && !(r.predicate?.length) && !r.disabledIf && !String(r.option).includes("{"))   /* review 3: a toggle that depends on the situation stays the GM's */
+    await watched(() => on.toggleRollOption(r.domain ?? "all", r.option, eff.id, true)).catch(e => console.warn(`${ID} | toggle`, e));
+  return "on";
+}
+/** Does an effect spread itself as an aura from its bearer to its allies (Bless: PF2e's Aura rule that hands out the same effect)? Then only its caster
+    gets it (0.47.0): its allies get it from the aura, inside its radius, as long as they stay there. */
+async function spreadsItself(uuid) { const src = await fromUuid(uuid); return (src?.system?.rules ?? []).some(r => r.key === "Aura" && (r.effects ?? []).some(e => e.uuid === uuid)); }
 /** Run PF2e's Elemental Blast with the plan's action cost (0.46.0): the sheet's own choice (`flags.pf2e.rulesSelections.actionCost` on the action) is set for
     the roll and put back after, so the sheet stays as the player left it. */
 async function blastDo(actor, step, work) {
@@ -260,6 +297,7 @@ function abilitiesOf(actor) {
     ...(a.followUp ? { followUp: `${CHECK_WORD[a.followUp]} check, right after a Strike that lists ${a.effect} and hits` } : {}),
     ...(a.blast ? { blast: { elements: a.blast.configs.map(c => `${c.element} (${listWords(c.damageTypes)}, ${c.die}, ranged up to ${c.range} feet)`), reach: a.blast.reach, auraUp: a.blast.gate, how: "1 or 2 actions (\"actions\"), melee or ranged (\"melee\": true or false); the module rolls the attack and damage" } } : {}),
     ...(a.selfEffect ? { effect: `puts ${a.selfEffectName ?? "its effect"} on whoever uses it${a.selfOn ? ": already on, so using it again wastes the action" : ""}` } : {}),
+    ...(a.groupEffect ? { effect: `puts ${a.groupEffectName} on whoever uses it and every friend within ${a.groupRange} feet${a.groupRange === 5 ? " (adjacent)" : ""}; any requirement in its text is the thinker's to meet` } : {}),
     ...(a.allyEffect ? { effect: `puts ${a.allyEffectName} on the friend it targets${a.allyEffectOthers ? " (another creature, not itself)" : ""}${a.allyEffectRange ? ` (within ${a.allyEffectRange} feet)` : ""}` } : {}),
     text: a.item ? plainText(a.item.system.description?.value, localize) : "" }));
 }
@@ -304,7 +342,8 @@ async function spellBook(actor) {
 /** One spell as the plans see it (its ranks are added by the caller): actions, range, targets, area, attack or save, damage, variants, healing. */
 function spellData(e, base, id, slug) {
   const act = spellActions(base.system.time?.value), rng = spellRange(base.system.range?.value), save = base.system.defense?.save, text = plainText(base.system.description?.value, localize);
-  return { id, slug, heal: healVariants(base), name: base.name, entryId: e.id, spellId: base.id, ranks: [], minActions: act.min, maxActions: act.max, time: base.system.time?.value ?? "",
+  const vital = vitalOf(base);
+  return { id, slug, heal: vital && Object.keys(vital.heal).length ? vital.heal : null, ...(vital ? { vital } : {}), ...(spellEffectOf(base) ? { effect: spellEffectOf(base) } : {}), name: base.name, entryId: e.id, spellId: base.id, ranks: [], minActions: act.min, maxActions: act.max, time: base.system.time?.value ?? "",
     range: rng.range, touch: rng.touch, rangeText: base.system.range?.value ?? "", targets: spellTargets(base.system.target?.value), targetText: base.system.target?.value ?? "",
     area: base.system.area?.type ? { type: base.system.area.type, size: base.system.area.value } : null, attack: !!base.isAttack, save: save?.statistic ? { stat: save.statistic, basic: !!save.basic } : null,
     damaging: Object.keys(base.system.damage ?? {}).length > 0, damage: Object.values(base.system.damage ?? {}).map(d => `${d.formula} ${d.type ?? ""}`.trim()).join(" + "),
@@ -373,25 +412,53 @@ async function runSustain(combat, id, i, step, tok) {
   await saveTurns(combat, { [`sustain.${tok.id}.${step.key}.sustainedRound`]: combat.round, [`requests.${id}.log.${i}.posted`]: { message: message?.id ?? null } });
   return "next";
 }
-/** A healing spell's single-target casts by actions (0.46.0): { 1: { overlay, range, touch }, 2: ... } from PF2e's own variants (Heal: 1 action touch,
-    2 actions 30 feet with the "vs. Living" overlay; its 3-action emanation is left to the card), or the spell itself for one with no variants (Soothe).
-    Null for a spell that doesn't heal. */
-function healVariants(base) {
-  const traits = base.system.traits?.value ?? [];
-  if (!traits.includes("healing") || !Object.keys(base.system.damage ?? {}).length) return null;
-  const kinds = sp => Object.values(sp?.system?.damage ?? {}).flatMap(d => [...(d?.kinds ?? [])]);
-  const one = (sp, overlay) => { const r = spellRange(sp.system.range?.value), area = sp.system.area?.type ?? null, n = spellTargets(sp.system.target?.value);
-    return area || n !== 1 || /undead/i.test(sp.system.target?.value ?? "") && !/living|willing/i.test(sp.system.target?.value ?? "") ? null : { overlay, range: r.range, touch: r.touch }; };
-  const out = {}, overlays = [...(base.overlays?.contents ?? [])];
-  if (!overlays.length) { const a = spellActions(base.system.time?.value); if (a.min != null && a.min === a.max) { const v = one(base, null); if (v) out[a.min] = v; } return Object.keys(out).length ? out : null; }
+/** Heal, Harm and their kin by the actions spent (0.46.0 for the healing at one friend; 0.47.0, P-2, everything else): PF2e's own variants, each read for
+    its actions, range, area, whether it heals or deals damage, and its save. { mends, hurts, heal: { n: { overlay, range, touch } }, hurt: { n: ... },
+    area: { n: { overlay, area } } }: mends is who its healing is for ("living", or "undead" for a void spell), hurts who its damage is for ("undead" for
+    a vitality spell, "living" for a void one, null for one that only heals: Soothe). Rules, PF2e's own spell texts (Player Core): Heal restores Hit
+    Points to a willing living creature and deals vitality damage to an undead one with a basic Fortitude save; Harm the other way round; 1 action
+    touch, 2 actions 30 feet with +8 healing per rank, 3 actions a 30-foot emanation that "targets all living and undead creatures" in it. Null for a
+    spell that never heals. */
+function vitalOf(base) {
+  const traits = base.system.traits?.value ?? [], kinds = sp => Object.values(sp?.system?.damage ?? {}).flatMap(d => [...(d?.kinds ?? [])]);
+  const read = (sp, overlay) => { const a = spellActions(sp.system.time?.value), r = spellRange(sp.system.range?.value), k = kinds(sp), save = sp.system.defense?.save;
+    return { overlay, n: a.min != null && a.min === a.max ? a.min : null, range: r.range, touch: r.touch, area: sp.system.area?.type ? { type: sp.system.area.type, size: sp.system.area.value } : null,
+      targets: spellTargets(sp.system.target?.value), heals: k.includes("healing"), harms: k.includes("damage"), save: save?.statistic ? { stat: save.statistic, basic: !!save.basic } : null }; };
+  const overlays = [...(base.overlays?.contents ?? [])], vs = [];
+  if (!overlays.length) vs.push(read(base, null));
+  else for (const o of overlays) { let v = null; try { v = base.loadVariant?.({ overlayIds: [o._id] }); } catch (e) { console.warn(`${ID} | vital variant`, e); } if (v) vs.push(read(v, o._id)); }
+  if (!vs.some(v => v.heals)) return null;
+  const mends = traits.includes("void") ? "undead" : "living", hurts = traits.includes("vitality") ? "undead" : traits.includes("void") ? "living" : null;
+  const out = { mends, hurts, heal: {}, hurt: {}, area: {} }, aim = v => ({ overlay: v.overlay, range: v.range, touch: v.touch, ...(v.save ? { save: v.save } : {}) });   /* review 1: the save is the variant's (Lay on Hands' base item has none) */
   for (const n of [1, 2, 3]) {
-    const fits = overlays.filter(o => String(o.system?.time?.value ?? "") === String(n) && !/undead/i.test(o.name ?? ""));
-    const pick = fits.find(o => kinds({ system: o.system }).includes("healing")) ?? fits[0]; if (!pick) continue;
-    let v = null; try { v = base.loadVariant?.({ overlayIds: [pick._id] }); } catch (e) { console.warn(`${ID} | heal variant`, e); }
-    if (!v || !kinds(v).includes("healing")) continue;
-    const got = one(v, pick._id); if (got) out[n] = got;
+    const at = vs.filter(v => v.n === n), one = at.filter(v => !v.area && v.targets === 1 && (v.range != null || v.touch));
+    const mend = one.filter(v => v.heals).sort((a, b) => !!a.save - !!b.save)[0];   /* a pure healing variant first (Heal's 2-action "vs. Living") */
+    const hurt = hurts ? one.filter(v => v.harms && v.save?.basic).sort((a, b) => a.heals - b.heals)[0] : null;   /* a pure damage variant first ("vs. Undead") */
+    const area = at.find(v => v.area && placeable(v.area) && v.heals);
+    if (mend) out.heal[n] = aim(mend); if (hurt) out.hurt[n] = aim(hurt); if (area && (hurts ? area.save?.basic : true)) out.area[n] = { overlay: area.overlay, area: area.area, ...(area.save ? { save: area.save } : {}) };
   }
-  return Object.keys(out).length ? out : null;
+  /* a spell with no variants that takes one count of actions (Soothe, Lay on Hands' two overlays share its 1 action) */
+  if (!Object.keys(out.heal).length && !Object.keys(out.hurt).length && !Object.keys(out.area).length) return null;
+  return out;
+}
+/** The one spell effect a spell's text links (0.47.0, P-1: Bless, Haste, Shield, Heroism, Courageous Anthem, Lay on Hands): { uuid, name }, or null when
+    it links none or more than one. Other links (a condition, a feat, another spell, Shield's immunity effect, which is "Effect:") don't count. */
+function spellEffectOf(base) {
+  const links = [...String(base.system.description?.value ?? "").matchAll(/@UUID\[(Compendium\.pf2e\.spell-effects\.Item\.\w+)\]\{(Spell Effect:[^}]*)\}/g)];
+  const uniq = [...new Map(links.map(m => [m[1], m[2]])).entries()];
+  return uniq.length === 1 ? { uuid: uniq[0][0], name: uniq[0][1] } : null;
+}
+/** Heal, Harm and their kin in the packet's words (0.47.0, P-2): what each count of actions does, at whom, and that the module runs it. */
+function vitalWords(s) {
+  const v = s.vital, kind = k => k === "undead" ? "undead" : "living", out = [];
+  for (const n of [1, 2, 3]) {
+    const h = v.heal[n], d = v.hurt[n], a = v.area[n], where = x => x.touch ? "by touch" : `within ${x.range} feet`, parts = [];
+    if (h) parts.push(`heals one ${kind(v.mends)} friend (or itself) ${where(h)}`);
+    if (d) parts.push(`${h ? "or deals" : "deals"} its damage to one ${kind(v.hurts)} foe ${where(d)} (basic ${d.save ? `${d.save.stat[0].toUpperCase()}${d.save.stat.slice(1)}` : "Fortitude"} save)`);
+    if (a) parts.push(`a ${a.area.size}-foot ${a.area.type} round itself: heals every ${kind(v.mends)} creature in it, friend or foe, itself included (a ${kind(v.mends)} foe only with "deliberate": it heals them too)${v.hurts ? `, and deals its damage to every ${kind(v.hurts)} creature in it, friend or foe (a ${kind(v.hurts)} friend only with "deliberate")` : ""}`);
+    if (parts.length) out.push(`${n} action${n === 1 ? "" : "s"}: ${parts.join(" ")}`);
+  }
+  return `${out.join("; ")}. The module casts it, rolls the healing or the damage at the rank (see its text for how much), and applies it, so the turn goes on. Every cast spends a slot that could heal later: weigh it (see "Healing or harming" in the instructions).`;
 }
 /** For the packet: each spell in plain words, with the ranks it can be cast at and what each has left. */
 function spellsOf(book) {
@@ -401,8 +468,8 @@ function spellsOf(book) {
     ...(s.area && s.lasting ? { lasting: "its area stays on the map after the turn" } : {}),
     ...(s.attack ? { defense: "AC", attackMod: s.attackMod } : s.save ? { defense: `${s.save.basic ? "basic " : ""}${s.save.stat[0].toUpperCase()}${s.save.stat.slice(1)} save`, dc: s.dc } : {}),
     ...(s.damage ? { baseDamage: s.damage } : {}),
-    ...(s.heal ? { heals: `${Object.entries(s.heal).map(([n, v]) => `${n} action${n === "1" ? "" : "s"}: one friend ${v.touch ? "by touch" : `within ${v.range} feet`}`).join("; ")}: the module rolls the healing at the rank and applies it${s.variants ? "; any other number of actions the GM applies from its card" : ""}` }
-      : s.variants ? { variants: "what it does depends on the actions spent: the GM applies it from its card" } : {}),
+    ...(s.vital ? { vital: vitalWords(s) } : s.variants ? { variants: "what it does depends on the actions spent: the GM applies it from its card" } : {}),
+    ...(s.effect && !s.damaging && !s.save && !s.attack ? { effect: `puts ${s.effect.name} on ${s.area ? "itself and every friend its area catches" : s.targets ? "the friend it targets (or itself)" : "itself"}: the module does it, so the turn goes on` } : {}),
     ...(MISSILES[s.slug] ? { missiles: "always hits: 1 missile per action (and 1 more per action for every 2 ranks above 1st), all at the one target; the module rolls them together and applies the damage" } : {}),
     traits: s.traits, text: cap(s.text, 900) }));
 }
@@ -505,8 +572,8 @@ async function buildPacket(combat, tok, turn = {}) {
   /* flanking (0.44.0, F-10): the squares that flank a foe with an ally, how dangerous each is, and its own back; by its mind */
   const flank = await flankFor(combat, tok, { you, others, allies, labels, minded, discipline }).catch(e => { console.warn(`${ID} | flank`, e); return null; });
   const packet = packetOf({ you, flank: flank?.block ?? null, mind: minded.mind, band: banded.band, bandNow: banded.bandNow, orders, speech, command, notebook, round: combat.round, memory, note: turn.note ?? null, done: turn.done ?? [], barriers, ground: groundAround(model, square, GROUND_RADIUS, undefined, takeCoverSquares(scene), water, soil && !glides ? (x, y) => !soil(x, y) && !model.blocked[model.idx(x, y)] && !water(x, y) : null),
-    allies: allies.map(x => ({ label: labels[x.id], name: nameFor(x), square: squareOf(x, scene), ...(heightUp(x) ? { height: heightUp(x) } : {}), ...(isBelow(x) ? { below: true } : {}), healthWord: wordsFor(x.actor), conditions: visibleConditions(conditionsOn(x.actor)), ...(stoodDown(x) ? { yielded: true } : {}) })),
-    others: others.map(o => ({ id: o.id, state: o.state, label: labels[o.id], square: o.square, ...(o.pointed ? { pointed: true } : {}), ...(lost.has(o.id) ? { alliesLost: true } : {}), height: o.pointed ? o.height ?? 0 : heightUp(o.token), offGrid: offGrid(o.token, scene), size: o.token.actor.size, distance: o.distance, gear: gearOf(o.token.actor), conditions: visibleConditions(conditionsOn(o.token.actor)), healthWord: wordsFor(o.token.actor), cover: cover?.getAutoCoverState?.(tok.object, o.token.object) ?? "none", ...(stoodDown(o.token) ? { yielded: true } : {}) })) });
+    allies: allies.map(x => ({ label: labels[x.id], name: nameFor(x), square: squareOf(x, scene), ...(heightUp(x) ? { height: heightUp(x) } : {}), ...(isBelow(x) ? { below: true } : {}), healthWord: wordsFor(x.actor), ...beingWord(x.actor), conditions: visibleConditions(conditionsOn(x.actor)), ...(stoodDown(x) ? { yielded: true } : {}) })),
+    others: others.map(o => ({ id: o.id, state: o.state, label: labels[o.id], square: o.square, ...(o.pointed ? { pointed: true } : {}), ...(lost.has(o.id) && !isDeadNow(o.token.actor) ? { alliesLost: true } : {}), height: o.pointed ? o.height ?? 0 : heightUp(o.token), offGrid: offGrid(o.token, scene), size: o.token.actor.size, distance: o.distance, gear: gearOf(o.token.actor), conditions: visibleConditions(conditionsOn(o.token.actor)), healthWord: wordsFor(o.token.actor), ...beingWord(o.token.actor), cover: cover?.getAutoCoverState?.(tok.object, o.token.object) ?? "none", ...(stoodDown(o.token) ? { yielded: true } : {}) })) });
   return { packet, labels: labelsOf(others.map(o => ({ id: o.id, state: o.state, label: labels[o.id] }))), fresh, others, mindHeld: [...minded.held.map(h => h.key), ...banded.held.map(k => `band.${k}`)], flank: flank?.open ? { open: flank.open, has: flank.flanking ?? 0, use: flank.use, mind: flank.mind, discipline: flank.discipline } : null };
 }
 /** The flanking part of a packet (0.44.0, F-10; flank.mjs does the working out): only creatures this monster knows of, each with what shows of it
@@ -827,7 +894,7 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
   const strikes = await Promise.all(strikesWithIds(actor).map(async ({ id, strike: a }) => { const m = await ammoOf(actor, a).catch(() => null), w = weaponOf(actor, a); return { id, name: a.label, weapon: holding.find(h => h.itemId === w?.id)?.id ?? null, dropped: droppedWeapon(actor, a), ...(sheathedWeapon(actor, a) ? { sheathed: true, weaponItem: w.id, hands: handsFor(w) } : {}), ...(w?.system?.usage?.value === "held-in-one-plus-hands" ? { bothToUse: true } : {}), reach: actor.getReach({ action: "attack", weapon: a.item }), ranged: !!a.item?.isRanged, maxRange: a.item?.range?.max ?? null, effects: [...(a.item?.system?.attackEffects?.value ?? [])], ...ammoFields(m, shotsFor(combat, tok, id, m)) }; }));
   /* only what it perceived when asked, and still does: a plan can't name anything else */
   const now = new Map(sense(combat, tok, turns(combat).memory?.[tok.id] ?? {}).map(o => [o.id, o])), targets = {};
-  for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && canTarget(o.state)) targets[label] = { name: label, square: o.square, ...(o.state === "hidden" ? {} : placeOf(o.token, scene)), size: sizeOf(o.token), ...heightOf(o.token), ...(o.pointed ? { elev: o.height ?? 0 } : {}), flat: flatDC(o.state),   /* a pointed-out creature: the height it was pointed out at, never where it is now (0.30.0 review 3) */ cat: o.token.actor?.size ?? null, held: !!turns(combat).grips?.[tok.id]?.[tokenId] && isHeld(o.token.actor) }; }
+  for (const [label, tokenId] of Object.entries(req.labels ?? {})) { const o = now.get(tokenId); if (o && canTarget(o.state)) targets[label] = { name: label, square: o.square, ...(o.state === "hidden" ? {} : placeOf(o.token, scene)), size: sizeOf(o.token), ...heightOf(o.token), ...(o.pointed ? { elev: o.height ?? 0 } : {}), flat: flatDC(o.state),   /* a pointed-out creature: the height it was pointed out at, never where it is now (0.30.0 review 3) */ cat: o.token.actor?.size ?? null, ...beingFlags(o.token.actor), ...(o.token.actor && isDeadNow(o.token.actor) ? { dead: true } : {}),   /* 0.47.0: what Heal or Harm would do to them (review 4: the packet names it even for a hidden one, so the check does too; it saw them); review 5: a destroyed foe */ held: !!turns(combat).grips?.[tok.id]?.[tokenId] && isHeld(o.token.actor) }; }
   /* earth barriers standing on this map (0.35.0): a Strike may be aimed at one, counted to the square on its far side from its caster (the side
      a monster comes from); a blinded monster sees none */
   const slabs = {}; if (!actor.hasCondition?.("blinded")) for (const b of barriersOf(combat, scene.id)) slabs[b.label] = { name: "the earth barrier", square: b.squares[1], pos: b.squares[1], span: 1, size: 1, elev: 0, depth: 1, flat: 0, slab: true };   /* only a Strike may name one (review 6) */
@@ -864,10 +931,18 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
     sustaining: sustainingOf(combat, tok),   /* 0.46.0: the spells it is sustaining */
     ...(spells ? { spells: await spellBook(actor), saveRows: targetHelperOn(), reach: actor.getReach?.({ action: "interact" }) ?? 5, areaOf: areaCheck(combat, tok, req, now) } : {}) };   /* touch: the creature's own reach, not a weapon's */
 }
+/** What a creature is to Heal and Harm (0.46.0, moved here in 0.47.0): { undead: true }, { notLiving: true } for a construct that isn't living, or nothing
+    for a living one. PF2e's own words for it are the actor's `modeOfBeing` ("living", "undead", "construct"); the traits are the fallback. */
+const beingWord = actor => { const b = beingFlags(actor); return b.undead ? { being: "undead" } : b.notLiving ? { being: "construct" } : {}; };   /* the packet's word: plain to see, and what Heal or Harm does to them */
+export function beingFlags(actor) {
+  if (!actor) return {};
+  const mode = actor.modeOfBeing ?? (actor.traits?.has?.("undead") ? "undead" : actor.traits?.has?.("construct") && !actor.traits?.has?.("living") ? "construct" : "living");
+  return mode === "undead" ? { undead: true } : mode === "living" ? {} : { notLiving: true };
+}
 /** Its allies the GM hasn't hidden, and itself, by label, for a spell aimed at a friend. */
 function alliesByLabel(combat, tok) {
   const labels = turns(combat).labels ?? {}, scene = sceneOf(combat), out = {};
-  for (const t of [tok, ...alliesOf(scene, tok).filter(a => !a.hidden)]) { const l = labels[t.id]; if (l) out[l] = { name: l, square: squareOf(t, scene), ...placeOf(t, scene), size: sizeOf(t), ...heightOf(t), flat: 0, ally: true, ...(t === tok ? { self: true } : {}), ...(t.actor?.traits?.has?.("undead") ? { undead: true } : {}), ...(t.actor && !t.actor.traits?.has?.("undead") && (t.actor.traits?.has?.("construct") && !t.actor.traits?.has?.("living")) ? { notLiving: true } : {}), ...(t.actor && isDeadNow(t.actor) ? { dead: true } : {}) }; }   /* review 6: Heal is for the living, and raises no dead   /* undead (0.46.0): healing would hurt them */
+  for (const t of [tok, ...alliesOf(scene, tok).filter(a => !a.hidden)]) { const l = labels[t.id]; if (l) out[l] = { name: l, square: squareOf(t, scene), ...placeOf(t, scene), size: sizeOf(t), ...heightOf(t), flat: 0, ally: true, ...(t === tok ? { self: true } : {}), ...beingFlags(t.actor), ...(t.actor && isDeadNow(t.actor) ? { dead: true } : {}) }; }   /* review 6: Heal is for the living, and raises no dead   /* undead (0.46.0): healing would hurt them */
   return out;
 }
 /** For a Delay: for each creature the monster could name (what it perceived when asked, its allies and itself), whether its turn is still to come this
@@ -2041,30 +2116,16 @@ async function runAbility(combat, id, i, step, tok, target) {
         await save(combat, id, { log: { [i]: { posted: { message: message?.id ?? null } } }, ...(step.mode === "card" ? { note: joinNote(combat, id, `Apply ${step.itemName}${step.target ? ` to ${step.targetName ?? step.target}` : ""} from its card${step.target ? selectFirst(step.targetName ?? step.target) : ""}.`) } : {}) });
       } else if (now === "effect") {
         /* 0.46.0: the effect goes on (itself for a self-effect, the friend for one its text gives), once: PF2e's own card may already have put it on */
+        if (step.mode === "group") {   /* 0.47.0: itself and every friend within its range, each once */
+          await record({ effectStarted: true }); const scene = sceneOf(combat), labels = turns(combat).labels ?? {}, on = [];
+          const near = [tok, ...alliesOf(scene, tok).filter(a => a.actor && !a.hidden && !isDeadNow(a.actor) && feetBetween(tok, a, scene) <= (step.range ?? 5))];
+          for (const x of near) { const put = await putEffect(x.actor, step, { self: x === tok }); if (put === "on") on.push(x === tok ? "itself" : labels[x.id] ?? "a friend"); else await addNote(combat, id, `${step.effectName} ${put === "missing" ? "couldn't be found" : "asks a choice"}: put it on ${x.name} from ${step.itemName}'s card.`); }
+          await record({ effected: true, effectOn: on }); continue; }
         const on = step.mode === "effect" ? target?.actor : actor; if (!on) return "ask";
         await record({ effectStarted: true });
-        let made = hasEffect(on, step.effect);
-        if (!made) { const src = await fromUuid(step.effect); if (!src) { await addNote(combat, id, `I couldn't find ${step.effectName}: apply it from ${step.itemName}'s card.`); await record({ effected: true }); return "gm"; }
-          const data = src.toObject(); delete data._id; data._stats = { ...(data._stats ?? {}), compendiumSource: step.effect };
-          /* live test: an effect that asks a choice (Thermal Nimbus: cold or fire) opens its dialog on the runner's page, where nobody can answer it */
-          /* 0.46.1 (self-run playtest: Kinetic Aura asks its radius, and without Aura Shaping only 10 feet passes): a choice with only one answer this creature
-             can take is taken; anything that leaves more than one is still the GM's */
-          /* review 4: only on itself (on a friend the choice can rest on the user's feats), never past a predicate about another document or one that throws */
-          if (step.mode === "self") { const opts = new Set(on.getRollOptions?.() ?? []);
-            for (const r of data.system?.rules ?? []) { if (r.key !== "ChoiceSet" || r.selection != null || !Array.isArray(r.choices)) continue;
-              if (r.choices.some(c => /\b(origin|parent|item):/.test(JSON.stringify(c.predicate ?? [])))) continue;
-              let bad = false; const fit = r.choices.filter(c => { try { return !c.predicate || new game.pf2e.Predicate(c.predicate).test(opts); } catch { bad = true; return false; } });
-              if (!bad && fit.length === 1) r.selection = fit[0].value; } }
-          if ((data.system?.rules ?? []).some(r => r.key === "ChoiceSet" && r.selection == null)) { await addNote(combat, id, `${step.effectName} asks a choice: apply it to ${on.name} from ${step.itemName}'s card.`); await record({ effected: true }); return "gm"; }
-          /* review 8: entering a stance ends the one it was in (PF2e: one stance at a time) */
-          { const isStance = it => (it?.system?.traits?.value ?? []).includes("stance"), mine = on.items.find(i => (i.slug ?? game.pf2e.system.sluggify(i.name)) === String(step.item ?? "").replace(/-\d+$/, ""));
-            if (step.mode === "self" && isStance(mine)) { const others = new Set(on.items.filter(i => isStance(i) && i.system.selfEffect?.uuid && i.system.selfEffect.uuid !== step.effect).map(i => i.system.selfEffect.uuid));
-              const old = on.itemTypes.effect.filter(e => others.has(e._stats?.compendiumSource ?? e.flags?.core?.sourceId ?? e.sourceId) || (/^stance:/i.test(e.name) && e.name !== src.name)).map(e => e.id); if (old.length) await watched(() => on.deleteEmbeddedDocuments("Item", old)); } }
-          const [eff] = await watched(() => on.createEmbeddedDocuments("Item", [data])); made = true;
-          /* 0.46.1 (self-run playtest: Channeler's Stance gave no healing bonus): a toggle the effect itself carries ("I'm in this stance") is a box a player
-             ticks on the sheet, and nobody ticks it for a creature the module plays, so it goes on with the effect; a toggle with a choice of answers stays */
-          for (const r of eff?.system?.rules ?? []) if (r.key === "RollOption" && r.toggleable && r.option && !(r.suboptions?.length) && !(r.predicate?.length) && !r.disabledIf && !String(r.option).includes("{"))   /* review 3: a toggle that depends on the situation stays the GM's */
-            await watched(() => on.toggleRollOption(r.domain ?? "all", r.option, eff.id, true)).catch(e => console.warn(`${ID} | toggle`, e)); }
+        const put = await putEffect(on, step, { self: step.mode === "self" });
+        if (put === "missing") { await addNote(combat, id, `I couldn't find ${step.effectName}: apply it from ${step.itemName}'s card.`); await record({ effected: true }); return "gm"; }
+        if (put === "choice") { await addNote(combat, id, `${step.effectName} asks a choice: apply it to ${on.name} from ${step.itemName}'s card.`); await record({ effected: true }); return "gm"; }
         await record({ effected: true });
       } else if (now === "attack") {
         /* Elemental Blast (0.46.0): PF2e's own blast, as a Strike rolls (the multiple attack penalty, a real target); a 2-action blast is the sheet's own
@@ -2475,7 +2536,7 @@ function spellToRoll(spell, step) {
     const k = Object.keys(spell.system.damage ?? {})[0], f = missileFormula(spell.system.damage?.[k]?.formula, step.missiles); if (!f) return null;
     return spell.clone({ [`system.damage.${k}.formula`]: f, "system.location.heightenedLevel": step.rank });
   }
-  if (step.mode === "heal" && step.overlay) return spell.loadVariant?.({ castRank: step.rank, overlayIds: [step.overlay] }) ?? null;
+  if (step.overlay) return spell.loadVariant?.({ castRank: step.rank, overlayIds: [step.overlay] }) ?? null;   /* a healing variant (0.46.0), Heal or Harm's damage by actions (0.47.0) */
   return (step.rank !== spell.rank ? spell.loadVariant?.({ castRank: step.rank }) : null) ?? spell;
 }
 /* what the GM still applies by hand (0.46.0, the live test: PF2e's Apply buttons act on the selected tokens, and all six monsters took the party's damage
@@ -2487,18 +2548,20 @@ async function runSpell(combat, id, i, step, tok, target) {
   const found = spellFor(tok.actor, step); if (!found) throw new Error(`${tok.name} has no ${step.itemName} now.`);
   const { entry, spell } = found;
   for (let guard = 0; guard < 12; guard++) {
-    const now = nextSpell(get(), { mode: step.mode, flat: step.flat ?? 0, apply: applySetting(), damaging: step.damaging, basic: step.basic });
+    const now = nextSpell(get(), { mode: step.mode, flat: step.flat ?? 0, apply: applySetting(), damaging: step.damaging, basic: step.basic, effect: !!step.effect, effectOnFail: !!step.effectOnFail });
     if (now === "next" || now === "gm" || now === "ask") return now;
     if (now === "save" && (get().spared ?? []).includes(target?.id)) { await record({ save: { degree: null, spared: true } }); return "next"; }   /* Skeptic's Defense (0.38.0): it ignores the spell */
     if (now === "save") { const s = await awaitSave(combat, id, i, step, tok, target); if (s === "saved") continue; return s; }
     if (!stepGate(now, id)) return "stopped";
-    if (now !== "apply" && !(await ensureScene(combat) && tok.object && (!target || target.object))) throw new Error(cantOpen());   /* applying needs no canvas */
+    if (now !== "apply" && now !== "effect" && !(await ensureScene(combat) && tok.object && (!target || target.object))) throw new Error(cantOpen());   /* applying needs no canvas */
     pending = { tokenId: tok.id, waiters: new Map(), all: true };
     try {
       if (now === "cast") {
         if (target) aimAt(target); else stopAiming();   /* Toolbelt puts a row on the card for each of the runner's targets */
         await record({ castStarted: true });
-        const message = await watched(async () => { const card = waitFor("spell-cast"); await entry.cast(spell, { rank: step.rank, consume: !step.sustain }); return card; });   /* a Sustain spends no slot (0.46.0) */
+        /* 0.47.0 (P-2): Heal or Harm at a foe is cast as its own variant ("vs. Undead", "vs. Living"), so its card shows that version and its save */
+        const cast = step.castOverlay && step.overlay ? spell.loadVariant?.({ castRank: step.rank, overlayIds: [step.overlay] }) ?? spell : spell;
+        const message = await watched(async () => { const card = waitFor("spell-cast"); await entry.cast(cast, { rank: step.rank, consume: !step.sustain }); return card; });   /* a Sustain spends no slot (0.46.0) */
         /* the record and the GM's instruction in one save, so a reload can't keep one without the other */
         await save(combat, id, { log: { [i]: { cast: { message: message.id } } }, ...(step.mode === "card" ? { note: joinNote(combat, id, cardWords(step)) } : {}) });
         await noteSustain(combat, tok, step, spell).catch(e => console.warn(`${ID} | sustain`, e));
@@ -2507,6 +2570,14 @@ async function runSpell(combat, id, i, step, tok, target) {
         const roll = await watched(async () => { const r = await new Roll("1d20").evaluate(); await r.toMessage({ speaker: ChatMessage.implementation.getSpeaker({ token: tok }), flavor: `Flat check, DC ${step.flat}` }); return r; });
         await record({ flat: { dc: step.flat, total: roll.total, ok: roll.total >= step.flat } });
         if (roll.total < step.flat) await addNote(combat, id, `${step.itemName} at ${step.target} failed its DC ${step.flat} flat check (${roll.total}): it doesn't affect them.`);
+      } else if (now === "effect") {
+        /* a buff (0.47.0, P-1, Rhea: "Apply them automatically"): its spell effect on its target, or on itself; Lay on Hands' on its friend or the undead
+           foe that failed its save. Once: PF2e's own card may already have put it on. */
+        const who = target ?? tok, on = who.actor; if (!on) return "ask";
+        await record({ effectStarted: true });
+        const put = await putEffect(on, step, { self: who === tok, spell: { tok, item: spell, rank: step.rank } });
+        if (put !== "on") { await addNote(combat, id, put === "missing" ? `I couldn't find ${step.effectName}: put it on ${who.name} from ${step.itemName}'s card.` : `${step.effectName} asks a choice: put it on ${who.name} from ${step.itemName}'s card.`); await record({ effected: true, effectOn: [] }); if (step.mode === "buff") return "gm"; continue; }
+        await record({ effected: true, effectOn: [who === tok ? "itself" : step.target ?? who.name] });
       } else if (now === "attack") {
         aimAt(target); await record({ started: true });
         const { message, roll } = await watched(async () => { const card = waitForAny(["spell-attack-roll", "attack-roll"]), roll = await spell.rollAttack(clickWith("showCheckDialogs"), (step.variant ?? 0) + 1); return { message: await card, roll }; });
@@ -2681,21 +2752,41 @@ async function runArea(combat, id, i, step, tok) {
     if (now === "next" || now === "gm" || now === "ask") return now;
     if (now === "save") { const s = await awaitAreaSaves(combat, id, i, step, tok); if (s === "saved") continue; return s; }
     if (!stepGate(now, id)) return "stopped";
-    if (now !== "apply" && now !== "remove" && !(await ensureScene(combat) && tok.object)) throw new Error(cantOpen());   /* applying and removing need no canvas */
+    if (!["apply", "remove", "mend", "effect"].includes(now) && !(await ensureScene(combat) && tok.object)) throw new Error(cantOpen());   /* applying and removing need no canvas */
     pending = { tokenId: tok.id, waiters: new Map(), all: true };
     try {
       if (now === "cast") {
         /* who it catches from where it stands now; GM-hidden creatures get no row on a public card, so the GM resolves them */
         const { ids } = coverage(scene, tok, step.area.aim, { square: squareOf(tok, scene), size: sizeOf(tok), elev: Number(tok.elevation) || 0 });
-        const spared = get().spared ?? [], rows = ids.filter(t => !scene.tokens.get(t)?.hidden && !spared.includes(t)), hidden = ids.filter(t => scene.tokens.get(t)?.hidden);   /* Skeptic's Defense (0.38.0): no row, no save, no damage */
+        const spared = get().spared ?? [];
+        /* 0.47.0 (P-2): Heal or Harm with 3 actions: only the kind it hurts saves (a row each); every creature of the kind it heals, friend or foe, itself too, is
+           healed with no save (review 3: the 3-action version "targets all living and undead creatures", with no willing clause; check refuses a foe it would heal
+           unless deliberate); a construct isn't touched; a GM-hidden one is the GM's.
+           (P-1) a buff's area: no rows; its effect goes on itself and the friends it catches. */
+        const kind = t => { const b = beingFlags(scene.tokens.get(t)?.actor); return b.undead ? "undead" : b.notLiving ? "construct" : "living"; };
+                const caught = step.vital && step.vital.mends && kind(tok.id) === step.vital.mends && !ids.includes(tok.id) ? [...ids, tok.id] : ids;
+        const live = t => scene.tokens.get(t)?.actor && !isDeadNow(scene.tokens.get(t).actor);
+        const rows = step.mode === "buff" ? [] : caught.filter(t => !scene.tokens.get(t)?.hidden && !spared.includes(t) && (!step.vital || (step.vital.hurts && kind(t) === step.vital.hurts && t !== tok.id)));
+        const mends = step.vital ? caught.filter(t => kind(t) === step.vital.mends && live(t) && !scene.tokens.get(t)?.hidden) : [], hidden = caught.filter(t => scene.tokens.get(t)?.hidden && (!step.vital || kind(t) === step.vital.hurts || (kind(t) === step.vital.mends && live(t))));   /* Skeptic's Defense (0.38.0): no row, no save, no damage */
         aimAll(rows.map(t => scene.tokens.get(t)));
-        await record({ castStarted: true, caught: ids, rows, ...(rows.length ? {} : { results: "" }) });
-        const message = await watched(async () => { const card = waitFor("spell-cast"); await entry.cast(spell, { rank: step.rank, consume: !step.sustain }); return card; });   /* a Sustain spends no slot (0.46.0) */
+        await record({ castStarted: true, caught: ids, rows, ...(mends.length ? { mends } : {}), ...(rows.length ? {} : { results: "" }) });
+        const cast = step.castOverlay && step.overlay ? spell.loadVariant?.({ castRank: step.rank, overlayIds: [step.overlay] }) ?? spell : spell;
+        const message = await watched(async () => { const card = waitFor("spell-cast"); await entry.cast(cast, { rank: step.rank, consume: !step.sustain }); return card; });   /* a Sustain spends no slot (0.46.0) */
         await noteSustain(combat, tok, step, spell).catch(e => console.warn(`${ID} | sustain`, e));
         const names = list => listWords(list.map(t => scene.tokens.get(t)?.name ?? "someone"));
         const words = [step.mode === "card" ? `Apply ${step.itemName} from its card${rows.length ? ` to ${names(rows)}` : ""}: its area is on the map.` : null,
           hidden.length ? `It also caught ${names(hidden)}, hidden from the players, so they have no row: ${spell.system.defense?.save?.statistic ? `roll ${hidden.length === 1 ? "that save" : "those saves"} and apply` : "apply"} ${step.itemName} to ${hidden.length === 1 ? "them" : "those"} yourself.` : null].filter(Boolean).join(" ");
         await save(combat, id, { log: { [i]: { cast: { message: message.id } } }, ...(words ? { note: joinNote(combat, id, words) } : {}) });
+      } else if (now === "effect") {
+        /* an area buff (0.47.0, P-1): its effect on itself and on each friend it caught, none of them hidden from it by the GM; an effect that spreads itself
+           as an aura (Bless) only on itself, since the aura hands it to the friends inside */
+        await record({ effectStarted: true });
+        const aura = await spreadsItself(step.effect), caught = (get().caught ?? []).filter(t => t !== tok.id && !scene.tokens.get(t)?.hidden && scene.tokens.get(t)?.actor?.isAllyOf?.(tok.actor) && !isDeadNow(scene.tokens.get(t).actor));   /* review 9: not a GM-hidden one */
+        const who = [tok, ...(aura ? [] : caught.map(t => scene.tokens.get(t)))].filter(x => x?.actor), labels = turns(combat).labels ?? {}, on = [];
+        for (const x of who) { const put = await putEffect(x.actor, step, { self: x === tok, spell: { tok, item: spell, rank: step.rank } });
+          if (put === "on") on.push(x === tok ? "itself" : labels[x.id] ?? "a friend"); else await addNote(combat, id, put === "missing" ? `I couldn't find ${step.effectName}: put it on ${x.name} from ${step.itemName}'s card.` : `${step.effectName} asks a choice: put it on ${x.name} from ${step.itemName}'s card.`); }
+        await record({ effected: true, effectOn: on });
+        if (aura) await addNote(combat, id, `${step.effectName} is on ${tok.name}: its aura gives it to ${pro("{their}", P(tok, combat))} allies inside it.`);
       } else if (now === "place") {
         const made = await watched(() => placeArea(combat, id, i, step, tok, spell, game.messages.get(get().cast.message)));
         await record({ placed: { region: made.id } });
@@ -2703,12 +2794,22 @@ async function runArea(combat, id, i, step, tok) {
       } else if (now === "damage") {
         const hurt = areaHurt(get()); aimAll(Object.keys(hurt).map(t => scene.tokens.get(t)));
         await record({ damageStarted: true });
-        const message = await watched(async () => { const card = waitFor("damage-roll"); const v = (step.rank !== spell.rank ? spell.loadVariant?.({ castRank: step.rank }) : null) ?? spell; await v.rollDamage(clickWith("showDamageDialogs")); return card; });
+        const message = await watched(async () => { const card = waitFor("damage-roll"); const v = spellToRoll(spell, step) ?? spell; await v.rollDamage(clickWith("showDamageDialogs")); return card; });   /* at its rank, and Heal or Harm's 3-action variant (0.47.0) */
         /* with automatic damage off the GM applies it: say each creature's share, since the damage card isn't tied to the saves */
-        const off = applySetting() ? null : `Apply ${step.itemName}'s damage from its card: ${listWords(Object.entries(hurt).map(([t, m]) => `${scene.tokens.get(t)?.name ?? "someone"} ${m === 2 ? "double" : m === 0.5 ? "half" : m === 0.25 ? "a quarter" : "full"}`))}.`;
+        const mends = get().mends ?? [];
+        const off = applySetting() ? null : [Object.keys(hurt).length ? `Apply ${step.itemName}'s damage from its card: ${listWords(Object.entries(hurt).map(([t, m]) => `${scene.tokens.get(t)?.name ?? "someone"} ${m === 2 ? "double" : m === 0.5 ? "half" : m === 0.25 ? "a quarter" : "full"}`))}.` : null,
+          mends.length ? `Apply the same amount as healing to ${listWords(mends.map(t => scene.tokens.get(t)?.name ?? "someone"))}.` : null].filter(Boolean).join(" ");
         await save(combat, id, { log: { [i]: { damage: { message: message.id } } }, ...(off ? { note: joinNote(combat, id, off) } : {}) });
         if (applySetting()) await markApplied(message);
-        else { const hb = await harmByHand(combat, id, i, tok, Object.entries(hurt).map(([x, m]) => ({ target: scene.tokens.get(x), hit: Math.floor((message.rolls?.[0]?.total ?? 0) * m), types: typesOf(message.rolls?.[0]), attack: false, strike: false })).filter(h => h.target)); if (hb === "manual") return "next"; if (hb === "held" || hb === "gone" || hb === "stopped") return hb; }
+        else if (Object.keys(hurt).length) { const hb = await harmByHand(combat, id, i, tok, Object.entries(hurt).map(([x, m]) => ({ target: scene.tokens.get(x), hit: Math.floor((message.rolls?.[0]?.total ?? 0) * m), types: typesOf(message.rolls?.[0]), attack: false, strike: false })).filter(h => h.target)); if (hb === "manual") return "next"; if (hb === "held" || hb === "gone" || hb === "stopped") return hb; }
+      } else if (now === "mend") {
+        /* Heal or Harm with 3 actions (0.47.0, P-2): the same roll as healing to each creature of the kind it heals (the roll already holds the caster's healing bonuses) */
+        const rec = get(), t = (rec.mends ?? []).find(x => !rec.mended?.[x]), target = scene.tokens.get(t), roll = game.messages.get(rec.damage.message)?.rolls?.[0]; if (!roll) return "ask";
+        if (!target?.actor) { await record({ mended: { [t]: true } }); continue; }
+        await saveTurns(combat, { [`requests.${id}.log.${i}.mending.${t}`]: true }); const was = hpNow(target), dying = !!target.actor.hasCondition?.("dying");
+        await watched(() => target.actor.applyDamage({ damage: -Math.max(0, Math.floor(roll.total)), token: target, item: spell }));
+        await saveTurns(combat, { [`requests.${id}.log.${i}.mended.${t}`]: true, [`requests.${id}.log.${i}.hp.${t}`]: [was, hpNow(target)] });
+        if (dying) await addNote(combat, id, `${target.name} was dying: check Dying and Wounded now that ${target.name} is back above 0 HP.`);
       } else if (now === "apply") {
         const rec = get(), hurt = areaHurt(rec), t = Object.keys(hurt).find(x => !rec.applied?.[x]), target = scene.tokens.get(t);
         const message = game.messages.get(rec.damage.message), roll = message?.rolls?.[0]; if (!roll) return "ask";
