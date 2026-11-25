@@ -49,6 +49,7 @@ Record every id below in the release's change record when this feature, or a fea
 - (ab-6) {live,shared:turn-loop} A stance (Channeler's Stance) and Inspiring Display on an ally: the effect lands on the right creature; the same stance again is refused.
 
 ## Traps
+- **Group effects (0.47.0 live test):** Channeled Protection's text gives a bonus "to your Reflex saving throws", so the group test refuses only a save the text asks for; its effect's ChoiceSet (+2 only from a level 13 user, `item:origin:level`) is taken from the user's level on itself and on each friend.
 - **PF2e's skill actions apply nothing.** `game.pf2e.actions.get("trip" | "grapple" | "shove" | "reposition").use({ actors, target: token.object, event })` rolls with no dialog by the Shift rule and returns `[{ outcome, message, roll }]`; its card only has notes. Without `multipleAttackPenalty` it adds no penalty. The critical Trip note's inline @Damage link would roll a second 1d6 if clicked.
 - **`game.pf2e.rollItemMacro(item.uuid)`** is PF2e's own Use for an action item, unlinked tokens included (`createUseActionMessage`: card, frequency use, self-effect button). Players see those cards as "Is using an ability." through Toolbelt's Anonymous.
 
