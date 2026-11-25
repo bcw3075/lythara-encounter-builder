@@ -236,8 +236,8 @@ function effectsOfAbility(actor, item, slug) {
   const self = item.system.selfEffect;
   if (self?.uuid) return { selfEffect: self.uuid, selfEffectName: self.name ?? null, selfOn: hasEffect(actor, self.uuid) };
   const text = String(item.system.description?.value ?? ""), links = [...text.matchAll(/@UUID\[(Compendium\.pf2e\.[\w-]*effects\.Item\.\w+)\]\{(Effect:[^}]*)\}/g)];
-  if (links.length === 1 && /\b(?:another|an? ally|allies|ally|kobold|creature)\b/i.test(text) && !/saving throw|\bbasic\b|\bReflex\b|\bFortitude\b|\bWill\b/.test(text)) {
-    const r = text.match(/within (\d+) feet/i); out.allyEffect = links[0][1]; out.allyEffectName = links[0][2]; out.allyEffectRange = r ? Number(r[1]) : null;
+  if (links.length === 1 && /\b(?:another|an? ally|allies|ally)\b/i.test(text) && !/saving throw|\bbasic\b|\bReflex\b|\bFortitude\b|\bWill\b/.test(text)) {
+    const r = text.match(/within (\d+) feet/i); out.allyEffect = links[0][1]; out.allyEffectName = links[0][2]; out.allyEffectRange = r ? Number(r[1]) : null; if (/\banother\b/i.test(text)) out.allyEffectOthers = true;   /* review 7: "another kobold" isn't itself */
   }
   return out;
 }
@@ -255,7 +255,7 @@ function abilitiesOf(actor) {
     ...(a.followUp ? { followUp: `${CHECK_WORD[a.followUp]} check, right after a Strike that lists ${a.effect} and hits` } : {}),
     ...(a.blast ? { blast: { elements: a.blast.configs.map(c => `${c.element} (${listWords(c.damageTypes)}, ${c.die}, ranged up to ${c.range} feet)`), reach: a.blast.reach, auraUp: a.blast.gate, how: "1 or 2 actions (\"actions\"), melee or ranged (\"melee\": true or false); the module rolls the attack and damage" } } : {}),
     ...(a.selfEffect ? { effect: `puts ${a.selfEffectName ?? "its effect"} on whoever uses it${a.selfOn ? ": already on, so using it again wastes the action" : ""}` } : {}),
-    ...(a.allyEffect ? { effect: `puts ${a.allyEffectName} on the friend it targets${a.allyEffectRange ? ` (within ${a.allyEffectRange} feet)` : ""}` } : {}),
+    ...(a.allyEffect ? { effect: `puts ${a.allyEffectName} on the friend it targets${a.allyEffectOthers ? " (another creature, not itself)" : ""}${a.allyEffectRange ? ` (within ${a.allyEffectRange} feet)` : ""}` } : {}),
     text: a.item ? plainText(a.item.system.description?.value, localize) : "" }));
 }
 /* ---------- spells ---------- */
@@ -327,6 +327,7 @@ async function noteSustain(combat, tok, step, spell) {
   if (!spell.system.duration?.sustained) return;
   const key = spell.id, was = sustainOf(combat, tok)[key];
   if (step.sustain && was) { await dropSustainAreas(combat, was); return saveTurns(combat, { [`sustain.${tok.id}.${key}`]: { ...was, sustainedRound: combat.round, regions: [] } }); }
+  if (was) await dropSustainAreas(combat, was).catch(e => console.warn(`${ID} | sustain`, e));   /* cast afresh while the old one is up: the old one's areas go (review 5) */
   return saveTurns(combat, { [`sustain.${tok.id}.${key}`]: { item: step.item, slug: spell.slug ?? null, name: step.itemName, entryId: step.entryId, spellId: step.spellId, rank: step.rank, round: combat.round, sustainedRound: combat.round, regions: [] } });
 }
 async function sustainArea(combat, tok, step, regionId) {
@@ -338,6 +339,16 @@ async function dropSustainAreas(combat, su) {
 }
 /** The end of a turn: each spell its creature cast in an earlier round and didn't Sustain this round ends. prev: Combat#previous. */
 async function endUnsustained(combat, prev) {
+  /* review 4: a caster that is down, dead or gone, or skipped for a whole round, never ends a turn of its own: its spells end here */
+  for (const [tid, list] of Object.entries(turns(combat).sustain ?? {})) {
+    const t = sceneOf(combat)?.tokens.get(tid), down = !t?.actor || (t.actor.hitPoints?.value ?? 1) <= 0 || isDeadNow(t.actor);
+    for (const [key, su] of Object.entries(list ?? {})) {
+      if (!su || !(down || combat.round - Math.max(su.round ?? 0, su.sustainedRound ?? 0) >= 2)) continue;
+      await dropSustainAreas(combat, su).catch(e => console.warn(`${ID} | sustain`, e));
+      await saveTurns(combat, { [`sustain.${tid}.-=${key}`]: null });
+      if (t) await ChatMessage.implementation.create({ speaker: ChatMessage.implementation.getSpeaker({ token: t }), content: `<p>${esc(`${su.name} ends: ${t.name} can't Sustain it.`)}</p>` });
+    }
+  }
   if (!prev?.combatantId || prev.round == null) return;
   const tok = combat.combatants.get(prev.combatantId)?.token; if (!tok) return;
   for (const [key, su] of Object.entries(sustainOf(combat, tok))) {
@@ -832,7 +843,7 @@ async function gather(combat, req, used = { actions: 0, attacks: 0 }, { moves = 
 /** Its allies the GM hasn't hidden, and itself, by label, for a spell aimed at a friend. */
 function alliesByLabel(combat, tok) {
   const labels = turns(combat).labels ?? {}, scene = sceneOf(combat), out = {};
-  for (const t of [tok, ...alliesOf(scene, tok).filter(a => !a.hidden)]) { const l = labels[t.id]; if (l) out[l] = { name: l, square: squareOf(t, scene), ...placeOf(t, scene), size: sizeOf(t), ...heightOf(t), flat: 0, ally: true, ...(t.actor?.traits?.has?.("undead") ? { undead: true } : {}) }; }   /* undead (0.46.0): healing would hurt them */
+  for (const t of [tok, ...alliesOf(scene, tok).filter(a => !a.hidden)]) { const l = labels[t.id]; if (l) out[l] = { name: l, square: squareOf(t, scene), ...placeOf(t, scene), size: sizeOf(t), ...heightOf(t), flat: 0, ally: true, ...(t === tok ? { self: true } : {}), ...(t.actor?.traits?.has?.("undead") ? { undead: true } : {}), ...(t.actor && !t.actor.traits?.has?.("undead") && (t.actor.traits?.has?.("construct") && !t.actor.traits?.has?.("living")) ? { notLiving: true } : {}), ...(t.actor && isDeadNow(t.actor) ? { dead: true } : {}) }; }   /* review 6: Heal is for the living, and raises no dead   /* undead (0.46.0): healing would hurt them */
   return out;
 }
 /** For a Delay: for each creature the monster could name (what it perceived when asked, its allies and itself), whether its turn is still to come this
@@ -2010,6 +2021,8 @@ async function runAbility(combat, id, i, step, tok, target) {
         let made = hasEffect(on, step.effect);
         if (!made) { const src = await fromUuid(step.effect); if (!src) { await addNote(combat, id, `I couldn't find ${step.effectName}: apply it from ${step.itemName}'s card.`); await record({ effected: true }); return "gm"; }
           const data = src.toObject(); delete data._id; data._stats = { ...(data._stats ?? {}), compendiumSource: step.effect };
+          /* review 8: entering a stance ends the one it was in (PF2e: one stance at a time) */
+          if (/^stance:/i.test(src.name ?? "")) { const old = on.itemTypes.effect.filter(e => /^stance:/i.test(e.name)).map(e => e.id); if (old.length) await watched(() => on.deleteEmbeddedDocuments("Item", old)); }
           await watched(() => on.createEmbeddedDocuments("Item", [data])); made = true; }
         await record({ effected: true });
       } else if (now === "attack") {

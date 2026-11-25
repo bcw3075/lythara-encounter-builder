@@ -1,7 +1,7 @@
 ---
 feature: abilities
 files: []
-functions: [fight.mjs:abilityList, fight.mjs:abilitiesOf, fight.mjs:runAbility, turn.mjs:abilityCost, turn.mjs:checkAbility, turn.mjs:lastAction, turn.mjs:nextAbility, turn.mjs:followUpOutcome]
+functions: [fight.mjs:abilityList, fight.mjs:abilitiesOf, fight.mjs:runAbility, turn.mjs:abilityCost, turn.mjs:checkAbility, turn.mjs:lastAction, turn.mjs:nextAbility, turn.mjs:followUpOutcome, fight.mjs:effectsOfAbility, fight.mjs:hasEffect, fight.mjs:blastDo, turn.mjs:checkBlast]
 dependsOn: [strike-damage, turn-loop]
 since: 0.10.0
 ---
@@ -11,6 +11,8 @@ Abilities: Strike follow-ups (Grab, Knockdown, Push, Pull) run for real; every o
 - **Abilities (2026-11-07), "Strike follow-ups for real":** Grab, Knockdown, Push, Pull and the Improved ones need its last action to be a Strike that lists them (by the ability's own slug) and hits, at the same target; PF2e's own Grapple, Trip, Shove or Reposition rolls with no `multipleAttackPenalty` (none applies, none counts); the module applies Grabbed, Restrained or Prone and a critical Trip's 1d6; the GM moves a pushed or pulled creature and applies a target's choice on a critical failure (the turn pauses). Grab's hold only on a grip its own Grab made (`turns.grips`), always 1 action. **Every other ability:** PF2e's own Use (`game.pf2e.rollItemMacro(item.uuid)`) posts its card and the turn stops at Next step, Auto or not, for the GM to apply it. Passive and reaction items refused.
 
 - **A dropped weapon's Strike lends no follow-up (u-141, 0.39.9; Rhea, 2026-11-18: drop the Grab/Knockdown follow-up too).** A Grab, Knockdown, Push or Pull that comes only from a Strike's attack effects (no item of its own) is left out of the abilities while that Strike's weapon lies on the ground (`abilityList`), as the Strike itself is since 0.39.1. One the creature has as its own item stays, and so does one another Strike it still holds lists.
+- **Elemental Blast, stances and friend effects run for real (0.46.0, the 2026-11-24 live test).** Elemental Blast (1 or 2 actions, melee or ranged, one of its elements) needs Channel Elements' aura up and is rolled as an attack (it counts toward the multiple attack penalty), then its damage by the outcome, applied. An action with a self-effect (a stance, Channel Elements, Metal Carapace) puts that effect on the monster, refused when it's already on. An action whose text names one effect for another creature (Inspiring Display) puts it on that ally, within its range.
+
 ## How it works
 - **A character's abilities (0.18.0):** for a party member the GM plays, `abilityList` adds its feats that are actions, free actions or reactions to its action items (a character's actions are mostly feats); an NPC's list is unchanged. Reactions stay out of plans, as for monsters.
 - **Abilities (0.5.3).** `{ do: "ability", item: "<id>", target: "E1" }`, the item one of the monster's action items (`abilityList`: the slug, or the name made into one, `-2` when two share it). It costs the item's own actions (`abilityCost`: 0 for a free action, `actionCost.value` otherwise). Passive and reaction items are refused by name, and so is one whose frequency has no uses left. Rhea, 2026-11-07, chose to run the Strike follow-ups for real and to send every other ability to the GM:
@@ -30,6 +32,7 @@ Abilities: Strike follow-ups (Grab, Knockdown, Push, Pull) run for real; every o
 - **0.27.0 (`reactions.md`):** an ability's own damage (a critical Trip's) asks the damage gate before it is applied; a refused Glimpse of Redemption's resistance is on the copy of the creature the damage is applied to.
 - **An ability aimed at a friend (0.30.0, bug B-5):** a non-follow-up ability's `target` may be one of its allies' labels or its own, as a spell's may (`ctx.allies` is always gathered now); the step's token is found through `tokenIdOf`, which knows allies' labels. An ability with the attack trait aimed at its own side is refused as such. Before, "target": "M2" on a rallying ability was refused as "it doesn't know of M2" although the prompt says an ability's target is a label (found by the API usage test: both models wrote it).
 - **0.33.1:** the card for a Grab that keeps hold with no item of its own escapes the ability's and the creature's names.
+- `effectsOfAbility` reads each action: Elemental Blast → `blast` (configs from `game.pf2e.ElementalBlast(actor)`, the aura's effect), otherwise `system.selfEffect` (→ `selfEffect`, `selfOn` by `hasEffect`, which matches the effect's compendium source), otherwise one linked `Effect:` with words about an ally and no save (→ `allyEffect`, its range). `checkBlast` checks the aura, the actions, the element and the range; `blastDo` sets PF2e's action-cost flag on the blast item for the roll and puts it back. The `effect` stage creates the effect from its compendium entry with `compendiumSource` set, so the next packet sees it.
 
 ## Checks
 Record every id below in the release's change record when this feature, or a feature a `shared:` tag names, changes.
@@ -38,6 +41,8 @@ Record every id below in the release's change record when this feature, or a fea
 - (ab-2) {live,shared:turn-loop} Through `checkPlan`: Knockdown alone, at another creature, two follow-ups, a hold on a creature it doesn't hold, `none` between, passive, reaction, a Strike id, four actions; accepted: Jaws, Knockdown, Jaws (attack 1, check, attack 2) and Worry then Jaws (attack 2).
 - (ab-3) {live,shared:turn-loop} By real clicks as AI with dice fixed by stage (below): a critical Trip with one modifier on its card, Prone and the 1d6 applied once, no re-plan; a missed bite then Next step re-plans with the action unspent; on Auto a Grapple applies Restrained and records the grip; next round Grab's hold and Worry's card stop at Next step with the note; a stop at hook stage `effects` and a reload of the runner, then Do it: no second check card.
 - (ab-4) {live,player,shared:turn-loop} Test Player sees the cards.
+- (ab-5) {live,shared:turn-loop} The kineticist monster: Channel Elements (the aura goes on), then a 1-action and a 2-action Elemental Blast at Test Hero: rolled with the MAP, damage by outcome applied (the 2-action one higher); a blast with no aura is refused.
+- (ab-6) {live,shared:turn-loop} A stance (Channeler's Stance) and Inspiring Display on an ally: the effect lands on the right creature; the same stance again is refused.
 
 ## Traps
 - **PF2e's skill actions apply nothing.** `game.pf2e.actions.get("trip" | "grapple" | "shove" | "reposition").use({ actors, target: token.object, event })` rolls with no dialog by the Shift rule and returns `[{ outcome, message, roll }]`; its card only has notes. Without `multipleAttackPenalty` it adds no penalty. The critical Trip note's inline @Damage link would roll a second 1d6 if clicked.

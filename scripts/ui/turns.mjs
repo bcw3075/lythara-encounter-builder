@@ -74,7 +74,7 @@ function leftWords(actor, s, packet) {
     }
     if (s.do === "ability") {
       const base = String(s.item ?? "").replace(/-\d+$/, ""), it = actor.items.find(i => (i.slug ?? game.pf2e.system.sluggify(i.name)) === base), f = it?.system?.frequency;
-      return f?.max ? `${f.value ?? 0} of ${f.max} uses left${f.per ? ` per ${String(f.per).replace(/^PT/, "").toLowerCase()}` : ""}` : "";
+      return f?.max ? `${f.value ?? 0} of ${f.max} uses left${f.per ? ` per ${({ PT1M: "minute", PT10M: "10 minutes", PT1H: "hour", PT24H: "day", P1W: "week", P1M: "month" })[f.per] ?? String(f.per).toLowerCase()}` : ""}` : "";
     }
   } catch (e) { console.warn(`${ID} | left`, e); }
   return "";

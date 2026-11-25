@@ -23,7 +23,7 @@ export class BuildApp extends foundry.applications.api.ApplicationV2 {
     const a = this.scene.getFlag(ID, "askAngel"), b = a?.answer?.brief;
     if (!b || a.answer.applied || a.user !== game.user.id || this.previewing) return false;   /* not under a running Preview: taken when it ends (review 6) */
     const level = this.brief.partyLevel, set = this.brief.partyLevelSet, next = cleanBrief(mergeBrief(this.brief, b, { by: "angel" }).brief);
-    if (next.partyLevel === null) { next.partyLevel = level; next.partyLevelSet = set; } else next.partyLevelSet = true;   /* Angel names a level only when the GM asked for one (0.46.0) */
+    if (next.partyLevel === null) { next.partyLevel = level; next.partyLevelSet = set; } else next.partyLevelSet = next.partyLevel !== suggestedLevel();   /* review 2: Angel echoing the sheets' own level doesn't pin it */   /* Angel names a level only when the GM asked for one (0.46.0) */
     this.brief = next; this.formStale = true; this.openNotes?.clear(); this.message = "Angel filled this in: check it, then Preview."; markApplied(this.scene, next).catch(e => console.warn(`${ID} | ask`, e)); return true;
   }
   _onFirstRender(context, options) { super._onFirstRender?.(context, options);

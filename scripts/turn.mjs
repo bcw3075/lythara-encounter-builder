@@ -537,7 +537,7 @@ function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here, elev 
   /* a healing spell at one friend (0.46.0, the live test: Heal on a dying ally was card only): the range is the one its actions give (Heal: 1 action
      touch, 2 actions 30 feet); the module casts it, rolls the healing at the rank and applies it */
   const healAt = sp.heal?.[actions] ?? null;
-  if (healAt && !healAt.area && t?.ally && !t.undead && (healAt.range != null || healAt.touch)) {
+  if (healAt && !healAt.area && t?.ally && !t.undead && !t.notLiving && !t.dead && (healAt.range != null || healAt.touch)) {
     const reach = healAt.touch ? Math.max(5, ctx.reach ?? 5) : healAt.range, d = distanceTo(t, healAt.touch ? reach : null);
     if (d > reach) return no(`${t.name ?? tLabel} is ${d} ft away, out of ${healAt.touch ? "reach for" : "range of"} ${sp.name} with ${actions} action${actions === 1 ? "" : "s"} (${healAt.touch ? "touch" : `${reach} ft`}).`);
   }
@@ -565,7 +565,7 @@ function checkSpell(step, sp, { ctx, at, attacks, distanceTo, pools, here, elev 
   /* 0.46.0 (the live test, Rhea: "the damage should be applied automatically"): missiles that always hit (Force Barrage, the old Magic Missile) at one
      creature it fights, all of them at that creature, rolled together as the rules say; a healing spell at one friend, at the actions that keep it to one */
   const missiles = MISSILES[sp.slug ?? sp.id?.replace(/-\d+$/, "")] && !sp.area && !!t && !t.ally && sp.damaging && !sp.attack && !sp.save ? missileCount(actions, at_.rank) : 0;
-  const heals = !!healAt && !healAt.area && !!t?.ally && !t.undead;
+  const heals = !!healAt && !healAt.area && !!t?.ally && !t.undead && !t.notLiving && !t.dead;
   /* a basic save area that deals damage runs for real (Rhea, 2026-11-07): everyone in it saves and takes damage by their own degree */
   const mode = one && sp.attack ? "attack" : one && sp.save && ctx.saveRows ? "save" : missiles ? "missiles" : heals ? "heal" : area && !sp.variants && !sp.attack && sp.save?.basic && sp.damaging && ctx.saveRows ? "area" : "card";
   const isAttack = traits.includes("attack");
@@ -711,6 +711,7 @@ function checkAbility(step, ab, { ctx, last, at, attacks, distanceTo, channeled 
       return { ok: true, step: { do: "ability", item: ab.id, itemName: ab.name, mode: "self", effect: ab.selfEffect, effectName: ab.selfEffectName ?? ab.name, ...(isAttack ? { attack: true, mapCounts: true, variant: Math.min(attacks, 2) } : {}) }, gives: ab.selfEffect };
     }
     if (ab.allyEffect && t?.ally && !isAttack) {
+      if (ab.allyEffectOthers && t.self) return no(`${ab.name} is for another creature, not the one using it.`);
       if (ab.allyEffectRange != null) { const d = distanceTo(t, null); if (d > ab.allyEffectRange) return no(`${t.name ?? step.target} is ${d} ft away, beyond ${ab.name}'s ${ab.allyEffectRange} feet.`); }
       return { ok: true, step: { do: "ability", item: ab.id, itemName: ab.name, mode: "effect", effect: ab.allyEffect, effectName: ab.allyEffectName ?? ab.name, target: step.target, targetName: t.name ?? step.target } };
     }
