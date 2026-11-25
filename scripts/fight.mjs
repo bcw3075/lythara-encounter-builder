@@ -251,7 +251,7 @@ function effectsOfAbility(actor, item, slug) {
     card), "missing" (its source can't be found) or "choice" (it asks a choice nobody here can answer). self: the creature uses it on itself, so a
     ChoiceSet with one answer it can take is taken. spell: { tok, item, rank } for an effect from a spell: its level is the cast rank (Heroism's bonus,
     Bless's aura size read it) and its origin the caster, as PF2e's own drop sets them (an aura such as Bless's is spread only from its caster's copy). */
-async function putEffect(on, step, { self = false, spell = null } = {}) {
+async function putEffect(on, step, { self = false, spell = null, user = null } = {}) {
   if (hasEffect(on, step.effect)) return "on";
   if (spell && immuneTo(on, spell.item)) return "immune";   /* 0.47.0 live test: Courageous Anthem (mental) went on mindless skeletons */
   const src = await fromUuid(step.effect); if (!src) return "missing";
@@ -262,9 +262,11 @@ async function putEffect(on, step, { self = false, spell = null } = {}) {
   /* 0.46.1 (self-run playtest: Kinetic Aura asks its radius, and without Aura Shaping only 10 feet passes): a choice with only one answer this creature
      can take is taken; anything that leaves more than one is still the GM's */
   /* review 4: only on itself (on a friend the choice can rest on the user's feats), never past a predicate about another document or one that throws */
-  if (self) { const opts = new Set(on.getRollOptions?.() ?? []);
+  /* 0.47.0 live test (Channeled Protection: +2 only from a level 13 user): a group effect's choice that rests only on its user's level is taken too */
+  if (self || user) { const opts = new Set([...(self ? on.getRollOptions?.() ?? [] : []), ...(user?.level != null ? [`item:origin:level:${user.level}`] : [])]);
     for (const r of data.system?.rules ?? []) { if (r.key !== "ChoiceSet" || r.selection != null || !Array.isArray(r.choices)) continue;
-      if (r.choices.some(c => /\b(origin|parent|item):/.test(JSON.stringify(c.predicate ?? [])))) continue;
+      const preds = r.choices.map(c => JSON.stringify(c.predicate ?? [])).join(" ");
+      if (/\b(origin|parent|item):/.test(preds.replace(/"item:origin:level"/g, "")) || (!self && /"[^"]+"/.test(preds.replace(/"(gte|lte|gt|lt|item:origin:level)"/g, "")))) continue;   /* on a friend: only a choice that rests on the user's level alone */
       let bad = false; const fit = r.choices.filter(c => { try { return !c.predicate || new game.pf2e.Predicate(c.predicate).test(opts); } catch { bad = true; return false; } });
       if (!bad && fit.length === 1) r.selection = fit[0].value; } }
   if ((data.system?.rules ?? []).some(r => r.key === "ChoiceSet" && r.selection == null)) return "choice";
@@ -2134,7 +2136,7 @@ async function runAbility(combat, id, i, step, tok, target) {
         if (step.mode === "group") {   /* 0.47.0: itself and every friend within its range, each once */
           await record({ effectStarted: true }); const scene = sceneOf(combat), labels = turns(combat).labels ?? {}, on = [];
           const near = [tok, ...alliesOf(scene, tok).filter(a => a.actor && !a.hidden && !isDeadNow(a.actor) && feetBetween(tok, a, scene) <= (step.range ?? 5))];
-          for (const x of near) { const put = await putEffect(x.actor, step, { self: x === tok }); if (put === "on") on.push(x === tok ? "itself" : labels[x.id] ?? "a friend"); else await addNote(combat, id, `${step.effectName} ${put === "missing" ? "couldn't be found" : "asks a choice"}: put it on ${x.name} from ${step.itemName}'s card.`); }
+          for (const x of near) { const put = await putEffect(x.actor, step, { self: x === tok, user: tok.actor }); if (put === "on") on.push(x === tok ? "itself" : labels[x.id] ?? "a friend"); else await addNote(combat, id, `${step.effectName} ${put === "missing" ? "couldn't be found" : "asks a choice"}: put it on ${x.name} from ${step.itemName}'s card.`); }
           await record({ effected: true, effectOn: on }); continue; }
         const on = step.mode === "effect" ? target?.actor : actor; if (!on) return "ask";
         await record({ effectStarted: true });
