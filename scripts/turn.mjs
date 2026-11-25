@@ -1063,7 +1063,7 @@ function describeStepIt(s) {
   if (s.do === "spell") {
     const head = s.sustain ? `Sustains ${s.itemName} (1 action)` : `Casts ${s.itemName} (rank ${s.rank}${s.actions !== 2 ? `, ${s.actions} action${s.actions === 1 ? "" : "s"}` : ""})`, flat = s.flat ? `, after a DC ${s.flat} flat check` : "";
     if (s.mode === "attack") return `${head} at ${s.targetName}: a spell attack${s.variant ? `, attack ${s.variant + 1}` : ""}${flat}.`;
-    if (s.mode === "missiles") return `${head} at ${s.targetName}: ${s.missiles} missile${s.missiles === 1 ? "" : "s"}, which always hit${flat}.`;
+    if (s.mode === "missiles") return `${head} at ${s.targetName}: ${s.missiles} missile${s.missiles === 1 ? "" : "s"}, which always hit${s.missiles === 1 ? "s" : ""}${flat}.`;
     if (s.mode === "heal") return `${head} on ${s.targetName}: the healing is rolled and applied.`;
     if (s.area?.aim) {
       const what = `a ${s.area.size}-foot ${s.area.type}${aimTextIt(s.area)}${s.area.catches?.length ? `, catching ${listWords(s.area.catches)}` : ""}${s.area.deliberate ? " ({their} allies on purpose)" : ""}`;

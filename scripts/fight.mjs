@@ -97,6 +97,9 @@ const within = (work, ms, words) => { let timer; return Promise.race([work, new 
    token isn't a vision source. So: core's own sight and sound tests on the fight scene, the light at the target, the monster's senses, then Visioner's record on top. */
 const onFightScene = combat => canvas.ready && canvas.scene?.id === sceneOf(combat)?.id;
 /** The monster's Strikes with the ids plans use. */
+/* 0.46.0 (live test): a legacy spell and its remastered name are the same spell for Counterspell (a monster's Magic Missile, a wizard's Force Barrage) */
+const RENAMED = { "magic-missile": "force-barrage" };
+const sameSpellSlug = (a, b) => !!a && !!b && (a === b || (RENAMED[a] ?? a) === (RENAMED[b] ?? b));
 const strikesWithIds = actor => { const list = (actor.system.actions ?? []).filter(a => a.type === "strike" && (actor.isOfType?.("npc") || (a.ready !== false && a.visible !== false))),   /* a character's Strike with a stowed weapon isn't ready; an NPC's always counts (a Goblin's worn shortbow shoots) */ ids = strikeIds(list.map(a => ({ slug: a.slug ?? a.item?.id, ranged: !!a.item?.isRanged }))); return list.map((a, i) => ({ id: ids[i], strike: a })); };
 const conditionsOn = actor => (actor.conditions?.active ?? []).map(c => c.slug);
 const squareOf = (tok, scene) => { const px = scene.grid.size, d = scene.dimensions; return [Math.round((tok.x - d.sceneX) / px), Math.round((tok.y - d.sceneY) / px)]; };
@@ -245,9 +248,11 @@ function effectsOfAbility(actor, item, slug) {
     the roll and put back after, so the sheet stays as the player left it. */
 async function blastDo(actor, step, work) {
   const item = actor.itemTypes?.action?.find(i => i.slug === "elemental-blast"); if (!item) throw new Error(`${actor.name} has no Elemental Blast now.`);
-  const path = "flags.pf2e.rulesSelections.actionCost", was = foundry.utils.getProperty(item, path) ?? 1, want = step.blastActions ?? 1;
-  if (was !== want) await item.update({ [path]: want });
-  try { return await work(new game.pf2e.ElementalBlast(actor)); } finally { if (was !== want) await item.update({ [path]: was }).catch(e => console.warn(`${ID} | blast cost`, e)); }
+  /* the cost is the item's RollOption "action-cost" (its rule's selection writes the flag at each prepare, so writing the flag alone is undone: live test) */
+  const was = Number(foundry.utils.getProperty(item, "flags.pf2e.rulesSelections.actionCost") ?? 1), want = step.blastActions ?? 1;
+  const set = n => actor.toggleRollOption("elemental-blast", "action-cost", item.id, true, String(n));
+  if (was !== want) await set(want);
+  try { return await work(new game.pf2e.ElementalBlast(actor)); } finally { if (was !== want) await set(was).catch(e => console.warn(`${ID} | blast cost`, e)); }
 }
 /** For the packet: what each ability is, in plain words, with what the module does with a follow-up. */
 function abilitiesOf(actor) {
@@ -2022,7 +2027,9 @@ async function runAbility(combat, id, i, step, tok, target) {
         if (!made) { const src = await fromUuid(step.effect); if (!src) { await addNote(combat, id, `I couldn't find ${step.effectName}: apply it from ${step.itemName}'s card.`); await record({ effected: true }); return "gm"; }
           const data = src.toObject(); delete data._id; data._stats = { ...(data._stats ?? {}), compendiumSource: step.effect };
           /* review 8: entering a stance ends the one it was in (PF2e: one stance at a time) */
-          if (/^stance:/i.test(src.name ?? "")) { const old = on.itemTypes.effect.filter(e => /^stance:/i.test(e.name)).map(e => e.id); if (old.length) await watched(() => on.deleteEmbeddedDocuments("Item", old)); }
+          { const isStance = it => (it?.system?.traits?.value ?? []).includes("stance"), mine = on.items.find(i => (i.slug ?? game.pf2e.system.sluggify(i.name)) === String(step.item ?? "").replace(/-\d+$/, ""));
+            if (step.mode === "self" && isStance(mine)) { const others = new Set(on.items.filter(i => isStance(i) && i.system.selfEffect?.uuid && i.system.selfEffect.uuid !== step.effect).map(i => i.system.selfEffect.uuid));
+              const old = on.itemTypes.effect.filter(e => others.has(e._stats?.compendiumSource ?? e.flags?.core?.sourceId ?? e.sourceId) || (/^stance:/i.test(e.name) && e.name !== src.name)).map(e => e.id); if (old.length) await watched(() => on.deleteEmbeddedDocuments("Item", old)); } }
           await watched(() => on.createEmbeddedDocuments("Item", [data])); made = true; }
         await record({ effected: true });
       } else if (now === "attack") {
@@ -3298,7 +3305,7 @@ function rankLeft(e, sp, focus) {
 function castFacts(actor, x, cast, dist) {
   const entries = (actor?.spellcasting?.regular ?? []).filter(e => !e.isRitual && CASTERS.includes(e.category)), copies = [];
   let knowsIt = false;
-  for (const e of entries) { const slots = e.system?.slots ?? {}, same = (e.spells?.contents ?? []).filter(sp => (sp.slug ?? "") === cast.slug); if (!same.length) continue;
+  for (const e of entries) { const slots = e.system?.slots ?? {}, same = (e.spells?.contents ?? []).filter(sp => sameSpellSlug(sp.slug ?? "", cast.slug)); if (!same.length) continue;
     if (e.isPrepared && !e.isFlexible) { for (let r = 0; r <= 10; r++) { const list = Array.isArray(slots[`slot${r}`]?.prepared) ? slots[`slot${r}`].prepared : Object.values(slots[`slot${r}`]?.prepared ?? {});
         list.forEach((p, n) => { const sp = same.find(y => y.id === p?.id); if (!sp) return; knowsIt = true; if (!p.expended || sp.isCantrip) copies.push({ entryId: e.id, spellId: sp.id, rank: sp.isCantrip ? Math.max(1, Math.ceil((actor.level || 1) / 2)) : r, slot: n, kind: "prepared" }); }); } }
     else if (["spontaneous", "prepared"].includes(e.category)) { knowsIt = true;   /* a repertoire, or a flexible caster's collection (review 7) */
@@ -3365,7 +3372,7 @@ function reactorsFor(combat, tok, gate, o = {}) {
       if (row.armor && !(a.wornArmor && !a.wornArmor.isBroken)) continue;
       if (x.slug === "shield-of-reckoning" && !a.items.some(it => it.slug === "glimpse-of-redemption")) continue;   /* its champion's reaction must be one the module runs (review, 0.37.0) */   /* Sacrifice Armor needs armor that isn't broken */
       /* 0.46.0 (the live test: she looked for Counterspell and found only Recognize Spell): a Counterspell it can't use for want of the same spell is said on the card */
-      if (gate === "cast" && row.counter === "same" && cf && !w.hasSame && !spent && (canSense || !row.sees)) o.skipped?.push({ name: t.name, reaction: x.name, why: `${o.cast?.name ?? "that spell"} isn't ${x.slug.endsWith("spontaneous") ? "in their repertoire" : "prepared"}, and Counterspell needs the same spell`, token: t.id, pos: p.pos, span: p.span, elev: heightUp(t), reach });
+      if (gate === "cast" && row.counter === "same" && cf && !w.hasSame && !spent && (canSense || !row.sees)) o.skipped?.push({ name: t.name, reaction: x.name, why: w.knowsIt ? `no unspent ${o.cast?.name ?? "copy of that spell"} left to counter with` : `${o.cast?.name ?? "that spell"} isn't ${x.slug.endsWith("spontaneous") ? "in their repertoire" : "prepared"}, and Counterspell needs the same spell`, token: t.id, pos: p.pos, span: p.span, elev: heightUp(t), reach });
       if (!fits(x.slug, gate, w, { melee: !!o.melee, damageTypes: o.damageTypes ?? [], ranged: !!o.ranged, strike: o.strike, degree: o.degree, close: !!o.close, attack: o.attack, ...(o.cast ?? {}),
         drops: !!o.drops, dies: !!o.dies, death: !!o.death, isSpell: !!o.isSpell, traits: o.traits ?? [], savers: (o.savers ?? []).length, saveStat: o.saveStat ?? null, cond: o.cond ?? null, foeTraits: o.foeTraits ?? [] })) continue;
       if (spent) { o.skipped?.push({ name: t.name, reaction: x.name, why: spent, token: t.id, pos: p.pos, span: p.span, elev: heightUp(t), reach }); continue; }
