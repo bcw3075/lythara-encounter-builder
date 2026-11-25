@@ -3347,6 +3347,8 @@ function reactorsFor(combat, tok, gate, o = {}) {
       const row = KNOWN[x.slug], cf = gate === "cast" && o.cast ? castFacts(a, x, o.cast, dist) : null, f4 = RX4.has(x.slug) ? rx4Facts(a, x, tok, o, t, gate) : null, w = { ...who, ...(cf?.who ?? {}), ...(f4?.who ?? {}), canCast: !x.spell || x.spell.rank != null, inAura: !!row.aura && (row.own ? !!o.target && o.target.id === t.id && inAura(t, row.aura, [tok]) : ally && inAura(t, row.aura, [tok, o.target])), freqOk: freqOk(a, tok, x.slug) };
       if (row.armor && !(a.wornArmor && !a.wornArmor.isBroken)) continue;
       if (x.slug === "shield-of-reckoning" && !a.items.some(it => it.slug === "glimpse-of-redemption")) continue;   /* its champion's reaction must be one the module runs (review, 0.37.0) */   /* Sacrifice Armor needs armor that isn't broken */
+      /* 0.46.0 (the live test: she looked for Counterspell and found only Recognize Spell): a Counterspell it can't use for want of the same spell is said on the card */
+      if (gate === "cast" && row.counter === "same" && cf && !w.hasSame && !spent && (canSense || !row.sees)) o.skipped?.push({ name: t.name, reaction: x.name, why: `${o.cast?.name ?? "that spell"} isn't ${x.slug.endsWith("spontaneous") ? "in their repertoire" : "prepared"}, and Counterspell needs the same spell`, token: t.id, pos: p.pos, span: p.span, elev: heightUp(t), reach });
       if (!fits(x.slug, gate, w, { melee: !!o.melee, damageTypes: o.damageTypes ?? [], ranged: !!o.ranged, strike: o.strike, degree: o.degree, close: !!o.close, attack: o.attack, ...(o.cast ?? {}),
         drops: !!o.drops, dies: !!o.dies, death: !!o.death, isSpell: !!o.isSpell, traits: o.traits ?? [], savers: (o.savers ?? []).length, saveStat: o.saveStat ?? null, cond: o.cond ?? null, foeTraits: o.foeTraits ?? [] })) continue;
       if (spent) { o.skipped?.push({ name: t.name, reaction: x.name, why: spent, token: t.id, pos: p.pos, span: p.span, elev: heightUp(t), reach }); continue; }
@@ -3700,6 +3702,8 @@ async function askReactions(combat, id, i, key, gate, tok, list, kind = "", gmKi
   } finally { rxWatch.delete(watchKey); }
   const answers = request(combat, id)?.react?.answers ?? {}, final = asked.map(x => ({ ...strip(x), answer: answers[x.id] ?? "continue" }));
   await save(combat, id, { react: null, since: clock(), gates: { [i]: { [key]: whole({ done: true, list: final, rolls }) } } });
+  /* 0.46.0 (the live test: "nothing happened", though Recognize Spell and Glimpse of Redemption had worked): who used what stays on the card */
+  { const used = final.filter(x => x.answer === "done"); if (used.length) await addNote(combat, id, `Reactions used: ${used.map(x => `${x.name}'s ${x.reaction}`).join(", ")} (what each did follows).`); }
   noteReactionAnswers(combat, tok, final);   /* fight memory (0.25.0): who strikes at a move, who blocks */
   emitSocket({ t: "close", combat: combat.id, request: id, key });
   if (out !== "done") return out;
@@ -4389,6 +4393,7 @@ async function afterHarm(combat, id, i, tok, target, { hit = 0, was = null, deal
     return addNote(combat, id, `${g ? `Glimpse of Redemption (${g.by}). ` : ""}${parts.join(". ")}.`);
   }
   const words = harmWords({ name: target.name, enemy: enemyName(tok), hit, taken: taken ?? 0, repent: g?.choice === "repent", resist: hm.resist, less: taken > 0 || hm.earth >= hit ? hm.earth : 0, block });
+  await addNote(combat, id, `${g ? `Glimpse of Redemption (${g.by}${decided}): ` : ""}${harmWords({ name: target.name, enemy: tok.name, hit, taken: taken ?? 0, repent: g?.choice === "repent", resist: hm.resist, less: taken > 0 || hm.earth >= hit ? hm.earth : 0, block })}${refused ? ` ${tok.name} is ${cond} until the end of ${pro("{their}", P(tok, combat))} next turn.` : ""}`);   /* 0.46.0: plain on her card too, not only in chat */
   await sayToAll(target, refused ? `${words} ${enemyName(tok).replace(/^t/, "T")} is ${cond} until the end of ${pro("{their}", P(tok, combat))} next turn.` : words);
   const gmWords = `${harmWords({ name: target.name, enemy: tok.name, hit, taken: taken ?? 0, repent: g?.choice === "repent", resist: hm.resist, less: taken > 0 || hm.earth >= hit ? hm.earth : 0, block })}${g ? `${decided}${refused ? ` ${tok.name} is ${cond} until the end of ${pro("{their}", P(tok, combat))} next turn.` : ""}` : ""}`;
   if (gmWords.trim()) await addNote(combat, id, gmWords);

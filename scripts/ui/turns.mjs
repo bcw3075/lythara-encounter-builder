@@ -55,7 +55,30 @@ const STYLE = `.leb-turns .leb-tag{font-size:11px;border-radius:9px;padding:0 7p
 .leb-turns .leb-big ul.leb-steps li.leb-done{text-decoration:line-through;opacity:.6}.leb-turns .leb-big ul.leb-steps li>b:first-child{color:#b3a4f0}
 .leb-turns .leb-big .leb-btns button[data-do="doit"]{background:#3d7a2e;color:#fff;border:1px solid #6fcf5f;font-weight:700}
 .leb-turns .leb-low{border-top:1px solid #0004;margin-top:8px}.leb-turns .leb-low>*{margin:0;padding:4px 2px;border-bottom:1px solid #0003}.leb-turns .leb-low a{cursor:pointer;color:#8fb8ff}
-.leb-turns details.leb-fold>summary{cursor:pointer}`;
+.leb-turns details.leb-fold>summary{cursor:pointer}
+.leb-turns .leb-thinking{margin:6px 0;padding:4px 8px;border-radius:4px;background:#2a5d9a33;border:1px solid #5fa8ff;color:#9fd0ff;font-weight:700}.leb-turns .leb-thinking i{margin-right:4px}
+.leb-turns .leb-left{color:#c9a35c;font-weight:400;font-size:.92em}`;
+/** What a monster has left of what a step spent (0.46.0; Rhea at the live test: "when a power or use is used, the amount they have left should be
+    stated"), read from its sheet now: a spontaneous caster's slots of that rank, a prepared caster's copies of that spell at that rank, an innate
+    spell's uses, Focus Points, or an ability's uses by its frequency. "" for a cantrip, a Sustain, or anything with no limit. */
+function leftWords(actor, s, packet) {
+  if (!actor) return "";
+  try {
+    if (s.do === "spell" && !s.sustain) {
+      const e = actor.spellcasting?.get?.(s.entryId), sp = e?.spells?.get?.(s.spellId) ?? actor.items.get(s.spellId); if (!e || !sp || sp.isCantrip) return "";
+      if (e.isFocusPool || Number(sp.system.cast?.focusPoints) > 0) { const f = actor.system.resources?.focus; return f?.max ? `${f.value} of ${f.max} Focus Points left` : ""; }
+      if (e.isInnate) { const u = sp.system.location?.uses; return u?.max ? `${u.value} of ${u.max} uses left` : ""; }
+      const slot = e.system?.slots?.[`slot${s.rank}`]; if (!slot) return "";
+      if (e.isPrepared && !e.isFlexible) { const same = (slot.prepared ?? []).filter(p => p?.id === s.spellId), left = same.filter(p => !p.expended).length; return same.length ? `${left} of ${same.length} rank ${s.rank} ${sp.name} prepared left` : ""; }
+      return slot.max ? `${slot.value} of ${slot.max} rank ${s.rank} slots left` : "";
+    }
+    if (s.do === "ability") {
+      const base = String(s.item ?? "").replace(/-\d+$/, ""), it = actor.items.find(i => (i.slug ?? game.pf2e.system.sluggify(i.name)) === base), f = it?.system?.frequency;
+      return f?.max ? `${f.value ?? 0} of ${f.max} uses left${f.per ? ` per ${String(f.per).replace(/^PT/, "").toLowerCase()}` : ""}` : "";
+    }
+  } catch (e) { console.warn(`${ID} | left`, e); }
+  return "";
+}
 /** A question to reactors as the card shows it (0.20.0): who is asked, the GM's own rows with React and Pass, and Continue. Also used under a monster's
     own reaction (0.21.0), whose hit can be Shield Blocked. */
 function rxHtml(rx) { if (!rx) return ""; const ans = rx.answers ?? {}, left = countingDown(rx.list, ans, rx.until, clock()) ? Math.ceil((rx.until - clock()) / 1000) : null;   /* only while a player still has time to answer */
@@ -139,7 +162,8 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
     const deaf = !waitingPlan ? "" : route === "off" ? `<p class="leb-warn">Angel is off for this fight: play it yourself, or pick a route above.</p>`
       : on ? (wakeFor ? `${noteBox}<p class="leb-mine">The chat has this turn. Wake Angel to ${r?.handedOff && apiOn ? "ask the API again" : "bring the API back"}.</p>` : "")
       : `${noteBox}${ws === "waking" ? `<p class="leb-mine">Waking Angel…</p>` : ws === "silent" ? `<p class="leb-warn">Nothing answered: the bridge may not be running on the server PC. Play it yourself, or in the chat say go.</p>` : `<p class="leb-warn">${r?.handedOff && apiOn ? "No chat is listening. Wake Angel to ask the API again, play it yourself" : `Angel isn't listening. ${route === "api" ? "Wake Angel, play it yourself" : "Play it yourself"}`}, or in the chat say go.</p>`}`;
-    const thinking = waitingPlan && on && thinker === "api" && r.tokenId ? (() => { const t = sceneOf(c).tokens.get(r.tokenId), m = t ? modelOf(t, c) : null; return m ? `<p class="leb-mine">Angel is thinking (${esc(modelName(m.model))}${m.why ? `: ${esc(m.why)}` : ""}).</p>` : ""; })() : "";
+    /* 0.46.0 (Rhea at the live test: "make that 'Angel is thinking' line a different color or something"): its own box, with a turning icon */
+    const thinking = waitingPlan && on && r.tokenId ? (() => { const t = sceneOf(c).tokens.get(r.tokenId), m = thinker === "api" && t ? modelOf(t, c) : null; return `<p class="leb-thinking"><i class="fa-solid fa-spinner fa-spin"></i> Angel is thinking${r.why ? " again" : ""}${m ? ` (${esc(modelName(m.model))}${m.why ? `: ${esc(m.why)}` : ""})` : thinker === "chat" ? " (in the chat)" : ""}…</p>`; })() : "";
     /* text on a request uses labels (the thinker reads the same words); the GM gets names */
     const labels = c.getFlag(ID, "turns")?.labels ?? {}, nameOf = l => { const a = Object.entries(labels).find(([, v]) => v === l); return a ? sceneOf(c).tokens.get(a[0])?.name ?? null : null; };
     const named = t => plainSquares(String(t ?? "").replace(/\b[EM]\d{1,3}\b/g, l => nameOf(l) ?? l));   /* no map squares on the card (0.39.11) */
@@ -165,7 +189,8 @@ export class TurnsApp extends foundry.applications.api.ApplicationV2 {
         return ""; };
       const costTags = stepLabels(r.steps ?? [], r.spent, { reaction: !!r.reaction }), tag = i => costTags[i] ? `<b>${esc(costTags[i])}:</b> ` : "";   /* not `labels`: that name is the fight's label map above, which also() reads (0.33.1, review) */   /* R-1: by what each step costs */
       const planLabels = stepLabels(r.plan?.steps ?? r.steps ?? [], r.spent, { reaction: !!r.reaction }), planTag = i => planLabels[i] ? `<b>${esc(planLabels[i])}:</b> ` : "";   /* the Change panel lists the plan's own steps (review 7) */
-      const steps = r.steps ? `<ul class="leb-steps">${r.steps.map((s, i) => `<li class="${i < pos ? "leb-done" : i === pos && r.state !== "requested" ? "leb-next" : ""}">${i < pos ? "✓ " : ""}${tag(i)}${esc(named(describeStep(s, formsFor(c, r.tokenId))) + also(s))}${stepBox(s, i)}</li>`).join("")}</ul>` : "";
+      const spentLine = (s, i) => { const rec = r.log?.[i] ?? {}; if (!(i < pos || rec.cast || rec.posted)) return ""; const w = leftWords(tok?.actor, s, r.packet); return w ? ` <span class="leb-left">(${esc(w)})</span>` : ""; };   /* 0.46.0: what it has left once one is spent */
+      const steps = r.steps ? `<ul class="leb-steps">${r.steps.map((s, i) => `<li class="${i < pos ? "leb-done" : i === pos && r.state !== "requested" ? "leb-next" : ""}">${i < pos ? "✓ " : ""}${tag(i)}${esc(named(describeStep(s, formsFor(c, r.tokenId))) + also(s))}${spentLine(s, i)}${stepBox(s, i)}</li>`).join("")}</ul>` : "";
       const go = pos ? `<i class="fa-solid fa-forward-step"></i> Next step` : `<i class="fa-solid fa-play"></i> Do it`;
       /* the Change button (Rhea, 2026-11-09: "Note and step edits"): the steps still to come, each with what can be changed, and a note to Angel */
       const fp = planPrint(r), canChange = !changeProblem(r), pending = !!(r.ask || r.edit);
